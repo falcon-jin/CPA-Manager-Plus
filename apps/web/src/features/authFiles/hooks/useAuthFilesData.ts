@@ -53,7 +53,7 @@ export type UseAuthFilesDataResult = {
   batchStatusUpdating: boolean;
   batchPriorityUpdating: boolean;
   fileInputRef: RefObject<HTMLInputElement | null>;
-  loadFiles: (options?: { throwOnError?: boolean }) => Promise<void>;
+  loadFiles: (options?: { force?: boolean; throwOnError?: boolean }) => Promise<void>;
   handleUploadClick: () => void;
   handleFileChange: (event: ChangeEvent<HTMLInputElement>) => Promise<void>;
   savePastedAuthJson: (
@@ -216,11 +216,11 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
   }, [files, selectedFiles.size]);
 
   const loadFiles = useCallback(
-    async (options?: { throwOnError?: boolean }) => {
+    async (options?: { force?: boolean; throwOnError?: boolean }) => {
       setLoading(true);
       setError('');
       try {
-        const data = await authFilesApi.list();
+        const data = await authFilesApi.list({ force: options?.force });
         setFiles(data?.files || []);
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : t('notification.refresh_failed');
@@ -351,7 +351,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
           throw new Error(t('notification.save_failed'));
         }
         try {
-          await loadFiles({ throwOnError: true });
+          await loadFiles({ force: true, throwOnError: true });
         } catch (reloadError) {
           const reloadMessage =
             reloadError instanceof Error ? reloadError.message : t('notification.refresh_failed');

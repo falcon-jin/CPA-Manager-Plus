@@ -1,6 +1,7 @@
 import {
   useCallback,
   type CSSProperties,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -382,9 +383,8 @@ export function AuthFilesPage() {
       if (!nextSortMode || nextSortMode === sortMode) return;
       setSortMode(nextSortMode);
       setPage(1);
-      void loadFiles().catch(() => {});
     },
-    [loadFiles, sortMode]
+    [sortMode]
   );
 
   const handleSavePastedAuthJson = useCallback(
@@ -396,7 +396,7 @@ export function AuthFilesPage() {
   );
 
   const handleHeaderRefresh = useCallback(async () => {
-    await Promise.all([loadFiles(), loadExcluded(), loadModelAlias()]);
+    await Promise.all([loadFiles({ force: true }), loadExcluded(), loadModelAlias()]);
   }, [loadFiles, loadExcluded, loadModelAlias]);
 
   useHeaderRefresh(handleHeaderRefresh);
@@ -410,7 +410,7 @@ export function AuthFilesPage() {
 
   useInterval(
     () => {
-      void loadFiles().catch(() => {});
+      void loadFiles({ force: true }).catch(() => {});
     },
     isCurrentLayer ? 240_000 : null
   );
@@ -429,21 +429,14 @@ export function AuthFilesPage() {
     [lastCodexInspectionResults]
   );
 
-  const codexStatusByAuthFileKey = useMemo(() => {
-    const statusMap = new Map<string, ReturnType<typeof getAuthFileCodexStatus>>();
-    files.forEach((file) => {
-      const statusKey = getAuthFileCodexInspectionKeyForFile(file);
-      statusMap.set(
-        statusKey,
-        getAuthFileCodexStatus(
-          file,
-          codexQuota[file.name],
-          codexInspectionByAuthFile.get(statusKey)
-        )
-      );
-    });
-    return statusMap;
-  }, [codexInspectionByAuthFile, codexQuota, files]);
+  const getCodexStatusForFile = useCallback((file: AuthFileItem) => {
+    const statusKey = getAuthFileCodexInspectionKeyForFile(file);
+    return getAuthFileCodexStatus(
+      file,
+      codexQuota[file.name],
+      codexInspectionByAuthFile.get(statusKey)
+    );
+  }, [codexInspectionByAuthFile, codexQuota]);
 
   const filesMatchingStatusFilters = useMemo(
     () =>
@@ -451,15 +444,14 @@ export function AuthFilesPage() {
         if (problemOnly && !hasAuthFileStatusMessage(file)) return false;
         if (disabledOnly && file.disabled !== true) return false;
         if (healthyOnly && !isHealthyAuthFile(file)) return false;
-        const codexStatus = codexStatusByAuthFileKey.get(
-          getAuthFileCodexInspectionKeyForFile(file)
-        );
-        if (codexStatus && !authFileMatchesCodexStatusFilter(codexStatus, codexStatusFilter)) {
+        if (codexStatusFilter === 'all') return true;
+        const codexStatus = getCodexStatusForFile(file);
+        if (!authFileMatchesCodexStatusFilter(codexStatus, codexStatusFilter)) {
           return false;
         }
         return true;
       }),
-    [codexStatusByAuthFileKey, codexStatusFilter, disabledOnly, files, healthyOnly, problemOnly]
+    [codexStatusFilter, disabledOnly, files, getCodexStatusForFile, healthyOnly, problemOnly]
   );
 
   const sortOptions = useMemo(
@@ -504,7 +496,8 @@ export function AuthFilesPage() {
     return counts;
   }, [filesMatchingStatusFilters]);
 
-  const normalizedSearch = search.trim();
+  const deferredSearch = useDeferredValue(search);
+  const normalizedSearch = deferredSearch.trim();
   const wildcardSearch = useMemo(() => buildWildcardSearch(normalizedSearch), [normalizedSearch]);
 
   const filtered = useMemo(() => {
@@ -513,6 +506,7 @@ export function AuthFilesPage() {
     return filesMatchingStatusFilters.filter((item) => {
       const type = normalizeProviderKey(String(item.type ?? item.provider ?? ''));
       const matchType = normalizedFilter === 'all' || type === normalizedFilter;
+      if (!matchType) return false;
       const matchSearch =
         !normalizedSearch ||
         stringifySearchValue(
@@ -520,7 +514,7 @@ export function AuthFilesPage() {
             item,
             t,
             codexQuota[item.name],
-            codexStatusByAuthFileKey.get(getAuthFileCodexInspectionKeyForFile(item))
+            getCodexStatusForFile(item)
           )
         ).some((value) => {
           const content = value.toString();
@@ -532,8 +526,8 @@ export function AuthFilesPage() {
     });
   }, [
     codexQuota,
-    codexStatusByAuthFileKey,
     filesMatchingStatusFilters,
+    getCodexStatusForFile,
     normalizedFilter,
     normalizedSearch,
     t,
@@ -581,7 +575,14 @@ export function AuthFilesPage() {
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const start = (currentPage - 1) * pageSize;
-  const pageItems = sorted.slice(start, start + pageSize);
+  const pageItems = useMemo(() => sorted.slice(start, start + pageSize), [sorted, start, pageSize]);
+  const codexStatusByPageAuthFileKey = useMemo(() => {
+    const statusMap = new Map<string, ReturnType<typeof getAuthFileCodexStatus>>();
+    pageItems.forEach((file) => {
+      statusMap.set(getAuthFileCodexInspectionKeyForFile(file), getCodexStatusForFile(file));
+    });
+    return statusMap;
+  }, [getCodexStatusForFile, pageItems]);
   const pageHasInlineQuotaCards = !compactMode && pageItems.some(hasInlineQuotaLayout);
   const selectablePageItems = useMemo(
     () => pageItems.filter((file) => !isRuntimeOnlyAuthFile(file)),
@@ -1046,7 +1047,7 @@ export function AuthFilesPage() {
                       statusUpdating={statusUpdating}
                       statusBarCache={statusBarCache}
                       codexStatusBadges={
-                        codexStatusByAuthFileKey.get(authFileKey)?.badges ?? []
+                        codexStatusByPageAuthFileKey.get(authFileKey)?.badges ?? []
                       }
                       onShowModels={showModels}
                       onDownload={handleDownload}

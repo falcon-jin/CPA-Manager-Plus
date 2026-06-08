@@ -167,7 +167,19 @@ vi.mock('@/features/monitoring/codexInspection', () => ({
 }));
 
 vi.mock('@/features/authFiles/uiState', () => ({
-  normalizeAuthFilesSortMode: (value: string) => (value === 'default' ? 'default' : null),
+  normalizeAuthFilesSortMode: (value: string) =>
+    [
+      'default',
+      'name-asc',
+      'note-asc',
+      'note-desc',
+      'priority-desc',
+      'priority-asc',
+      'plan-desc',
+      'plan-asc',
+    ].includes(value)
+      ? value
+      : null,
   normalizeAuthFilesViewMode: (value: string) =>
     value === 'diagram' || value === 'list' ? value : null,
   readAuthFilesUiState: () => null,
@@ -318,6 +330,42 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
         'shared-codex.json::0',
       ]);
     });
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+  });
+
+  it('changes local sort mode without reloading the slow auth file list', async () => {
+    mocks.list.mockResolvedValue({
+      files: [
+        { name: 'codex-b.json', type: 'codex' },
+        { name: 'codex-a.json', type: 'codex' },
+      ],
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        renderer!.root.findAll((node) => typeof node.props['data-auth-card'] === 'string')
+      ).toHaveLength(2);
+    });
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+
+    const sortSelect = renderer!.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'auth_files.sort_label');
+    if (!sortSelect) throw new Error('sort select not found');
+
+    act(() => {
+      sortSelect.props.onChange('name-asc');
+    });
+
+    expect(mocks.list).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       renderer!.unmount();

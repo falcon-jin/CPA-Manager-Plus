@@ -2,20 +2,83 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
+    get: vi.fn(),
     postForm: vi.fn(),
+    patch: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
 vi.mock('./client', () => ({
   apiClient: {
+    get: mocks.get,
     postForm: mocks.postForm,
+    patch: mocks.patch,
+    delete: mocks.delete,
   },
 }));
 
 import { authFilesApi } from './authFiles';
 
 beforeEach(() => {
+  vi.useRealTimers();
+  mocks.get.mockReset();
   mocks.postForm.mockReset();
+  mocks.patch.mockReset();
+  mocks.delete.mockReset();
+});
+
+describe('authFilesApi list cache', () => {
+  it('coalesces parallel list calls and reuses the short-lived result', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    mocks.get.mockResolvedValue({
+      files: [{ name: 'codex-a.json', type: 'codex' }],
+    });
+
+    await expect(Promise.all([authFilesApi.list(), authFilesApi.list()])).resolves.toEqual([
+      { files: [{ name: 'codex-a.json', type: 'codex' }], total: 1 },
+      { files: [{ name: 'codex-a.json', type: 'codex' }], total: 1 },
+    ]);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(2_000);
+    await expect(authFilesApi.list()).resolves.toMatchObject({
+      files: [{ name: 'codex-a.json' }],
+      total: 1,
+    });
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(20_000);
+    mocks.get.mockResolvedValueOnce({
+      files: [{ name: 'codex-b.json', type: 'codex' }],
+    });
+    await expect(authFilesApi.list()).resolves.toMatchObject({
+      files: [{ name: 'codex-b.json' }],
+      total: 1,
+    });
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidates the cached list after auth file mutations', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    mocks.get.mockResolvedValueOnce({
+      files: [{ name: 'codex-a.json', type: 'codex', priority: 1 }],
+    });
+    mocks.patch.mockResolvedValue({ status: 'ok', disabled: false });
+
+    await authFilesApi.list();
+    await authFilesApi.patchFields('codex-a.json', { priority: 5 });
+
+    mocks.get.mockResolvedValueOnce({
+      files: [{ name: 'codex-a.json', type: 'codex', priority: 5 }],
+    });
+    await expect(authFilesApi.list()).resolves.toMatchObject({
+      files: [{ name: 'codex-a.json', priority: 5 }],
+    });
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('authFilesApi save auth file upload contracts', () => {

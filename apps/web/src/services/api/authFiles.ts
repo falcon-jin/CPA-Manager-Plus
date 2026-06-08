@@ -293,6 +293,75 @@ const dedupeAuthFilesResponse = (payload: AuthFilesResponse): AuthFilesResponse 
   };
 };
 
+const AUTH_FILES_LIST_CACHE_TTL_MS = 10_000;
+
+type AuthFilesListCacheEntry = {
+  payload: AuthFilesResponse;
+  createdAt: number;
+  expiresAt: number;
+};
+
+let authFilesListCache: AuthFilesListCacheEntry | null = null;
+let pendingAuthFilesList: Promise<AuthFilesResponse> | null = null;
+let authFilesListCacheVersion = 0;
+
+const cloneAuthFilesResponse = (payload: AuthFilesResponse): AuthFilesResponse => ({
+  ...payload,
+  files: Array.isArray(payload.files) ? [...payload.files] : [],
+});
+
+const readCachedAuthFilesList = (): AuthFilesResponse | null => {
+  if (!authFilesListCache) return null;
+
+  const now = Date.now();
+  if (authFilesListCache.createdAt <= now && authFilesListCache.expiresAt > now) {
+    return cloneAuthFilesResponse(authFilesListCache.payload);
+  }
+
+  authFilesListCache = null;
+  return null;
+};
+
+const invalidateAuthFilesListCache = () => {
+  authFilesListCacheVersion += 1;
+  authFilesListCache = null;
+  pendingAuthFilesList = null;
+};
+
+const listAuthFiles = async (options?: { force?: boolean }): Promise<AuthFilesResponse> => {
+  if (!options?.force) {
+    const cached = readCachedAuthFilesList();
+    if (cached) return cached;
+
+    if (pendingAuthFilesList) {
+      return cloneAuthFilesResponse(await pendingAuthFilesList);
+    }
+  }
+
+  const requestVersion = authFilesListCacheVersion;
+  const request = apiClient
+    .get<AuthFilesResponse>('/auth-files')
+    .then((payload) => dedupeAuthFilesResponse(payload));
+  pendingAuthFilesList = request;
+
+  try {
+    const payload = await request;
+    if (requestVersion === authFilesListCacheVersion && pendingAuthFilesList === request) {
+      const now = Date.now();
+      authFilesListCache = {
+        payload,
+        createdAt: now,
+        expiresAt: now + AUTH_FILES_LIST_CACHE_TTL_MS,
+      };
+    }
+    return cloneAuthFilesResponse(payload);
+  } finally {
+    if (pendingAuthFilesList === request) {
+      pendingAuthFilesList = null;
+    }
+  }
+};
+
 const parseAuthFileJsonObject = (rawText: string): Record<string, unknown> => {
   const trimmed = rawText.trim();
 
@@ -410,13 +479,22 @@ const normalizeOauthModelAlias = (payload: unknown): Record<string, OAuthModelAl
 const OAUTH_MODEL_ALIAS_ENDPOINT = '/oauth-model-alias';
 
 export const authFilesApi = {
-  list: async () => dedupeAuthFilesResponse(await apiClient.get<AuthFilesResponse>('/auth-files')),
+  list: listAuthFiles,
 
-  patchFile: (payload: AuthFilePatchPayload) =>
-    apiClient.patch<AuthFileStatusResponse>('/auth-files', payload),
+  patchFile: async (payload: AuthFilePatchPayload) => {
+    const response = await apiClient.patch<AuthFileStatusResponse>('/auth-files', payload);
+    invalidateAuthFilesListCache();
+    return response;
+  },
 
-  setStatus: (name: string, disabled: boolean) =>
-    apiClient.patch<AuthFileStatusResponse>('/auth-files/status', { name, disabled }),
+  setStatus: async (name: string, disabled: boolean) => {
+    const response = await apiClient.patch<AuthFileStatusResponse>('/auth-files/status', {
+      name,
+      disabled,
+    });
+    invalidateAuthFilesListCache();
+    return response;
+  },
 
   setStatusWithFallback: async (name: string, disabled: boolean) => {
     try {
@@ -426,8 +504,11 @@ export const authFilesApi = {
     }
   },
 
-  patchFields: (name: string, fields: AuthFileFieldsPatch) =>
-    apiClient.patch('/auth-files/fields', { name, ...fields }),
+  patchFields: async (name: string, fields: AuthFileFieldsPatch) => {
+    const response = await apiClient.patch('/auth-files/fields', { name, ...fields });
+    invalidateAuthFilesListCache();
+    return response;
+  },
 
   uploadFiles: async (files: File[]): Promise<AuthFileBatchUploadResult> => {
     const requestedNames = files.map((file) => file.name);
@@ -440,6 +521,7 @@ export const authFilesApi = {
       formData.append('file', file, file.name);
     });
     const payload = await apiClient.postForm<AuthFileBatchUploadResponse>('/auth-files', formData);
+    invalidateAuthFilesListCache();
     return normalizeBatchUploadResponse(payload, requestedNames);
   },
 
@@ -454,6 +536,7 @@ export const authFilesApi = {
     const payload = await apiClient.delete<AuthFileBatchDeleteResponse>('/auth-files', {
       data: { names: requestedNames },
     });
+    invalidateAuthFilesListCache();
     return normalizeBatchDeleteResponse(payload, requestedNames);
   },
 
@@ -468,10 +551,15 @@ export const authFilesApi = {
     const payload = await apiClient.delete<AuthFileBatchDeleteResponse>(
       `/auth-files?name=${encodeURIComponent(requestedNames[0])}`
     );
+    invalidateAuthFilesListCache();
     return normalizeBatchDeleteResponse(payload, requestedNames);
   },
 
-  deleteAll: () => apiClient.delete('/auth-files', { params: { all: true } }),
+  deleteAll: async () => {
+    const response = await apiClient.delete('/auth-files', { params: { all: true } });
+    invalidateAuthFilesListCache();
+    return response;
+  },
 
   downloadText: async (name: string): Promise<string> => {
     const response = await apiClient.getRaw(
