@@ -635,6 +635,19 @@ const hasUnsafeCpaIdToken = (
   });
 };
 
+export const isValidCpaAuthJsonObject = (value: unknown): value is JsonRecord => {
+  if (!isRecord(value)) return false;
+  try {
+    return (
+      !hasForbiddenInvisibleCharacter(value) &&
+      !hasUnsafeCpaIdToken(value) &&
+      hasCpaAuthFileShape(value)
+    );
+  } catch {
+    return false;
+  }
+};
+
 const convertSessionToCpaAuthJson = (record: JsonRecord, now: Date): JsonRecord => {
   const token = isRecord(record.token) ? record.token : undefined;
   const credentials = isRecord(record.credentials) ? record.credentials : undefined;

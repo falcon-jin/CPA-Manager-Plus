@@ -89,13 +89,52 @@ describe('auth file archive upload helpers', () => {
 
   it('deduplicates repeated JSON base names inside zip archives', async () => {
     const zip = zipSync({
-      'first/auth.json': strToU8('{"token":"first"}'),
-      'second/auth.json': strToU8('{"token":"second"}'),
+      'first/auth.json': strToU8('{"type":"codex","access_token":"first"}'),
+      'second/auth.json': strToU8('{"type":"codex","access_token":"second"}'),
     });
 
     const result = await extractAuthJsonFilesFromArchive(fileFromBytes('auth-files.zip', zip));
 
     expect(result.files.map((file) => file.name)).toEqual(['auth.json', 'auth-2.json']);
+  });
+
+  it('ignores sub2api JSON entries across nested archive directories', async () => {
+    const zip = zipSync({
+      'export/2026/cpa/auth-a.json': strToU8('{"type":"codex","access_token":"a"}'),
+      'export/2026/sub2api/account-a.json': strToU8('{"token":"sub2api"}'),
+      'deep/NESTED/Sub2API/account-b.json': strToU8('{"token":"nested-sub2api"}'),
+    });
+
+    const result = await extractAuthJsonFilesFromArchive(fileFromBytes('auth-files.zip', zip));
+
+    expect(result.files.map((file) => file.name)).toEqual(['auth-a.json']);
+    await expect(textFilePayload(result.files[0])).resolves.toBe(
+      '{"type":"codex","access_token":"a"}'
+    );
+    expect(result.skippedEntries).toEqual(
+      expect.arrayContaining([
+        'export/2026/sub2api/account-a.json',
+        'deep/NESTED/Sub2API/account-b.json',
+      ])
+    );
+  });
+
+  it('ignores archive JSON entries that are not valid CPA auth files', async () => {
+    const zip = zipSync({
+      'cpa/auth-a.json': strToU8('{"type":"codex","access_token":"a"}'),
+      'cpa/not-auth.json': strToU8('{"foo":"bar"}'),
+      'cpa/empty-credentials.json': strToU8('{"type":"codex","credentials":{}}'),
+    });
+
+    const result = await extractAuthJsonFilesFromArchive(fileFromBytes('auth-files.zip', zip));
+
+    expect(result.files.map((file) => file.name)).toEqual(['auth-a.json']);
+    await expect(textFilePayload(result.files[0])).resolves.toBe(
+      '{"type":"codex","access_token":"a"}'
+    );
+    expect(result.skippedEntries).toEqual(
+      expect.arrayContaining(['cpa/not-auth.json', 'cpa/empty-credentials.json'])
+    );
   });
 
   it('extracts JSON files from tar gzip archives', async () => {

@@ -1,4 +1,4 @@
-import { act } from 'react';
+import { act, type ReactNode } from 'react';
 import { create, type ReactTestRenderer } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Button } from '@/components/ui/Button';
@@ -7,6 +7,9 @@ import { AuthFilesPage } from './AuthFilesPage';
 const { mocks } = vi.hoisted(() => {
   return {
     mocks: {
+      files: [] as Array<Record<string, unknown>>,
+      selectedFiles: new Set<string>(),
+      batchSetPriority: vi.fn(async () => undefined),
       authJsonPasteSaving: false,
       savePastedAuthJson: vi.fn(async () => 'saved.json'),
       showNotification: vi.fn(),
@@ -34,6 +37,14 @@ vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
 }));
 
+vi.mock('react-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-dom')>('react-dom');
+  return {
+    ...actual,
+    createPortal: (children: ReactNode) => children,
+  };
+});
+
 vi.mock('motion/mini', () => ({
   animate: () => ({ stop: () => {} }),
 }));
@@ -56,9 +67,9 @@ vi.mock('@/utils/clipboard', () => ({
 
 vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
   useAuthFilesData: () => ({
-    files: [],
-    selectedFiles: new Set<string>(),
-    selectionCount: 0,
+    files: mocks.files,
+    selectedFiles: mocks.selectedFiles,
+    selectionCount: mocks.selectedFiles.size,
     loading: false,
     error: '',
     uploading: false,
@@ -83,7 +94,7 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
     deselectAll: vi.fn(),
     batchDownload: vi.fn(),
     batchSetStatus: vi.fn(),
-    batchSetPriority: vi.fn(),
+    batchSetPriority: mocks.batchSetPriority,
     batchDelete: vi.fn(),
   }),
 }));
@@ -153,7 +164,8 @@ vi.mock('@/stores', () => ({
     selector({ connectionStatus: 'connected' }),
   useThemeStore: (selector: (state: { resolvedTheme: 'dark' }) => unknown) =>
     selector({ resolvedTheme: 'dark' }),
-  useQuotaStore: (selector: (state: { codexQuota: null }) => unknown) => selector({ codexQuota: null }),
+  useQuotaStore: (selector: (state: { codexQuota: Record<string, unknown> }) => unknown) =>
+    selector({ codexQuota: {} }),
 }));
 
 vi.mock('@/features/authFiles/components/AuthFileCard', () => ({
@@ -216,8 +228,12 @@ const findButtonByText = (renderer: ReactTestRenderer, text: string) => {
 
 describe('AuthFilesPage auth JSON paste flow', () => {
   beforeEach(() => {
+    mocks.files = [];
+    mocks.selectedFiles = new Set<string>();
     mocks.authJsonPasteSaving = false;
+    mocks.batchSetPriority.mockClear();
     mocks.savePastedAuthJson.mockClear();
+    mocks.showNotification.mockClear();
     mocks.lastModalProps = null;
   });
 
@@ -288,5 +304,35 @@ describe('AuthFilesPage auth JSON paste flow', () => {
 
     expect(mocks.lastModalProps?.open).toBe(true);
     renderer!.unmount();
+  });
+
+  it('keeps batch priority apply clickable after selecting files with empty input', async () => {
+    vi.stubGlobal('document', { body: {} });
+    mocks.files = [{ name: 'codex-a.json', type: 'codex' }];
+    mocks.selectedFiles = new Set(['codex-a.json']);
+
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(<AuthFilesPage />);
+      });
+
+      const applyButton = findButtonByText(renderer!, 'auth_files.batch_priority_apply');
+      expect(applyButton.props.disabled).toBe(false);
+
+      await act(async () => {
+        applyButton.props.onClick();
+      });
+
+      expect(mocks.batchSetPriority).not.toHaveBeenCalled();
+      expect(mocks.showNotification).toHaveBeenCalledWith(
+        'auth_files.batch_priority_invalid',
+        'error'
+      );
+
+      renderer!.unmount();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

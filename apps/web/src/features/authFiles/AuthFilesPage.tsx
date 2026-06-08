@@ -608,8 +608,7 @@ export function AuthFilesPage() {
   const batchPriorityButtonDisabled =
     disableControls ||
     selectedNames.length === 0 ||
-    batchPriorityUpdating ||
-    batchPriorityInputTrimmed.length === 0;
+    batchPriorityUpdating;
 
   const handleBatchPriorityApply = useCallback(() => {
     const priority = parsePriorityValue(batchPriorityInputTrimmed);

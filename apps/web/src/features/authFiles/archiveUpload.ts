@@ -1,4 +1,5 @@
 import { gunzipSync, unzipSync } from 'fflate';
+import { isValidCpaAuthJsonObject } from './sessionAuthConverter';
 
 const JSON_FILE_EXTENSION = '.json';
 const ZIP_FILE_EXTENSION = '.zip';
@@ -59,11 +60,13 @@ const removeKnownArchiveExtension = (name: string): string => {
 
 const normalizeArchiveEntryName = (entryName: string): string | null => {
   const normalized = entryName.replace(/\\/g, '/');
-  const baseName = normalized
+  const pathSegments = normalized
     .split('/')
     .map((segment) => segment.trim())
-    .filter(Boolean)
-    .pop();
+    .filter(Boolean);
+  if (pathSegments.some((segment) => segment.toLowerCase() === 'sub2api')) return null;
+
+  const baseName = pathSegments.pop();
   if (!baseName || !isAuthFileJsonName(baseName)) return null;
   return Array.from(baseName)
     .map((char) => (UNSAFE_FILE_NAME_CHARS.has(char) || char.charCodeAt(0) < 32 ? '_' : char))
@@ -97,6 +100,14 @@ const copyBytesToArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
   return copy.buffer as ArrayBuffer;
 };
 
+const isValidCpaAuthFileBytes = (bytes: Uint8Array): boolean => {
+  try {
+    return isValidCpaAuthJsonObject(JSON.parse(textDecoder.decode(bytes)) as unknown);
+  } catch {
+    return false;
+  }
+};
+
 const extractZipJsonFiles = (bytes: Uint8Array): ExtractedAuthFileArchive => {
   const entries = unzipSync(bytes);
   const usedNames = new Set<string>();
@@ -106,6 +117,10 @@ const extractZipJsonFiles = (bytes: Uint8Array): ExtractedAuthFileArchive => {
   Object.entries(entries).forEach(([entryName, entryBytes]) => {
     const fileName = normalizeArchiveEntryName(entryName);
     if (!fileName) {
+      skippedEntries.push(entryName);
+      return;
+    }
+    if (!isValidCpaAuthFileBytes(entryBytes)) {
       skippedEntries.push(entryName);
       return;
     }
@@ -162,6 +177,8 @@ const extractTarJsonFiles = (bytes: Uint8Array): ExtractedAuthFileArchive => {
     const fileName = normalizeArchiveEntryName(entryName);
     if (!fileName) {
       skippedEntries.push(entryName);
+    } else if (!isValidCpaAuthFileBytes(bytes.subarray(dataStart, dataEnd))) {
+      skippedEntries.push(entryName);
     } else {
       files.push(toJsonFile(fileName, bytes.subarray(dataStart, dataEnd), usedNames));
     }
@@ -189,7 +206,7 @@ const deriveGzipJsonFileName = (name: string, bytes: Uint8Array): string | null 
 const extractGzipJsonFile = (archiveName: string, bytes: Uint8Array): ExtractedAuthFileArchive => {
   const decompressed = gunzipSync(bytes);
   const fileName = deriveGzipJsonFileName(archiveName, decompressed);
-  if (!fileName) {
+  if (!fileName || !isValidCpaAuthFileBytes(decompressed)) {
     return { files: [], skippedEntries: [archiveName] };
   }
   return { files: [toJsonFile(fileName, decompressed, new Set<string>())], skippedEntries: [] };
