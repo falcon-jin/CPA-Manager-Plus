@@ -1051,6 +1051,12 @@ func resolveWindowAwareProbeAction(item account, statusCode int, bodyText string
 	longWindowLabel := classified.longWindowLabel(longWindow)
 	fiveHour := classified.FiveHour
 	fiveHourOverThreshold := fiveHour != nil && fiveHour.UsedPercent != nil && *fiveHour.UsedPercent >= threshold
+	fiveHourUsedPercent := func() *float64 {
+		if fiveHour == nil || fiveHour.UsedPercent == nil {
+			return nil
+		}
+		return ptrFloat(*fiveHour.UsedPercent)
+	}
 
 	if statusCode == http.StatusUnauthorized {
 		decision := resolveUnauthorizedProbeAction(bodyText, ptrFloat(longWindowUsedPercent))
@@ -1072,22 +1078,26 @@ func resolveWindowAwareProbeAction(item account, statusCode int, bodyText string
 			IsQuota:      true,
 		}
 	}
-	if item.Disabled {
-		reason := fmt.Sprintf("%s仍可用，建议立即启用账号", longWindowLabel)
-		if fiveHourOverThreshold {
-			reason = fmt.Sprintf("5 小时额度达到阈值，但%s仍可用，建议立即启用账号", longWindowLabel)
+	if fiveHourOverThreshold {
+		if item.Disabled {
+			return &inspectionDecision{
+				Action:       "keep",
+				ActionReason: "5 小时额度达到阈值，但账号已禁用",
+				UsedPercent:  fiveHourUsedPercent(),
+				IsQuota:      true,
+			}
 		}
 		return &inspectionDecision{
-			Action:       "enable",
-			ActionReason: reason,
-			UsedPercent:  ptrFloat(longWindowUsedPercent),
-			IsQuota:      false,
+			Action:       "disable",
+			ActionReason: "5 小时额度达到阈值，建议禁用账号",
+			UsedPercent:  fiveHourUsedPercent(),
+			IsQuota:      true,
 		}
 	}
-	if fiveHourOverThreshold {
+	if item.Disabled {
 		return &inspectionDecision{
-			Action:       "keep",
-			ActionReason: fmt.Sprintf("5 小时额度达到阈值，但%s仍可用，暂不禁用账号", longWindowLabel),
+			Action:       "enable",
+			ActionReason: fmt.Sprintf("%s仍可用，建议立即启用账号", longWindowLabel),
 			UsedPercent:  ptrFloat(longWindowUsedPercent),
 			IsQuota:      false,
 		}

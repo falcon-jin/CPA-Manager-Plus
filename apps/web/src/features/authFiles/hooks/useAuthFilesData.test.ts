@@ -1,5 +1,6 @@
-import { act, createElement } from 'react';
+import { act, createElement, type ChangeEvent } from 'react';
 import { create, type ReactTestRenderer } from 'react-test-renderer';
+import { strToU8, zipSync } from 'fflate';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mocks } = vi.hoisted(() => {
@@ -7,6 +8,8 @@ const { mocks } = vi.hoisted(() => {
     mocks: {
       list: vi.fn(),
       saveJsonObject: vi.fn(),
+      uploadFiles: vi.fn(),
+      patchFields: vi.fn(),
       deleteFiles: vi.fn(),
       showNotification: vi.fn(),
       showConfirmation: vi.fn(),
@@ -36,6 +39,8 @@ vi.mock('@/services/api', () => ({
   authFilesApi: {
     list: mocks.list,
     saveJsonObject: mocks.saveJsonObject,
+    uploadFiles: mocks.uploadFiles,
+    patchFields: mocks.patchFields,
     deleteFiles: mocks.deleteFiles,
   },
 }));
@@ -91,12 +96,16 @@ const mountUseAuthFilesData = (): UseAuthFilesDataHarness => {
 beforeEach(() => {
   mocks.list.mockReset();
   mocks.saveJsonObject.mockReset();
+  mocks.uploadFiles.mockReset();
+  mocks.patchFields.mockReset();
   mocks.deleteFiles.mockReset();
   mocks.showNotification.mockReset();
   mocks.showConfirmation.mockReset();
 
   mocks.list.mockResolvedValue({ files: [] });
   mocks.saveJsonObject.mockResolvedValue(undefined);
+  mocks.uploadFiles.mockResolvedValue({ uploaded: 0, failed: [], files: [] });
+  mocks.patchFields.mockResolvedValue(undefined);
   mocks.deleteFiles.mockResolvedValue({ deleted: 0, failed: [], files: [] });
 });
 
@@ -414,6 +423,77 @@ describe('useAuthFilesData savePastedAuthJson', () => {
   });
 });
 
+describe('useAuthFilesData handleFileChange', () => {
+  it('extracts JSON files from uploaded zip archives before upload', async () => {
+    const hook = mountUseAuthFilesData();
+    const zipFile = new File(
+      [
+        new Blob([
+          zipSync({
+            'auth/codex-a.json': strToU8('{"type":"codex","access_token":"a"}'),
+            'auth/readme.txt': strToU8('ignored'),
+          }),
+        ]),
+      ],
+      'auth-files.zip',
+      { type: 'application/zip' }
+    );
+    mocks.uploadFiles.mockResolvedValueOnce({
+      uploaded: 1,
+      failed: [],
+      files: ['codex-a.json'],
+    });
+
+    await act(async () => {
+      await hook.getCurrent().handleFileChange({
+        target: {
+          files: [zipFile],
+          value: 'auth-files.zip',
+        },
+      } as unknown as ChangeEvent<HTMLInputElement>);
+    });
+
+    expect(mocks.uploadFiles).toHaveBeenCalledTimes(1);
+    const uploadedFiles = mocks.uploadFiles.mock.calls[0][0] as File[];
+    expect(uploadedFiles).toHaveLength(1);
+    expect(uploadedFiles[0].name).toBe('codex-a.json');
+    await expect(uploadedFiles[0].text()).resolves.toBe(
+      '{"type":"codex","access_token":"a"}'
+    );
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'auth_files.upload_success',
+      'success'
+    );
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    hook.unmount();
+  });
+
+  it('rejects archives without JSON files', async () => {
+    const hook = mountUseAuthFilesData();
+    const zipFile = new File(
+      [new Blob([zipSync({ 'readme.txt': strToU8('ignored') })])],
+      'empty-auth.zip',
+      { type: 'application/zip' }
+    );
+
+    await act(async () => {
+      await hook.getCurrent().handleFileChange({
+        target: {
+          files: [zipFile],
+          value: 'empty-auth.zip',
+        },
+      } as unknown as ChangeEvent<HTMLInputElement>);
+    });
+
+    expect(mocks.uploadFiles).not.toHaveBeenCalled();
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'auth_files.upload_error_archive_empty',
+      'warning'
+    );
+    hook.unmount();
+  });
+});
+
 describe('useAuthFilesData handleDeleteAll', () => {
   it('deletes only the provided filtered files for custom result filters', async () => {
     const hook = mountUseAuthFilesData();
@@ -471,6 +551,79 @@ describe('useAuthFilesData handleDeleteAll', () => {
     expect(mocks.showNotification).toHaveBeenCalledWith(
       'auth_files.delete_filtered_result_success',
       'success'
+    );
+    hook.unmount();
+  });
+});
+
+describe('useAuthFilesData batchSetPriority', () => {
+  it('sets priority for selected persisted auth files', async () => {
+    const hook = mountUseAuthFilesData();
+    mocks.list.mockResolvedValueOnce({
+      files: [
+        { name: 'codex-a.json', type: 'codex', priority: 1 },
+        { name: 'codex-b.json', type: 'codex' },
+        { name: 'runtime.json', type: 'codex', runtimeOnly: true },
+      ],
+    });
+
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+
+    await act(async () => {
+      await hook.getCurrent().batchSetPriority(
+        ['codex-a.json', 'codex-b.json', 'runtime.json'],
+        10
+      );
+    });
+
+    expect(mocks.patchFields).toHaveBeenCalledTimes(2);
+    expect(mocks.patchFields).toHaveBeenCalledWith('codex-a.json', { priority: 10 });
+    expect(mocks.patchFields).toHaveBeenCalledWith('codex-b.json', { priority: 10 });
+    expect(hook.getCurrent().files.find((file) => file.name === 'codex-a.json')?.priority).toBe(
+      10
+    );
+    expect(hook.getCurrent().files.find((file) => file.name === 'codex-b.json')?.priority).toBe(
+      10
+    );
+    expect(hook.getCurrent().files.find((file) => file.name === 'runtime.json')?.priority).toBe(
+      undefined
+    );
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'auth_files.batch_priority_success',
+      'success'
+    );
+    hook.unmount();
+  });
+
+  it('reverts only failed priority updates', async () => {
+    const hook = mountUseAuthFilesData();
+    mocks.list.mockResolvedValueOnce({
+      files: [
+        { name: 'codex-a.json', type: 'codex', priority: 1 },
+        { name: 'codex-b.json', type: 'codex', priority: 2 },
+      ],
+    });
+    mocks.patchFields
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('patch failed'));
+
+    await act(async () => {
+      await hook.getCurrent().loadFiles();
+    });
+
+    await act(async () => {
+      await hook.getCurrent().batchSetPriority(['codex-a.json', 'codex-b.json'], 0);
+    });
+
+    expect(hook.getCurrent().files.find((file) => file.name === 'codex-a.json')?.priority).toBe(
+      undefined
+    );
+    expect(hook.getCurrent().files.find((file) => file.name === 'codex-b.json')?.priority).toBe(2);
+    expect(mocks.showNotification).toHaveBeenCalledWith(
+      'auth_files.batch_priority_partial',
+      'warning'
     );
     hook.unmount();
   });

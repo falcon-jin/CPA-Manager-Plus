@@ -250,6 +250,128 @@ func TestRunAutoActionDisableExecutesDeleteSuggestionAsDisable(t *testing.T) {
 	}
 }
 
+func TestRunScheduledAutoActionDisablesFiveHourQuotaWithHealthyLongQuota(t *testing.T) {
+	var patchCalled bool
+	var patchedDisabled bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
+		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+			_, _ = w.Write([]byte(`{"status_code":200,"body":{"rate_limit":{"primary_window":{"used_percent":100,"limit_window_seconds":18000},"secondary_window":{"used_percent":5,"limit_window_seconds":2592000}}}}`))
+		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodPatch:
+			patchCalled = true
+			var payload struct {
+				Name     string `json:"name"`
+				Disabled bool   `json:"disabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode patch payload: %v", err)
+			}
+			if payload.Name != "auth-a.json" {
+				t.Fatalf("patch name = %q, want auth-a.json", payload.Name)
+			}
+			patchedDisabled = payload.Disabled
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := newCodexInspectionTestStore(t)
+	managerCfg := newCodexInspectionManagerConfig(upstream.URL)
+	managerCfg.CodexInspection.AutoActionMode = model.CodexInspectionAutoActionDisable
+	if err := db.SaveManagerConfig(context.Background(), managerCfg); err != nil {
+		t.Fatalf("save manager config: %v", err)
+	}
+	svc := newCodexInspectionTestService(t, db)
+
+	result, err := svc.Run(context.Background(), RunRequest{
+		TriggerType: model.CodexInspectionTriggerScheduled,
+		TriggerKey:  "interval:60:1",
+	})
+	if err != nil {
+		t.Fatalf("run inspection: %v", err)
+	}
+	if !patchCalled || !patchedDisabled {
+		t.Fatalf("five-hour quota auto-disable patch called=%v disabled=%v, want true/true", patchCalled, patchedDisabled)
+	}
+	if result.Run.DisableCount != 1 || result.Run.KeepCount != 0 {
+		t.Fatalf("run counts disable=%d keep=%d, want 1/0", result.Run.DisableCount, result.Run.KeepCount)
+	}
+	if len(result.Results) != 1 ||
+		result.Results[0].Action != "disable" ||
+		result.Results[0].ActionStatus != model.CodexInspectionActionStatusSuccess ||
+		result.Results[0].ExecutedAction != "disable" ||
+		!result.Results[0].Disabled ||
+		result.Results[0].UsedPercent == nil ||
+		*result.Results[0].UsedPercent != 100 ||
+		!result.Results[0].IsQuota {
+		t.Fatalf("result after five-hour quota disable = %#v", result.Results)
+	}
+}
+
+func TestRunScheduledAutoActionEnablesRecoveredFiveHourQuotaAccount(t *testing.T) {
+	var patchCalled bool
+	var patchedDisabled bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","disabled":true,"status":"ok","state":"ready"}]}`))
+		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+			_, _ = w.Write([]byte(`{"status_code":200,"body":{"rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000},"secondary_window":{"used_percent":5,"limit_window_seconds":2592000}}}}`))
+		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodPatch:
+			patchCalled = true
+			var payload struct {
+				Name     string `json:"name"`
+				Disabled bool   `json:"disabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode patch payload: %v", err)
+			}
+			if payload.Name != "auth-a.json" {
+				t.Fatalf("patch name = %q, want auth-a.json", payload.Name)
+			}
+			patchedDisabled = payload.Disabled
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	db := newCodexInspectionTestStore(t)
+	managerCfg := newCodexInspectionManagerConfig(upstream.URL)
+	managerCfg.CodexInspection.AutoActionMode = model.CodexInspectionAutoActionDisable
+	if err := db.SaveManagerConfig(context.Background(), managerCfg); err != nil {
+		t.Fatalf("save manager config: %v", err)
+	}
+	svc := newCodexInspectionTestService(t, db)
+
+	result, err := svc.Run(context.Background(), RunRequest{
+		TriggerType: model.CodexInspectionTriggerScheduled,
+		TriggerKey:  "interval:60:2",
+	})
+	if err != nil {
+		t.Fatalf("run inspection: %v", err)
+	}
+	if !patchCalled || patchedDisabled {
+		t.Fatalf("recovered five-hour quota patch called=%v disabled=%v, want true/false", patchCalled, patchedDisabled)
+	}
+	if result.Run.EnableCount != 1 || result.Run.KeepCount != 0 {
+		t.Fatalf("run counts enable=%d keep=%d, want 1/0", result.Run.EnableCount, result.Run.KeepCount)
+	}
+	if len(result.Results) != 1 ||
+		result.Results[0].Action != "enable" ||
+		result.Results[0].ActionStatus != model.CodexInspectionActionStatusSuccess ||
+		result.Results[0].ExecutedAction != "enable" ||
+		result.Results[0].Disabled ||
+		result.Results[0].IsQuota {
+		t.Fatalf("result after recovered five-hour quota enable = %#v", result.Results)
+	}
+}
+
 func TestRunAutoActionSkipsDuplicateFileNameResults(t *testing.T) {
 	var deleteCalls int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -489,7 +611,7 @@ func TestResolveProbeActionUsesMonthlyWindowAsLongQuota(t *testing.T) {
 		}
 	})
 
-	t.Run("keeps exhausted short window with healthy monthly quota", func(t *testing.T) {
+	t.Run("disables exhausted short window with healthy monthly quota", func(t *testing.T) {
 		rateLimit := &codexRateLimit{
 			PrimaryWindow: &codexWindow{
 				UsedPercent:        ptrFloat(100),
@@ -502,12 +624,58 @@ func TestResolveProbeActionUsesMonthlyWindowAsLongQuota(t *testing.T) {
 		}
 		decision := resolveProbeAction(item, http.StatusOK, "", rateLimit, deriveRateLimitUsedPercent(rateLimit), true, threshold)
 
+		if decision.Action != "disable" ||
+			decision.ActionReason != "5 小时额度达到阈值，建议禁用账号" ||
+			decision.UsedPercent == nil ||
+			*decision.UsedPercent != 100 ||
+			!decision.IsQuota {
+			t.Fatalf("decision = %#v, want disable exhausted short window with healthy monthly quota", decision)
+		}
+	})
+
+	t.Run("keeps disabled exhausted short window until reset", func(t *testing.T) {
+		disabledItem := account{DisplayAccount: "disabled@example.test", Disabled: true}
+		rateLimit := &codexRateLimit{
+			PrimaryWindow: &codexWindow{
+				UsedPercent:        ptrFloat(100),
+				LimitWindowSeconds: ptrFloat(codexFiveHourWindow),
+			},
+			SecondaryWindow: &codexWindow{
+				UsedPercent:        ptrFloat(5),
+				LimitWindowSeconds: ptrFloat(codexMonthWindow),
+			},
+		}
+		decision := resolveProbeAction(disabledItem, http.StatusOK, "", rateLimit, deriveRateLimitUsedPercent(rateLimit), true, threshold)
+
 		if decision.Action != "keep" ||
-			decision.ActionReason != "5 小时额度达到阈值，但月额度仍可用，暂不禁用账号" ||
+			decision.ActionReason != "5 小时额度达到阈值，但账号已禁用" ||
+			decision.UsedPercent == nil ||
+			*decision.UsedPercent != 100 ||
+			!decision.IsQuota {
+			t.Fatalf("decision = %#v, want keep disabled exhausted short window until reset", decision)
+		}
+	})
+
+	t.Run("enables disabled account after short window reset", func(t *testing.T) {
+		disabledItem := account{DisplayAccount: "disabled@example.test", Disabled: true}
+		rateLimit := &codexRateLimit{
+			PrimaryWindow: &codexWindow{
+				UsedPercent:        ptrFloat(10),
+				LimitWindowSeconds: ptrFloat(codexFiveHourWindow),
+			},
+			SecondaryWindow: &codexWindow{
+				UsedPercent:        ptrFloat(5),
+				LimitWindowSeconds: ptrFloat(codexMonthWindow),
+			},
+		}
+		decision := resolveProbeAction(disabledItem, http.StatusOK, "", rateLimit, deriveRateLimitUsedPercent(rateLimit), false, threshold)
+
+		if decision.Action != "enable" ||
+			decision.ActionReason != "月额度仍可用，建议立即启用账号" ||
 			decision.UsedPercent == nil ||
 			*decision.UsedPercent != 5 ||
 			decision.IsQuota {
-			t.Fatalf("decision = %#v, want keep exhausted short window with healthy monthly quota", decision)
+			t.Fatalf("decision = %#v, want enable disabled account after short window reset", decision)
 		}
 	})
 }

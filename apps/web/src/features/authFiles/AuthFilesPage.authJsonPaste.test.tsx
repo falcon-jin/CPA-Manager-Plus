@@ -67,6 +67,7 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
     deletingAll: false,
     statusUpdating: false,
     batchStatusUpdating: false,
+    batchPriorityUpdating: false,
     fileInputRef: { current: null },
     loadFiles: vi.fn(async () => undefined),
     handleUploadClick: vi.fn(),
@@ -82,6 +83,7 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
     deselectAll: vi.fn(),
     batchDownload: vi.fn(),
     batchSetStatus: vi.fn(),
+    batchSetPriority: vi.fn(),
     batchDelete: vi.fn(),
   }),
 }));

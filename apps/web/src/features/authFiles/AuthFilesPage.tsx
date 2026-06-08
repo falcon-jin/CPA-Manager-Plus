@@ -36,6 +36,7 @@ import {
   isHealthyAuthFile,
   isRuntimeOnlyAuthFile,
   normalizeProviderKey,
+  parsePriorityValue,
   type QuotaProviderType,
   type ResolvedTheme,
 } from '@/features/authFiles/constants';
@@ -50,6 +51,7 @@ import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModel
 import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth';
 import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
 import { useAuthFilesStatusBarCache } from '@/features/authFiles/hooks/useAuthFilesStatusBarCache';
+import { AUTH_FILE_UPLOAD_ACCEPT } from '@/features/authFiles/archiveUpload';
 import {
   BATCH_BAR_BASE_TRANSFORM,
   BATCH_BAR_HIDDEN_TRANSFORM,
@@ -124,6 +126,7 @@ export function AuthFilesPage() {
   const [viewMode, setViewMode] = useState<'diagram' | 'list'>('list');
   const [sortMode, setSortMode] = useState<AuthFilesSortMode>('default');
   const [batchActionBarVisible, setBatchActionBarVisible] = useState(false);
+  const [batchPriorityInput, setBatchPriorityInput] = useState('');
   const [uiStateHydrated, setUiStateHydrated] = useState(false);
   const [authJsonPasteOpen, setAuthJsonPasteOpen] = useState(false);
   const [lastCodexInspectionResults, setLastCodexInspectionResults] = useState<
@@ -146,6 +149,7 @@ export function AuthFilesPage() {
     deletingAll,
     statusUpdating,
     batchStatusUpdating,
+    batchPriorityUpdating,
     fileInputRef,
     loadFiles,
     handleUploadClick,
@@ -161,6 +165,7 @@ export function AuthFilesPage() {
     deselectAll,
     batchDownload,
     batchSetStatus,
+    batchSetPriority,
     batchDelete,
   } = useAuthFilesData();
 
@@ -596,6 +601,27 @@ export function AuthFilesPage() {
     selectedNames.length === 0 ||
     batchStatusUpdating ||
     selectedHasStatusUpdating;
+  const batchPriorityInputTrimmed = batchPriorityInput.trim();
+  const batchPriorityInputInvalid =
+    batchPriorityInputTrimmed.length > 0 &&
+    parsePriorityValue(batchPriorityInputTrimmed) === undefined;
+  const batchPriorityButtonDisabled =
+    disableControls ||
+    selectedNames.length === 0 ||
+    batchPriorityUpdating ||
+    batchPriorityInputTrimmed.length === 0;
+
+  const handleBatchPriorityApply = useCallback(() => {
+    const priority = parsePriorityValue(batchPriorityInputTrimmed);
+    if (priority === undefined) {
+      showNotification(t('auth_files.batch_priority_invalid'), 'error');
+      return;
+    }
+
+    void batchSetPriority(selectedNames, priority).then(() => {
+      setBatchPriorityInput('');
+    });
+  }, [batchPriorityInputTrimmed, batchSetPriority, selectedNames, showNotification, t]);
 
   const copyTextWithNotification = useCallback(
     async (text: string) => {
@@ -856,7 +882,7 @@ export function AuthFilesPage() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".json,application/json"
+                  accept={AUTH_FILE_UPLOAD_ACCEPT}
                   multiple
                   style={{ display: 'none' }}
                   onChange={handleFileChange}
@@ -1162,6 +1188,35 @@ export function AuthFilesPage() {
                   </Button>
                 </div>
                 <div className={styles.batchActionRight}>
+                  <div className={styles.batchPriorityControl}>
+                    <input
+                      className={`${styles.batchPriorityInput} ${
+                        batchPriorityInputInvalid ? styles.batchPriorityInputInvalid : ''
+                      }`}
+                      value={batchPriorityInput}
+                      inputMode="numeric"
+                      placeholder={t('auth_files.batch_priority_placeholder')}
+                      aria-label={t('auth_files.batch_priority_aria')}
+                      aria-invalid={batchPriorityInputInvalid}
+                      title={t('auth_files.batch_priority_aria')}
+                      onChange={(event) => setBatchPriorityInput(event.currentTarget.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !batchPriorityButtonDisabled) {
+                          handleBatchPriorityApply();
+                        }
+                      }}
+                      disabled={disableControls || batchPriorityUpdating}
+                    />
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={handleBatchPriorityApply}
+                      disabled={batchPriorityButtonDisabled}
+                      loading={batchPriorityUpdating}
+                    >
+                      {t('auth_files.batch_priority_apply')}
+                    </Button>
+                  </div>
                   <Button
                     variant="secondary"
                     size="sm"

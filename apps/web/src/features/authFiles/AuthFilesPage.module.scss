@@ -1660,6 +1660,47 @@
   justify-content: flex-end;
 }
 
+.batchPriorityControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.batchPriorityInput {
+  width: 104px;
+  height: 32px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 78%, transparent);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
+
+  &:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 12%, transparent);
+  }
+
+  &::placeholder {
+    color: var(--text-tertiary);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+  }
+}
+
+.batchPriorityInputInvalid {
+  border-color: var(--danger-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger-color) 12%, transparent);
+}
+
 .batchSelectionText {
   font-size: 13px;
   font-weight: 600;
@@ -1682,6 +1723,16 @@
   .batchActionLeft,
   .batchActionRight {
     justify-content: center;
+  }
+
+  .batchPriorityControl {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .batchPriorityInput {
+    flex: 1 1 120px;
+    max-width: 180px;
   }
 }
 

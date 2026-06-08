@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.manager-server
+      #registry.cn-hangzhou.aliyuncs.com/falcon-tools/cpa-manager-plus:latest
     image: seakee/cpa-manager-plus:latest
     restart: unless-stopped
     ports:
