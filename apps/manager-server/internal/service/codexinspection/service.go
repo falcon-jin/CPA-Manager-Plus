@@ -1051,6 +1051,8 @@ func resolveWindowAwareProbeAction(item account, statusCode int, bodyText string
 	longWindowLabel := classified.longWindowLabel(longWindow)
 	fiveHour := classified.FiveHour
 	fiveHourOverThreshold := fiveHour != nil && fiveHour.UsedPercent != nil && *fiveHour.UsedPercent >= threshold
+	fiveHourReachedBySignal := fiveHour != nil && isExplicitRateLimitReached(rateLimit)
+	fiveHourReached := fiveHourOverThreshold || fiveHourReachedBySignal
 	fiveHourUsedPercent := func() *float64 {
 		if fiveHour == nil || fiveHour.UsedPercent == nil {
 			return nil
@@ -1061,6 +1063,26 @@ func resolveWindowAwareProbeAction(item account, statusCode int, bodyText string
 	if statusCode == http.StatusUnauthorized {
 		decision := resolveUnauthorizedProbeAction(bodyText, ptrFloat(longWindowUsedPercent))
 		return &decision
+	}
+	if fiveHourReached {
+		reachedReason := "5 小时额度达到阈值"
+		if fiveHourReachedBySignal && !fiveHourOverThreshold {
+			reachedReason = "5 小时额度已限额"
+		}
+		if item.Disabled {
+			return &inspectionDecision{
+				Action:       "keep",
+				ActionReason: reachedReason + "，但账号已禁用",
+				UsedPercent:  fiveHourUsedPercent(),
+				IsQuota:      true,
+			}
+		}
+		return &inspectionDecision{
+			Action:       "disable",
+			ActionReason: reachedReason + "，建议禁用账号",
+			UsedPercent:  fiveHourUsedPercent(),
+			IsQuota:      true,
+		}
 	}
 	if longWindowUsedPercent >= threshold {
 		if item.Disabled {
@@ -1078,23 +1100,15 @@ func resolveWindowAwareProbeAction(item account, statusCode int, bodyText string
 			IsQuota:      true,
 		}
 	}
-	if fiveHourOverThreshold {
-		if item.Disabled {
+	if item.Disabled {
+		if fiveHour != nil {
 			return &inspectionDecision{
-				Action:       "keep",
-				ActionReason: "5 小时额度达到阈值，但账号已禁用",
+				Action:       "enable",
+				ActionReason: "5 小时额度仍可用，建议立即启用账号",
 				UsedPercent:  fiveHourUsedPercent(),
-				IsQuota:      true,
+				IsQuota:      false,
 			}
 		}
-		return &inspectionDecision{
-			Action:       "disable",
-			ActionReason: "5 小时额度达到阈值，建议禁用账号",
-			UsedPercent:  fiveHourUsedPercent(),
-			IsQuota:      true,
-		}
-	}
-	if item.Disabled {
 		return &inspectionDecision{
 			Action:       "enable",
 			ActionReason: fmt.Sprintf("%s仍可用，建议立即启用账号", longWindowLabel),
@@ -1810,10 +1824,7 @@ func isRateLimitReached(limit *codexRateLimit) bool {
 	if limit == nil {
 		return false
 	}
-	if limit.Allowed != nil && !*limit.Allowed {
-		return true
-	}
-	if limit.LimitReached {
+	if isExplicitRateLimitReached(limit) {
 		return true
 	}
 	for _, window := range []*codexWindow{limit.PrimaryWindow, limit.SecondaryWindow} {
@@ -1822,6 +1833,16 @@ func isRateLimitReached(limit *codexRateLimit) bool {
 		}
 	}
 	return false
+}
+
+func isExplicitRateLimitReached(limit *codexRateLimit) bool {
+	if limit == nil {
+		return false
+	}
+	if limit.Allowed != nil && !*limit.Allowed {
+		return true
+	}
+	return limit.LimitReached
 }
 
 func normalizeBody(input any) (string, any) {

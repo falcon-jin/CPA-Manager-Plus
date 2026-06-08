@@ -80,7 +80,7 @@ describe('inspectSingleAccount', () => {
     expect(result.isQuota).toBe(true);
   });
 
-  it('keeps an enabled account when only the short window is exhausted', async () => {
+  it('disables an enabled account when only the short window is exhausted', async () => {
     mockRequestCodexUsageRaw.mockResolvedValue(
       createUsageResult(5, {
         primary_window: {
@@ -96,9 +96,64 @@ describe('inspectSingleAccount', () => {
 
     const result = await inspectSingleAccount(baseAccount, settings);
 
-    expect(result.action).toBe('keep');
-    expect(result.actionReason).toBe('5 小时额度达到阈值，但月额度仍可用，暂不禁用账号');
-    expect(result.usedPercent).toBe(5);
+    expect(result.action).toBe('disable');
+    expect(result.actionReason).toBe('5 小时额度达到阈值，建议禁用账号');
+    expect(result.usedPercent).toBe(100);
+    expect(result.isQuota).toBe(true);
+  });
+
+  it('disables an enabled account when the short window is limit-reached below the threshold', async () => {
+    mockRequestCodexUsageRaw.mockResolvedValue(
+      createUsageResult(12, {
+        allowed: false,
+        limit_reached: true,
+        primary_window: {
+          used_percent: 88,
+          limit_window_seconds: 18_000,
+        },
+        secondary_window: {
+          used_percent: 12,
+          limit_window_seconds: 2_592_000,
+        },
+      })
+    );
+
+    const result = await inspectSingleAccount(baseAccount, {
+      ...settings,
+      usedPercentThreshold: 98,
+    });
+
+    expect(result.action).toBe('disable');
+    expect(result.actionReason).toBe('5 小时额度已限额，建议禁用账号');
+    expect(result.usedPercent).toBe(88);
+    expect(result.isQuota).toBe(true);
+  });
+
+  it('enables a disabled account when the short window has quota available', async () => {
+    mockRequestCodexUsageRaw.mockResolvedValue(
+      createUsageResult(12, {
+        primary_window: {
+          used_percent: 84,
+          limit_window_seconds: 18_000,
+        },
+        secondary_window: {
+          used_percent: 12,
+          limit_window_seconds: 2_592_000,
+        },
+      })
+    );
+
+    const result = await inspectSingleAccount(
+      { ...baseAccount, disabled: true },
+      {
+        ...settings,
+        usedPercentThreshold: 98,
+      }
+    );
+
+    expect(result.action).toBe('enable');
+    expect(result.actionReason).toBe('5 小时额度仍可用，建议立即启用账号');
+    expect(result.usedPercent).toBe(84);
     expect(result.isQuota).toBe(false);
   });
 });

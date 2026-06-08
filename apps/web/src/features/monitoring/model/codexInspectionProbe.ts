@@ -186,9 +186,34 @@ const resolveWindowAwareProbeAction = (
     longWindow === weeklyWindow ? '周额度' : longWindow === monthlyWindow ? '月额度' : '长期额度';
   const longWindowOverThreshold = longWindowUsedPercent >= threshold;
   const fiveHourOverThreshold = fiveHourUsedPercent !== null && fiveHourUsedPercent >= threshold;
+  const fiveHourReachedBySignal =
+    Boolean(fiveHourWindow) &&
+    (rateLimit.allowed === false ||
+      rateLimit.limit_reached === true ||
+      rateLimit.limitReached === true);
+  const fiveHourReached = fiveHourOverThreshold || fiveHourReachedBySignal;
 
   if (statusCode === 401) {
     return resolveUnauthorizedProbeAction(bodyText, longWindowUsedPercent);
+  }
+
+  if (fiveHourReached) {
+    const reachedReason =
+      fiveHourReachedBySignal && !fiveHourOverThreshold ? '5 小时额度已限额' : '5 小时额度达到阈值';
+    if (account.disabled) {
+      return {
+        action: 'keep',
+        actionReason: `${reachedReason}，但账号已禁用`,
+        usedPercent: fiveHourUsedPercent,
+        isQuota: true,
+      };
+    }
+    return {
+      action: 'disable',
+      actionReason: `${reachedReason}，建议禁用账号`,
+      usedPercent: fiveHourUsedPercent,
+      isQuota: true,
+    };
   }
 
   if (longWindowOverThreshold) {
@@ -209,20 +234,17 @@ const resolveWindowAwareProbeAction = (
   }
 
   if (account.disabled) {
+    if (fiveHourWindow) {
+      return {
+        action: 'enable',
+        actionReason: '5 小时额度仍可用，建议立即启用账号',
+        usedPercent: fiveHourUsedPercent,
+        isQuota: false,
+      };
+    }
     return {
       action: 'enable',
-      actionReason: fiveHourOverThreshold
-        ? `5 小时额度达到阈值，但${longWindowLabel}仍可用，建议立即启用账号`
-        : `${longWindowLabel}仍可用，建议立即启用账号`,
-      usedPercent: longWindowUsedPercent,
-      isQuota: false,
-    };
-  }
-
-  if (fiveHourOverThreshold) {
-    return {
-      action: 'keep',
-      actionReason: `5 小时额度达到阈值，但${longWindowLabel}仍可用，暂不禁用账号`,
+      actionReason: `${longWindowLabel}仍可用，建议立即启用账号`,
       usedPercent: longWindowUsedPercent,
       isQuota: false,
     };

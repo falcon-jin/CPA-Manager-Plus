@@ -633,6 +633,29 @@ func TestResolveProbeActionUsesMonthlyWindowAsLongQuota(t *testing.T) {
 		}
 	})
 
+	t.Run("disables reached short window below threshold with healthy monthly quota", func(t *testing.T) {
+		rateLimit := &codexRateLimit{
+			LimitReached: true,
+			PrimaryWindow: &codexWindow{
+				UsedPercent:        ptrFloat(88),
+				LimitWindowSeconds: ptrFloat(codexFiveHourWindow),
+			},
+			SecondaryWindow: &codexWindow{
+				UsedPercent:        ptrFloat(12),
+				LimitWindowSeconds: ptrFloat(codexMonthWindow),
+			},
+		}
+		decision := resolveProbeAction(item, http.StatusOK, "", rateLimit, deriveRateLimitUsedPercent(rateLimit), true, 98)
+
+		if decision.Action != "disable" ||
+			decision.ActionReason != "5 小时额度已限额，建议禁用账号" ||
+			decision.UsedPercent == nil ||
+			*decision.UsedPercent != 88 ||
+			!decision.IsQuota {
+			t.Fatalf("decision = %#v, want disable reached short window with healthy monthly quota", decision)
+		}
+	})
+
 	t.Run("keeps disabled exhausted short window until reset", func(t *testing.T) {
 		disabledItem := account{DisplayAccount: "disabled@example.test", Disabled: true}
 		rateLimit := &codexRateLimit{
@@ -656,6 +679,31 @@ func TestResolveProbeActionUsesMonthlyWindowAsLongQuota(t *testing.T) {
 		}
 	})
 
+	t.Run("keeps disabled reached short window until reset", func(t *testing.T) {
+		disabledItem := account{DisplayAccount: "disabled@example.test", Disabled: true}
+		allowed := false
+		rateLimit := &codexRateLimit{
+			Allowed: &allowed,
+			PrimaryWindow: &codexWindow{
+				UsedPercent:        ptrFloat(86),
+				LimitWindowSeconds: ptrFloat(codexFiveHourWindow),
+			},
+			SecondaryWindow: &codexWindow{
+				UsedPercent:        ptrFloat(12),
+				LimitWindowSeconds: ptrFloat(codexMonthWindow),
+			},
+		}
+		decision := resolveProbeAction(disabledItem, http.StatusOK, "", rateLimit, deriveRateLimitUsedPercent(rateLimit), true, 98)
+
+		if decision.Action != "keep" ||
+			decision.ActionReason != "5 小时额度已限额，但账号已禁用" ||
+			decision.UsedPercent == nil ||
+			*decision.UsedPercent != 86 ||
+			!decision.IsQuota {
+			t.Fatalf("decision = %#v, want keep disabled reached short window until reset", decision)
+		}
+	})
+
 	t.Run("enables disabled account after short window reset", func(t *testing.T) {
 		disabledItem := account{DisplayAccount: "disabled@example.test", Disabled: true}
 		rateLimit := &codexRateLimit{
@@ -671,9 +719,9 @@ func TestResolveProbeActionUsesMonthlyWindowAsLongQuota(t *testing.T) {
 		decision := resolveProbeAction(disabledItem, http.StatusOK, "", rateLimit, deriveRateLimitUsedPercent(rateLimit), false, threshold)
 
 		if decision.Action != "enable" ||
-			decision.ActionReason != "月额度仍可用，建议立即启用账号" ||
+			decision.ActionReason != "5 小时额度仍可用，建议立即启用账号" ||
 			decision.UsedPercent == nil ||
-			*decision.UsedPercent != 5 ||
+			*decision.UsedPercent != 10 ||
 			decision.IsQuota {
 			t.Fatalf("decision = %#v, want enable disabled account after short window reset", decision)
 		}
