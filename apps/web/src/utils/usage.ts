@@ -25,7 +25,13 @@ export interface UsageTokens {
   cached_tokens?: number;
   cache_tokens?: number;
   cache_read_tokens?: number;
+  cache_read_input_tokens?: number;
+  cacheReadInputTokens?: number;
   cache_creation_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cacheCreationInputTokens?: number;
+  cache_write_input_tokens?: number;
+  cacheWriteInputTokens?: number;
   total_tokens?: number;
 }
 
@@ -96,6 +102,20 @@ const BACKEND_MASKED_SOURCE_REGEX = /^m:(\*{4}|[^\s/\\]{4}\.\.\.[^\s/\\]{4})$/;
 const keyFingerprintCache = new Map<string, string>();
 const usageDetailsCache = new WeakMap<object, UsageDetail[]>();
 const usageDetailsWithEndpointCache = new WeakMap<object, UsageDetailWithEndpoint[]>();
+const CACHE_READ_TOKEN_KEYS = [
+  'cache_read_tokens',
+  'cacheReadTokens',
+  'cache_read_input_tokens',
+  'cacheReadInputTokens',
+] as const;
+const CACHE_CREATION_TOKEN_KEYS = [
+  'cache_creation_tokens',
+  'cacheCreationTokens',
+  'cache_creation_input_tokens',
+  'cacheCreationInputTokens',
+  'cache_write_input_tokens',
+  'cacheWriteInputTokens',
+] as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -103,6 +123,14 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const toFiniteNumber = (value: unknown): number => {
   const numberValue = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(numberValue) ? numberValue : 0;
+};
+
+const readFirstTokenNumber = (record: Record<string, unknown>, keys: readonly string[]): number => {
+  for (const key of keys) {
+    const value = toFiniteNumber(record[key]);
+    if (value !== 0) return value;
+  }
+  return 0;
 };
 
 const toPositiveNumber = (value: unknown): number | undefined => {
@@ -317,10 +345,8 @@ export function extractTTFTMs(detail: unknown): number | null {
 
 const readTokens = (detail: Record<string, unknown>): UsageTokens => {
   const tokensRaw = isRecord(detail.tokens) ? detail.tokens : {};
-  const cacheReadTokens = toFiniteNumber(tokensRaw.cache_read_tokens ?? tokensRaw.cacheReadTokens);
-  const cacheCreationTokens = toFiniteNumber(
-    tokensRaw.cache_creation_tokens ?? tokensRaw.cacheCreationTokens
-  );
+  const cacheReadTokens = readFirstTokenNumber(tokensRaw, CACHE_READ_TOKEN_KEYS);
+  const cacheCreationTokens = readFirstTokenNumber(tokensRaw, CACHE_CREATION_TOKEN_KEYS);
   const cachedTokens = compatibleCachedTokens(
     tokensRaw.cached_tokens ?? tokensRaw.cachedTokens,
     tokensRaw.cache_tokens ?? tokensRaw.cacheTokens,
@@ -546,6 +572,8 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
 export function extractTotalTokens(detail: unknown): number {
   const record = isRecord(detail) ? detail : null;
   const tokens = record && isRecord(record.tokens) ? record.tokens : {};
+  const cacheReadTokens = Math.max(readFirstTokenNumber(tokens, CACHE_READ_TOKEN_KEYS), 0);
+  const cacheCreationTokens = Math.max(readFirstTokenNumber(tokens, CACHE_CREATION_TOKEN_KEYS), 0);
   const explicitTotal = toFiniteNumber(tokens.total_tokens ?? tokens.totalTokens);
   if (explicitTotal > 0) return explicitTotal;
 
@@ -555,16 +583,8 @@ export function extractTotalTokens(detail: unknown): number {
   const cachedTokens = compatibleCachedTokens(
     tokens.cached_tokens ?? tokens.cachedTokens,
     tokens.cache_tokens ?? tokens.cacheTokens,
-    tokens.cache_read_tokens ?? tokens.cacheReadTokens,
-    tokens.cache_creation_tokens ?? tokens.cacheCreationTokens
-  );
-  const cacheReadTokens = Math.max(
-    toFiniteNumber(tokens.cache_read_tokens ?? tokens.cacheReadTokens),
-    0
-  );
-  const cacheCreationTokens = Math.max(
-    toFiniteNumber(tokens.cache_creation_tokens ?? tokens.cacheCreationTokens),
-    0
+    cacheReadTokens,
+    cacheCreationTokens
   );
 
   return (

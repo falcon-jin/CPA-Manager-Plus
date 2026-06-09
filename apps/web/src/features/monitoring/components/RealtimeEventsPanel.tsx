@@ -78,6 +78,17 @@ const formatReadableText = (value: string | null | undefined) => {
   return trimmed && trimmed !== '-' ? trimmed : '';
 };
 
+const shortLabel = (
+  t: TFunction,
+  shortKey: string,
+  fallbackKey: string,
+  fallbackDefault?: string
+) => {
+  const fallback = t(fallbackKey, fallbackDefault ? { defaultValue: fallbackDefault } : undefined);
+  const label = t(shortKey, { defaultValue: fallback });
+  return label === shortKey ? (fallbackDefault ?? fallback) : label;
+};
+
 const formatShortHash = (value: string | null | undefined) => {
   const trimmed = formatReadableText(value);
   return trimmed ? `#${trimmed.slice(0, 8)}` : '';
@@ -99,7 +110,7 @@ const buildRealtimeApiKeyDisplay = (row: MonitoringEventRow, t: TFunction) => {
     masked && masked !== display ? `${t('monitoring.realtime_api_key_masked')}: ${masked}` : '',
     hash ? `${t('monitoring.realtime_api_key_hash')}: ${hash}` : '',
     formatReadableText(row.executorType)
-      ? `${t('monitoring.executor_type_short')}: ${formatReadableText(row.executorType)}`
+      ? `${shortLabel(t, 'monitoring.executor_type_short', 'monitoring.executor_type')}: ${formatReadableText(row.executorType)}`
       : '',
   ].filter(Boolean);
 
@@ -179,7 +190,9 @@ const buildFailureMetaText = (row: MonitoringEventRow, t: TFunction) => {
   if (!row.failed) return '';
   const parts: string[] = [];
   if (row.failStatusCode) {
-    parts.push(`${t('monitoring.fail_status_code_short')} ${row.failStatusCode}`);
+    parts.push(
+      `${shortLabel(t, 'monitoring.fail_status_code_short', 'monitoring.fail_status_code')} ${row.failStatusCode}`
+    );
   }
   const body = maskSensitiveText(row.failSummary || '');
   if (body) {
@@ -193,7 +206,7 @@ const buildFailureDetails = (row: MonitoringEventRow, t: TFunction) => {
   const summary = maskSensitiveText(row.failSummary || '');
   if (!row.failStatusCode && !summary) return null;
   const statusText = row.failStatusCode
-    ? `${t('monitoring.fail_status_code_short')} ${row.failStatusCode}`
+    ? `${shortLabel(t, 'monitoring.fail_status_code_short', 'monitoring.fail_status_code')} ${row.failStatusCode}`
     : '';
   return {
     statusCode: row.failStatusCode,
@@ -202,6 +215,25 @@ const buildFailureDetails = (row: MonitoringEventRow, t: TFunction) => {
     label: buildFailureMetaText(row, t),
     copyText: [statusText, summary].filter(Boolean).join('\n'),
   };
+};
+
+const buildRealtimeTokenSummary = (row: MonitoringEventRow, t: TFunction) => {
+  const parts = [
+    `I ${formatCompactNumber(row.inputTokens)}`,
+    `O ${formatCompactNumber(row.outputTokens)}`,
+    `C ${formatCompactNumber(row.cachedTokens)}`,
+  ];
+  if (row.cacheCreationTokens > 0) {
+    parts.push(
+      `${shortLabel(t, 'monitoring.cache_creation_tokens_short', 'monitoring.cache_creation_tokens', 'Create')} ${formatCompactNumber(row.cacheCreationTokens)}`
+    );
+  }
+  if (row.cacheReadTokens > 0) {
+    parts.push(
+      `${shortLabel(t, 'monitoring.cache_read_tokens_short', 'monitoring.cache_read_tokens', 'Read')} ${formatCompactNumber(row.cacheReadTokens)}`
+    );
+  }
+  return parts.join(' · ');
 };
 
 export function RealtimeEventsPanelActions({
@@ -216,6 +248,17 @@ export function RealtimeEventsPanelActions({
   const nextAccountDisplayMode: AccountDisplayMode =
     accountDisplayMode === 'masked' ? 'full' : 'masked';
   const AccountDisplayIcon = accountDisplayMode === 'masked' ? IconEyeOff : IconEye;
+  const logRowsLabel = shortLabel(t, 'monitoring.log_rows_short', 'monitoring.log_rows');
+  const recentFailuresLabel = shortLabel(
+    t,
+    'monitoring.recent_failures_short',
+    'monitoring.recent_failures'
+  );
+  const failedOnlyLabel = shortLabel(
+    t,
+    'monitoring.filter_status_failed_short',
+    'monitoring.filter_status_failed'
+  );
   const accountDisplayHint = t(
     accountDisplayMode === 'masked'
       ? 'monitoring.account_overview_show_full_accounts_hint'
@@ -224,8 +267,10 @@ export function RealtimeEventsPanelActions({
 
   return (
     <div className={`${styles.inlineMetrics} ${styles.realtimeHeaderActions}`}>
-      <span>{`${t('monitoring.log_rows')}: ${rowCount}`}</span>
-      <span>{`${t('monitoring.recent_failures')}: ${scopedFailureCount}`}</span>
+      <span title={t('monitoring.log_rows')}>{`${logRowsLabel}: ${rowCount}`}</span>
+      <span title={t('monitoring.recent_failures')}>
+        {`${recentFailuresLabel}: ${scopedFailureCount}`}
+      </span>
       <button
         type="button"
         className={[
@@ -253,9 +298,10 @@ export function RealtimeEventsPanelActions({
           .filter(Boolean)
           .join(' ')}
         onClick={onToggleFailedOnly}
+        title={t('monitoring.filter_status_failed')}
       >
         <IconFilter size={14} aria-hidden="true" />
-        {t('monitoring.filter_status_failed')}
+        {failedOnlyLabel}
       </button>
     </div>
   );
@@ -286,6 +332,43 @@ export function RealtimeEventsPanel({
 }: RealtimeEventsPanelProps) {
   const tooltipIdPrefix = useId();
   const showNotification = useNotificationStore((state) => state.showNotification);
+  const sourceApiKeyLabel = shortLabel(
+    t,
+    'monitoring.column_source_api_key_short',
+    'monitoring.column_source_api_key'
+  );
+  const reasoningEffortLabel = shortLabel(
+    t,
+    'monitoring.reasoning_effort_short',
+    'monitoring.reasoning_effort'
+  );
+  const recentStatusLabel = shortLabel(
+    t,
+    'monitoring.recent_status_short',
+    'monitoring.recent_status'
+  );
+  const requestStatusLabel = shortLabel(
+    t,
+    'monitoring.request_status_short',
+    'monitoring.request_status'
+  );
+  const successRateLabel = shortLabel(
+    t,
+    'monitoring.column_success_rate_short',
+    'monitoring.column_success_rate'
+  );
+  const totalCallsLabel = shortLabel(
+    t,
+    'monitoring.total_calls_short',
+    'monitoring.total_calls',
+    'Calls'
+  );
+  const usageLabel = shortLabel(
+    t,
+    'monitoring.this_call_usage_short',
+    'monitoring.this_call_usage'
+  );
+  const costLabel = shortLabel(t, 'monitoring.this_call_cost_short', 'monitoring.this_call_cost');
   const handleCopyFailureDetails = async (text: string) => {
     const copied = await copyToClipboard(text);
     showNotification(
@@ -324,19 +407,17 @@ export function RealtimeEventsPanel({
           </colgroup>
           <thead>
             <tr>
-              <th>{t('monitoring.column_source_api_key')}</th>
+              <th>{sourceApiKeyLabel}</th>
               <th>{t('monitoring.column_model')}</th>
-              <th>{t('monitoring.reasoning_effort')}</th>
-              <th>{t('monitoring.recent_status')}</th>
-              <th>{t('monitoring.request_status')}</th>
-              <th>{t('monitoring.column_success_rate')}</th>
-              <th>{t('monitoring.total_calls')}</th>
+              <th>{reasoningEffortLabel}</th>
+              <th>{recentStatusLabel}</th>
+              <th>{requestStatusLabel}</th>
+              <th>{successRateLabel}</th>
+              <th>{totalCallsLabel}</th>
               <th className={styles.realtimeTpsColumn}>{t('monitoring.column_output_tps')}</th>
               <th className={styles.realtimeLatencyColumn}>
                 <span className={styles.realtimeLatencyHeader}>
-                  <span className={styles.realtimeMetricLeft}>
-                    {t('monitoring.ttft_short')}
-                  </span>
+                  <span className={styles.realtimeMetricLeft}>{t('monitoring.ttft_short')}</span>
                   <span className={styles.realtimeMetricSeparator}>｜</span>
                   <span className={styles.realtimeMetricRight}>
                     {t('monitoring.elapsed_short')}
@@ -344,8 +425,8 @@ export function RealtimeEventsPanel({
                 </span>
               </th>
               <th>{t('monitoring.column_time')}</th>
-              <th>{t('monitoring.this_call_usage')}</th>
-              <th>{t('monitoring.this_call_cost')}</th>
+              <th>{usageLabel}</th>
+              <th>{costLabel}</th>
             </tr>
           </thead>
           <tbody>
@@ -397,7 +478,7 @@ export function RealtimeEventsPanel({
                         <span className={styles.mutedCell}>-</span>
                       )}
                       {serviceTier !== '-' ? (
-                        <small>{`${t('monitoring.service_tier_short')}: ${serviceTier}`}</small>
+                        <small>{`${shortLabel(t, 'monitoring.service_tier_short', 'monitoring.service_tier')}: ${serviceTier}`}</small>
                       ) : null}
                     </div>
                   </td>
@@ -521,7 +602,7 @@ export function RealtimeEventsPanel({
                   <td>
                     <div className={styles.primaryCell}>
                       <span>{formatCompactNumber(row.totalTokens)}</span>
-                      <small>{`I ${formatCompactNumber(row.inputTokens)} · O ${formatCompactNumber(row.outputTokens)} · C ${formatCompactNumber(row.cachedTokens)}`}</small>
+                      <small>{buildRealtimeTokenSummary(row, t)}</small>
                     </div>
                   </td>
                   <td>{hasPrices ? formatUsd(row.totalCost) : '--'}</td>

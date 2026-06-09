@@ -28,6 +28,27 @@ type AnalyticsFilter struct {
 	ExcludeZeroTokens bool
 }
 
+var analyticsSearchTextColumns = []string{
+	"model",
+	"resolved_model",
+	"endpoint",
+	"method",
+	"path",
+	"source",
+	"source_hash",
+	"api_key_hash",
+	"auth_index",
+	"account_snapshot",
+	"auth_label_snapshot",
+	"auth_file_snapshot",
+	"auth_provider_snapshot",
+	"auth_project_id_snapshot",
+	"reasoning_effort",
+	"service_tier",
+	"executor_type",
+	"fail_summary",
+}
+
 type TimelinePoint struct {
 	BucketMS int64
 	Calls    int64
@@ -898,13 +919,16 @@ func analyticsWhere(filter AnalyticsFilter) (string, []any) {
 	hash := strings.TrimSpace(strings.ToLower(filter.SearchAPIKeyHash))
 	if query != "" {
 		like := "%" + query + "%"
-		if hash != "" {
-			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ? or lower(coalesce(reasoning_effort, '')) like ? or lower(coalesce(service_tier, '')) like ? or lower(coalesce(executor_type, '')) like ? or lower(coalesce(fail_summary, '')) like ? or lower(coalesce(api_key_hash, '')) = ?)`)
-			args = append(args, like, like, like, like, like, like, like, like, like, like, like, hash)
-		} else {
-			conditions = append(conditions, `(lower(coalesce(model, '')) like ? or lower(coalesce(resolved_model, '')) like ? or lower(coalesce(endpoint, '')) like ? or lower(coalesce(source, '')) like ? or lower(coalesce(source_hash, '')) like ? or lower(coalesce(api_key_hash, '')) like ? or lower(coalesce(auth_project_id_snapshot, '')) like ? or lower(coalesce(reasoning_effort, '')) like ? or lower(coalesce(service_tier, '')) like ? or lower(coalesce(executor_type, '')) like ? or lower(coalesce(fail_summary, '')) like ?)`)
-			args = append(args, like, like, like, like, like, like, like, like, like, like, like)
+		searchConditions := make([]string, 0, len(analyticsSearchTextColumns)+1)
+		for _, column := range analyticsSearchTextColumns {
+			searchConditions = append(searchConditions, fmt.Sprintf("lower(coalesce(%s, '')) like ?", column))
+			args = append(args, like)
 		}
+		if hash != "" {
+			searchConditions = append(searchConditions, "lower(coalesce(api_key_hash, '')) = ?")
+			args = append(args, hash)
+		}
+		conditions = append(conditions, "("+strings.Join(searchConditions, " or ")+")")
 	} else if hash != "" {
 		conditions = append(conditions, "lower(coalesce(api_key_hash, '')) = ?")
 		args = append(args, hash)

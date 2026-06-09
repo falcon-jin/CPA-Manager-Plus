@@ -1860,7 +1860,6 @@
     grid-template-columns: 1fr;
   }
 
-  .accountEnabledControl,
   .accountMetaRow .inlineActionButton {
     justify-self: start;
     margin-left: 0;
@@ -1892,11 +1891,6 @@
     justify-items: start;
   }
 
-  .accountOverviewToggleRow {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
   .monitoringStatusBar {
     width: 100%;
     align-items: center;
@@ -1908,7 +1902,6 @@
     flex: 1 1 auto;
   }
 
-  .accountOverviewToggleActions,
   .accountMetaRow {
     width: 100%;
   }

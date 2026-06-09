@@ -11,6 +11,7 @@ type StatusError = { status?: number };
 type AuthFileStatusResponse = { status: string; disabled: boolean };
 type AuthFilePatchPayload = { name: string; disabled?: boolean; [key: string]: unknown };
 type AuthFileEntry = AuthFilesResponse['files'][number];
+type AuthFileJsonValue = Record<string, unknown> | Record<string, unknown>[];
 export type AuthFileFieldsPatch = {
   prefix?: string;
   proxy_url?: string;
@@ -182,6 +183,20 @@ const readTextField = (entry: AuthFileEntry, key: string): string => {
   return typeof value === 'string' ? value.trim() : '';
 };
 
+const readAuthIndexField = (entry: AuthFileEntry): string => {
+  const value = entry.authIndex ?? entry['auth_index'] ?? entry['auth-index'];
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'string') return value.trim();
+  return '';
+};
+
+const getAuthFileDedupeKey = (entry: AuthFileEntry): string => {
+  const name = readTextField(entry, 'name');
+  const authIndex = readAuthIndexField(entry);
+  if (name && authIndex) return `${name}\u0000${authIndex}`;
+  return name || JSON.stringify(entry);
+};
+
 const readDateField = (entry: AuthFileEntry): number => {
   const candidates = [entry['modtime'], entry.modified, entry['updated_at'], entry['last_refresh']];
 
@@ -269,8 +284,7 @@ const dedupeAuthFilesResponse = (payload: AuthFilesResponse): AuthFilesResponse 
   const grouped = new Map<string, AuthFileEntry[]>();
 
   files.forEach((entry) => {
-    const name = readTextField(entry, 'name');
-    const key = name || JSON.stringify(entry);
+    const key = getAuthFileDedupeKey(entry);
     const bucket = grouped.get(key);
     if (bucket) {
       bucket.push(entry);
@@ -280,11 +294,21 @@ const dedupeAuthFilesResponse = (payload: AuthFilesResponse): AuthFilesResponse 
   });
 
   const normalizedFiles = Array.from(grouped.values()).map(mergeAuthFileEntries);
-  normalizedFiles.sort((left, right) =>
-    readTextField(left, 'name').localeCompare(readTextField(right, 'name'), undefined, {
+  normalizedFiles.sort((left, right) => {
+    const nameDiff = readTextField(left, 'name').localeCompare(
+      readTextField(right, 'name'),
+      undefined,
+      {
+        sensitivity: 'accent',
+      }
+    );
+    if (nameDiff !== 0) return nameDiff;
+
+    return readAuthIndexField(left).localeCompare(readAuthIndexField(right), undefined, {
+      numeric: true,
       sensitivity: 'accent',
-    })
-  );
+    });
+  });
 
   return {
     ...payload,
@@ -579,7 +603,7 @@ export const authFilesApi = {
 
   saveText: (name: string, text: string) => saveAuthFileText(name, text),
 
-  saveJsonObject: (name: string, json: Record<string, unknown>) =>
+  saveJsonObject: (name: string, json: AuthFileJsonValue) =>
     saveAuthFileText(name, JSON.stringify(json)),
 
   // OAuth 排除模型

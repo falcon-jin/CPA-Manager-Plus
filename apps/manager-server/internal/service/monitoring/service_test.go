@@ -518,6 +518,45 @@ func TestAnalyticsSearchMatchesResolvedModelAndProjectID(t *testing.T) {
 	}
 }
 
+func TestAnalyticsSearchMatchesAccountSnapshotsWhenSourceIsMasked(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_060_000_000)
+	toMS := fromMS + 60*60*1000
+
+	alice := monitoringEvent("search-account-alice", fromMS+1_000, "gpt-a", "auth-a", "source-a", false, 1, 1, 0, 0, 2, nil)
+	alice.Source = "ali***@example.com"
+	alice.AccountSnapshot = "alice.smith@example.com"
+	alice.AuthLabelSnapshot = "Alice Work Account"
+	alice.AuthFileSnapshot = "alice.json"
+	bob := monitoringEvent("search-account-bob", fromMS+2_000, "gpt-b", "auth-b", "source-b", false, 1, 1, 0, 0, 2, nil)
+	bob.Source = "ali***@example.com"
+	bob.AccountSnapshot = "alina.team@example.com"
+	bob.AuthLabelSnapshot = "Alina Work Account"
+	bob.AuthFileSnapshot = "alina.json"
+	if _, err := db.InsertEvents(ctx, []usage.Event{alice, bob}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	for _, query := range []string{"ALICE.SMITH@example.com", "Alice Work Account", "alice.json"} {
+		resp, err := New(db).Analytics(ctx, Request{
+			FromMS:      fromMS,
+			ToMS:        toMS,
+			SearchQuery: query,
+			Include:     Include{Summary: true, EventsPage: &EventsPage{Limit: 10}},
+		})
+		if err != nil {
+			t.Fatalf("analytics search %q: %v", query, err)
+		}
+		if resp.Summary == nil || resp.Summary.TotalCalls != 1 {
+			t.Fatalf("search %q summary = %#v", query, resp.Summary)
+		}
+		if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "search-account-alice" {
+			t.Fatalf("search %q events = %#v", query, resp.Events)
+		}
+	}
+}
+
 func TestAnalyticsReportsZeroTokenModels(t *testing.T) {
 	db := newMonitoringTestStore(t)
 	ctx := context.Background()

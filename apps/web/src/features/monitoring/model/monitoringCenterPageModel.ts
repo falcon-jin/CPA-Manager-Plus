@@ -80,6 +80,7 @@ export type RealtimeLogRow = MonitoringEventRow & {
 export type AccountOverviewColumn = {
   key: string;
   label: string;
+  fullLabel?: string;
   sortKey?: AccountSortKey;
 };
 
@@ -145,6 +146,17 @@ const buildSortedValueOptions = (values: string[]): MonitoringOption[] =>
     .sort((left, right) => left.localeCompare(right))
     .map((value) => ({ value, label: value }));
 
+const shortLabel = (
+  t: TFunction,
+  shortKey: string,
+  fallbackKey: string,
+  options?: Record<string, unknown>
+) => {
+  const fallback = t(fallbackKey, options);
+  const label = t(shortKey, { ...(options ?? {}), defaultValue: fallback });
+  return label === shortKey ? fallback : label;
+};
+
 export const buildProviderOptions = (
   rows: MonitoringEventRow[],
   selectedProvider: string,
@@ -163,7 +175,14 @@ export const buildProviderOptionsFromValues = (
 ) =>
   ensureSelectedOption(
     [
-      { value: 'all', label: t('monitoring.filter_all_providers') },
+      {
+        value: 'all',
+        label: shortLabel(
+          t,
+          'monitoring.filter_all_providers_short',
+          'monitoring.filter_all_providers'
+        ),
+      },
       ...buildSortedValueOptions(providers),
     ],
     selectedProvider
@@ -177,7 +196,14 @@ export const buildAccountOptions = (
 ) =>
   ensureSelectedOption(
     [
-      { value: 'all', label: t('monitoring.filter_all_accounts') },
+      {
+        value: 'all',
+        label: shortLabel(
+          t,
+          'monitoring.filter_all_accounts_short',
+          'monitoring.filter_all_accounts'
+        ),
+      },
       ...Array.from(
         new Map(
           rows.map((row) => [
@@ -210,7 +236,10 @@ export const buildModelOptionsFromValues = (
 ) =>
   ensureSelectedOption(
     [
-      { value: 'all', label: t('monitoring.filter_all_models') },
+      {
+        value: 'all',
+        label: shortLabel(t, 'monitoring.filter_all_models_short', 'monitoring.filter_all_models'),
+      },
       ...buildSortedValueOptions(models),
     ],
     selectedModel
@@ -234,7 +263,14 @@ export const buildChannelOptionsFromValues = (
 ) =>
   ensureSelectedOption(
     [
-      { value: 'all', label: t('monitoring.filter_all_channels') },
+      {
+        value: 'all',
+        label: shortLabel(
+          t,
+          'monitoring.filter_all_channels_short',
+          'monitoring.filter_all_channels'
+        ),
+      },
       ...buildSortedValueOptions(channels),
     ],
     selectedChannel
@@ -247,7 +283,14 @@ const buildApiKeyOptionsFromMap = (
 ) =>
   ensureSelectedOption(
     [
-      { value: 'all', label: t('monitoring.filter_all_api_keys') },
+      {
+        value: 'all',
+        label: shortLabel(
+          t,
+          'monitoring.filter_all_api_keys_short',
+          'monitoring.filter_all_api_keys'
+        ),
+      },
       ...Array.from(optionMap.entries())
         .sort((left, right) => left[1].localeCompare(right[1]))
         .map(([value, label]) => ({ value, label })),
@@ -285,9 +328,26 @@ export const buildApiKeyOptionsFromRows = (
 };
 
 export const buildStatusOptions = (t: TFunction): MonitoringOption[] => [
-  { value: 'all', label: t('monitoring.filter_all_statuses') },
-  { value: 'success', label: t('monitoring.filter_status_success') },
-  { value: 'failed', label: t('monitoring.filter_status_failed') },
+  {
+    value: 'all',
+    label: shortLabel(t, 'monitoring.filter_all_statuses_short', 'monitoring.filter_all_statuses'),
+  },
+  {
+    value: 'success',
+    label: shortLabel(
+      t,
+      'monitoring.filter_status_success_short',
+      'monitoring.filter_status_success'
+    ),
+  },
+  {
+    value: 'failed',
+    label: shortLabel(
+      t,
+      'monitoring.filter_status_failed_short',
+      'monitoring.filter_status_failed'
+    ),
+  },
 ];
 
 export const buildSyncPriceModels = (
@@ -320,42 +380,109 @@ export const buildAuthFilesByAuthIndex = (authFiles: AuthFileItem[]) => {
 };
 
 export const buildAccountOverviewColumns = (t: TFunction): AccountOverviewColumn[] => [
-  { key: 'account', label: t('monitoring.account_overview_col_account') },
+  {
+    key: 'account',
+    label: shortLabel(
+      t,
+      'monitoring.account_overview_col_account_short',
+      'monitoring.account_overview_col_account'
+    ),
+    fullLabel: t('monitoring.account_overview_col_account'),
+  },
   { key: 'status', label: t('monitoring.column_status') },
-  { key: 'total-calls', label: t('monitoring.total_calls'), sortKey: 'totalCalls' },
+  {
+    key: 'total-calls',
+    label: shortLabel(t, 'monitoring.total_calls_short', 'monitoring.total_calls'),
+    fullLabel: t('monitoring.total_calls'),
+    sortKey: 'totalCalls',
+  },
   {
     key: 'success-calls',
-    label: t('monitoring.account_overview_col_success'),
+    label: shortLabel(t, 'monitoring.success_calls_short', 'monitoring.success_calls'),
+    fullLabel: t('monitoring.success_calls'),
     sortKey: 'successCalls',
   },
   {
     key: 'failure-calls',
-    label: t('monitoring.account_overview_col_failure'),
+    label: shortLabel(t, 'monitoring.failure_calls_short', 'monitoring.failure_calls'),
+    fullLabel: t('monitoring.failure_calls'),
     sortKey: 'failureCalls',
   },
-  { key: 'success-rate', label: t('monitoring.column_success_rate'), sortKey: 'successRate' },
-  { key: 'total-tokens', label: t('monitoring.total_tokens'), sortKey: 'totalTokens' },
+  {
+    key: 'success-rate',
+    label: shortLabel(t, 'monitoring.column_success_rate_short', 'monitoring.column_success_rate'),
+    fullLabel: t('monitoring.column_success_rate'),
+    sortKey: 'successRate',
+  },
+  {
+    key: 'total-tokens',
+    label: shortLabel(t, 'monitoring.total_tokens_short', 'monitoring.total_tokens'),
+    fullLabel: t('monitoring.total_tokens'),
+    sortKey: 'totalTokens',
+  },
   {
     key: 'estimated-cost',
-    label: t('monitoring.account_overview_col_cost'),
+    label: shortLabel(
+      t,
+      'monitoring.account_overview_col_cost_short',
+      'monitoring.account_overview_col_cost'
+    ),
+    fullLabel: t('monitoring.account_overview_col_cost'),
     sortKey: 'totalCost',
   },
   {
     key: 'latest-request-time',
-    label: t('monitoring.latest_request_time'),
+    label: shortLabel(t, 'monitoring.latest_request_time_short', 'monitoring.latest_request_time'),
+    fullLabel: t('monitoring.latest_request_time'),
     sortKey: 'lastSeenAt',
   },
   { key: 'action', label: t('common.action') },
 ];
 
 export const buildApiKeyOverviewColumns = (t: TFunction): AccountOverviewColumn[] => [
-  { key: 'api-key', label: t('monitoring.api_key_summary_col_key') },
-  { key: 'total-calls', label: t('monitoring.total_calls') },
-  { key: 'success-calls', label: t('monitoring.account_overview_col_success') },
-  { key: 'failure-calls', label: t('monitoring.account_overview_col_failure') },
-  { key: 'total-tokens', label: t('monitoring.total_tokens') },
-  { key: 'estimated-cost', label: t('monitoring.account_overview_col_cost') },
-  { key: 'latest-request-time', label: t('monitoring.latest_request_time') },
+  {
+    key: 'api-key',
+    label: shortLabel(
+      t,
+      'monitoring.api_key_summary_col_key_short',
+      'monitoring.api_key_summary_col_key'
+    ),
+    fullLabel: t('monitoring.api_key_summary_col_key'),
+  },
+  {
+    key: 'total-calls',
+    label: shortLabel(t, 'monitoring.total_calls_short', 'monitoring.total_calls'),
+    fullLabel: t('monitoring.total_calls'),
+  },
+  {
+    key: 'success-calls',
+    label: shortLabel(t, 'monitoring.success_calls_short', 'monitoring.success_calls'),
+    fullLabel: t('monitoring.success_calls'),
+  },
+  {
+    key: 'failure-calls',
+    label: shortLabel(t, 'monitoring.failure_calls_short', 'monitoring.failure_calls'),
+    fullLabel: t('monitoring.failure_calls'),
+  },
+  {
+    key: 'total-tokens',
+    label: shortLabel(t, 'monitoring.total_tokens_short', 'monitoring.total_tokens'),
+    fullLabel: t('monitoring.total_tokens'),
+  },
+  {
+    key: 'estimated-cost',
+    label: shortLabel(
+      t,
+      'monitoring.account_overview_col_cost_short',
+      'monitoring.account_overview_col_cost'
+    ),
+    fullLabel: t('monitoring.account_overview_col_cost'),
+  },
+  {
+    key: 'latest-request-time',
+    label: shortLabel(t, 'monitoring.latest_request_time_short', 'monitoring.latest_request_time'),
+    fullLabel: t('monitoring.latest_request_time'),
+  },
 ];
 
 export const buildAccountSortOptions = (
@@ -389,7 +516,8 @@ export const buildPrimarySummaryCards = ({
   t: TFunction;
 }): SummaryCardProps[] => [
   {
-    label: t('monitoring.total_calls'),
+    label: shortLabel(t, 'monitoring.total_calls_short', 'monitoring.total_calls'),
+    fullLabel: t('monitoring.total_calls'),
     value: formatCompactNumber(summary.totalCalls),
     valueTitle: formatFullNumber(summary.totalCalls, locale),
     meta: `${accountCount} ${t('monitoring.accounts_suffix')}`,
@@ -397,7 +525,8 @@ export const buildPrimarySummaryCards = ({
     accent: 'blue',
   },
   {
-    label: t('monitoring.call_success_rate'),
+    label: shortLabel(t, 'monitoring.call_success_rate_short', 'monitoring.call_success_rate'),
+    fullLabel: t('monitoring.call_success_rate'),
     value: formatPercent(summary.successRate),
     meta: formatDurationMs(summary.averageLatencyMs, { locale }),
     tone: summary.successRate >= 0.95 ? 'good' : summary.successRate >= 0.85 ? 'warn' : 'bad',
@@ -405,7 +534,8 @@ export const buildPrimarySummaryCards = ({
     accent: 'green',
   },
   {
-    label: t('monitoring.failure_calls'),
+    label: shortLabel(t, 'monitoring.failure_calls_short', 'monitoring.failure_calls'),
+    fullLabel: t('monitoring.failure_calls'),
     value: formatCompactNumber(summary.failureCalls),
     valueTitle: formatFullNumber(summary.failureCalls, locale),
     meta: `${failedGroupCount} ${t('monitoring.groups_suffix')}`,
@@ -414,7 +544,8 @@ export const buildPrimarySummaryCards = ({
     accent: 'red',
   },
   {
-    label: t('monitoring.estimated_cost'),
+    label: shortLabel(t, 'monitoring.estimated_cost_short', 'monitoring.estimated_cost'),
+    fullLabel: t('monitoring.estimated_cost'),
     value: hasPrices ? formatUsd(summary.totalCost) : '--',
     valueTitle: hasPrices ? formatUsd(summary.totalCost) : undefined,
     meta: hasPrices ? t('monitoring.estimated_cost_hint') : t('monitoring.estimated_cost_missing'),
@@ -429,20 +560,39 @@ export const buildSecondarySummaryCards = (
   locale: string,
   t: TFunction
 ): SummaryCardProps[] => {
+  const totalCacheTokens =
+    summary.cachedTokens + summary.cacheCreationTokens + summary.cacheReadTokens;
+  const hasFineGrainedCache = summary.cacheCreationTokens > 0 || summary.cacheReadTokens > 0;
+  const tokenMixTotal =
+    summary.inputTokens + summary.outputTokens + summary.reasoningTokens + totalCacheTokens;
   const cachedTokenMetaParts = [
-    `${t('monitoring.of_input_tokens')} ${formatPercent(summary.inputTokens > 0 ? summary.cachedTokens / summary.inputTokens : 0)}`,
+    hasFineGrainedCache
+      ? `${t('monitoring.of_token_mix')} ${formatPercent(tokenMixTotal > 0 ? totalCacheTokens / tokenMixTotal : 0)}`
+      : `${t('monitoring.of_input_tokens')} ${formatPercent(summary.inputTokens > 0 ? totalCacheTokens / summary.inputTokens : 0)}`,
   ];
 
-  if (summary.cacheCreationTokens > 0 || summary.cacheReadTokens > 0) {
-    cachedTokenMetaParts.push(
-      `${t('monitoring.cache_creation_tokens_short')} ${formatCompactNumber(summary.cacheCreationTokens)}`,
-      `${t('monitoring.cache_read_tokens_short')} ${formatCompactNumber(summary.cacheReadTokens)}`
-    );
+  if (hasFineGrainedCache) {
+    if (summary.cachedTokens > 0) {
+      cachedTokenMetaParts.push(
+        `${shortLabel(t, 'monitoring.cached_tokens_short', 'monitoring.cached_tokens')} ${formatCompactNumber(summary.cachedTokens)}`
+      );
+    }
+    if (summary.cacheCreationTokens > 0) {
+      cachedTokenMetaParts.push(
+        `${t('monitoring.cache_creation_tokens_short')} ${formatCompactNumber(summary.cacheCreationTokens)}`
+      );
+    }
+    if (summary.cacheReadTokens > 0) {
+      cachedTokenMetaParts.push(
+        `${t('monitoring.cache_read_tokens_short')} ${formatCompactNumber(summary.cacheReadTokens)}`
+      );
+    }
   }
 
   return [
     {
-      label: t('monitoring.total_tokens'),
+      label: shortLabel(t, 'monitoring.total_tokens_short', 'monitoring.total_tokens'),
+      fullLabel: t('monitoring.total_tokens'),
       value: formatCompactNumber(summary.totalTokens),
       valueTitle: formatFullNumber(summary.totalTokens, locale),
       meta: `${t('monitoring.reasoning_tokens')} ${formatCompactNumber(summary.reasoningTokens)}`,
@@ -451,7 +601,8 @@ export const buildSecondarySummaryCards = (
       accent: 'indigo',
     },
     {
-      label: t('monitoring.input_tokens'),
+      label: shortLabel(t, 'monitoring.input_tokens_short', 'monitoring.input_tokens'),
+      fullLabel: t('monitoring.input_tokens'),
       value: formatCompactNumber(summary.inputTokens),
       valueTitle: formatFullNumber(summary.inputTokens, locale),
       meta: `${t('monitoring.of_token_mix')} ${formatPercent(summary.totalTokens > 0 ? summary.inputTokens / summary.totalTokens : 0)}`,
@@ -460,7 +611,8 @@ export const buildSecondarySummaryCards = (
       accent: 'cyan',
     },
     {
-      label: t('monitoring.output_tokens'),
+      label: shortLabel(t, 'monitoring.output_tokens_short', 'monitoring.output_tokens'),
+      fullLabel: t('monitoring.output_tokens'),
       value: formatCompactNumber(summary.outputTokens),
       valueTitle: formatFullNumber(summary.outputTokens, locale),
       meta: `${t('monitoring.of_token_mix')} ${formatPercent(summary.totalTokens > 0 ? summary.outputTokens / summary.totalTokens : 0)}`,
@@ -469,9 +621,10 @@ export const buildSecondarySummaryCards = (
       accent: 'violet',
     },
     {
-      label: t('monitoring.cached_tokens'),
-      value: formatCompactNumber(summary.cachedTokens),
-      valueTitle: formatFullNumber(summary.cachedTokens, locale),
+      label: shortLabel(t, 'monitoring.cached_tokens_short', 'monitoring.cached_tokens'),
+      fullLabel: t('monitoring.cached_tokens'),
+      value: formatCompactNumber(totalCacheTokens),
+      valueTitle: formatFullNumber(totalCacheTokens, locale),
       meta: cachedTokenMetaParts.join(' · '),
       variant: 'secondary',
       icon: 'cache',

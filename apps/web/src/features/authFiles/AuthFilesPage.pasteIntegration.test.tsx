@@ -6,8 +6,9 @@ import { Select } from '@/components/ui/Select';
 import { AuthFilesPage } from './AuthFilesPage';
 
 const { mocks } = vi.hoisted(() => {
-  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
-    true;
+  (
+    globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+  ).IS_REACT_ACT_ENVIRONMENT = true;
   return {
     mocks: {
       connectionStatus: 'connected' as 'connected' | 'disconnected',
@@ -31,20 +32,18 @@ const { mocks } = vi.hoisted(() => {
       closePrefixProxyEditor: vi.fn(),
       handlePrefixProxyChange: vi.fn(),
       handlePrefixProxySave: vi.fn(async () => undefined),
-      lastCodexInspectionLastRun: null as
-        | {
-            result: {
-              results: Array<{
-                fileName: string;
-                authIndex?: string | number | null;
-                statusCode?: number | null;
-                action?: string | null;
-                usedPercent?: number | null;
-                isQuota?: boolean | null;
-              }>;
-            };
-          }
-        | null,
+      lastCodexInspectionLastRun: null as {
+        result: {
+          results: Array<{
+            fileName: string;
+            authIndex?: string | number | null;
+            statusCode?: number | null;
+            action?: string | null;
+            usedPercent?: number | null;
+            isQuota?: boolean | null;
+          }>;
+        };
+      } | null,
       t: (key: string, options?: Record<string, unknown>) => {
         if (options && typeof options.name === 'string') {
           return `${key}:${options.name}`;
@@ -94,14 +93,25 @@ vi.mock('@/services/api', () => ({
 }));
 
 vi.mock('@/stores', () => ({
-  useNotificationStore: (selector?: (state: { showNotification: typeof mocks.showNotification; showConfirmation: typeof mocks.showConfirmation }) => unknown) => {
+  useNotificationStore: (
+    selector?: (state: {
+      showNotification: typeof mocks.showNotification;
+      showConfirmation: typeof mocks.showConfirmation;
+    }) => unknown
+  ) => {
     const state = {
       showNotification: mocks.showNotification,
       showConfirmation: mocks.showConfirmation,
     };
     return selector ? selector(state) : state;
   },
-  useAuthStore: (selector: (state: { connectionStatus: 'connected' | 'disconnected'; apiBase: string; managementKey: string }) => unknown) =>
+  useAuthStore: (
+    selector: (state: {
+      connectionStatus: 'connected' | 'disconnected';
+      apiBase: string;
+      managementKey: string;
+    }) => unknown
+  ) =>
     selector({
       connectionStatus: mocks.connectionStatus,
       apiBase: 'http://manager.local:18317',
@@ -299,8 +309,12 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
     });
 
     await vi.waitFor(() => {
-      expect(renderer!.root.findAllByProps({ 'data-auth-card': 'shared-codex.json::0' })).toHaveLength(1);
-      expect(renderer!.root.findAllByProps({ 'data-auth-card': 'shared-codex.json::1' })).toHaveLength(1);
+      expect(
+        renderer!.root.findAllByProps({ 'data-auth-card': 'shared-codex.json::0' })
+      ).toHaveLength(1);
+      expect(
+        renderer!.root.findAllByProps({ 'data-auth-card': 'shared-codex.json::1' })
+      ).toHaveLength(1);
     });
 
     expect(
@@ -416,6 +430,78 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
         'success'
       );
       expect(renderer!.root.findAllByProps({ id: 'auth-json-paste-content' })).toHaveLength(0);
+    });
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+  });
+
+  it('submits sub2api paste through modal and uploads converted codex array', async () => {
+    const sub2apiInput = JSON.stringify({
+      exported_at: '2026-06-01T12:00:00.000Z',
+      proxies: [],
+      accounts: [
+        {
+          name: 'First OpenAI',
+          platform: 'openai',
+          type: 'oauth',
+          credentials: {
+            access_token: 'first-access-token',
+            email: 'first@example.com',
+          },
+        },
+        {
+          name: 'Second OpenAI',
+          platform: 'openai',
+          type: 'oauth',
+          credentials: {
+            access_token: 'second-access-token',
+            email: 'second@example.com',
+          },
+        },
+      ],
+    });
+
+    let renderer: ReactTestRenderer;
+    act(() => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    act(() => {
+      findButtonByText(renderer!, 'auth_files.paste_button').props.onClick?.();
+    });
+
+    const select = renderer!.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'auth_files.paste_type_label');
+    if (!select) throw new Error('Paste type select not found');
+    act(() => {
+      select.props.onChange('sub2api');
+    });
+
+    const textarea = renderer!.root.findByProps({ id: 'auth-json-paste-content' });
+    act(() => {
+      textarea.props.onChange({ target: { value: sub2apiInput } });
+    });
+
+    await act(async () => {
+      await findButtonByText(renderer!, 'auth_files.paste_save_button').props.onClick?.();
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.saveJsonObject).toHaveBeenCalledWith('sub2api-codex-accounts.codex.json', [
+        expect.objectContaining({
+          type: 'codex',
+          email: 'first@example.com',
+          access_token: 'first-access-token',
+        }),
+        expect.objectContaining({
+          type: 'codex',
+          email: 'second@example.com',
+          access_token: 'second-access-token',
+        }),
+      ]);
     });
 
     await act(async () => {

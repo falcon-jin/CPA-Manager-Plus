@@ -45,50 +45,6 @@
   min-width: 0;
 }
 
-.modeSwitchTabs {
-  display: inline-flex;
-  align-items: stretch;
-  flex: 0 0 auto;
-  padding: 3px;
-  border: 1px solid color-mix(in srgb, var(--inspect-line) 86%, transparent);
-  border-radius: 12px;
-  background: var(--inspect-surface-muted);
-}
-
-.modeSwitchTab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 34px;
-  min-width: 104px;
-  padding: 0 14px;
-  border-radius: 9px;
-  color: var(--inspect-muted);
-  font-size: 13px;
-  font-weight: 800;
-  line-height: 1.2;
-  letter-spacing: 0;
-  text-align: center;
-  text-decoration: none;
-  white-space: nowrap;
-  transition:
-    background-color 0.18s ease,
-    color 0.18s ease,
-    box-shadow 0.18s ease;
-}
-
-.modeSwitchTab:hover {
-  color: var(--inspect-ink);
-  background: color-mix(in srgb, var(--inspect-accent) 6%, var(--inspect-surface));
-}
-
-.modeSwitchTabActive,
-.modeSwitchTabActive:hover {
-  color: var(--inspect-accent-strong);
-  background: var(--inspect-surface);
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
-}
-
 .modeSwitchCopy {
   display: grid;
   gap: 4px;
@@ -2092,17 +2048,6 @@
 @container codex-inspection-page (max-width: 640px) {
   .modeSwitchPanel {
     border-radius: 16px;
-  }
-
-  .modeSwitchTabs {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: 100%;
-  }
-
-  .modeSwitchTab {
-    min-width: 0;
-    padding: 0 10px;
   }
 
   .panel,

@@ -8,17 +8,16 @@ import {
   buildSecondarySummaryCards,
 } from '@/features/monitoring/model/monitoringCenterPageModel';
 import type { MonitoringSummary } from '@/features/monitoring/hooks/useMonitoringData';
-import { buildEmptyMonitoringStatusData } from '@/features/monitoring/accountOverviewState';
+import {
+  buildEmptyMonitoringStatusData,
+  type MonitoringAccountAuthState,
+} from '@/features/monitoring/accountOverviewState';
 import { buildRealtimeSourceDisplay } from '@/features/monitoring/realtimeSourceDisplay';
 
 const t = ((key: string, options?: Record<string, unknown>) => {
   const copy: Record<string, string> = {
-    'monitoring.account_overview_enable_all': 'Enable all',
-    'monitoring.account_overview_disable_all': 'Disable all',
     'monitoring.restore_account_scope': 'Restore account scope',
     'monitoring.focus_account': 'Focus account',
-    'monitoring.account_overview_enabled_label': 'Enabled',
-    'monitoring.account_overview_enabled_label_short': 'Enabled',
     'auth_files.status_toggle_label': 'Enabled',
     'monitoring.account_overview_health_label': 'Health',
     'monitoring.account_overview_health_hint': 'Health hint',
@@ -85,6 +84,9 @@ const t = ((key: string, options?: Record<string, unknown>) => {
   return value;
 }) as TFunction;
 
+const createAuthState = (overrides: MonitoringAccountAuthState): MonitoringAccountAuthState =>
+  overrides;
+
 describe('MonitoringCenterPage summary cards', () => {
   it('renders all request monitoring summary metrics in one ordered grid with large values intact', () => {
     const summary: MonitoringSummary = {
@@ -147,16 +149,16 @@ describe('MonitoringCenterPage summary cards', () => {
     expect(html).toContain('25.5K');
     expect(html).toContain('1.9K');
     expect(html).toContain('2.8B');
-    expect(html).toContain('2.6B');
+    expect(html).toContain('3.6B');
     expect(html).toContain('role="tooltip"');
     expect(html).toContain('2,795,200,000');
     expect(html).toContain('2,783,500,000');
-    expect(html).toContain('2,595,300,000');
+    expect(html).toContain('3,595,200,000');
     expect(html).toContain('$9,999,999.99');
     expect(html).toContain('Reasoning 5.0M');
     expect(html).toContain('Share 99.6%');
     expect(html).toContain('Share 0.4%');
-    expect(html).toContain('Input share 93.2% · Create 555.5M · Read 444.4M');
+    expect(html).toContain('Share 56.2% · Cached Tokens 2.6B · Create 555.5M · Read 444.4M');
   });
 
   it('hides cache creation and read meta when both cached sub-metrics are zero', () => {
@@ -314,11 +316,10 @@ describe('MonitoringCenterPage account card', () => {
       renderToStaticMarkup(
         <AccountOverviewCard
           row={row}
-          authState={{
+          authState={createAuthState({
             files: [],
-            toggleableFileNames: ['alpha.json'],
             enabledState: 'enabled',
-          }}
+          })}
           hasPrices={false}
           locale="en"
           t={t}
@@ -330,10 +331,8 @@ describe('MonitoringCenterPage account card', () => {
             endMs: Date.UTC(2026, 4, 10, 23, 59, 59),
           })}
           scopeText="Scope: 5/10 12:00 AM - 11:59 PM"
-          statusUpdating={false}
           onToggle={() => {}}
           onFocus={() => {}}
-          onToggleEnabled={() => {}}
           onRefreshQuota={() => {}}
         />
       );
@@ -343,7 +342,7 @@ describe('MonitoringCenterPage account card', () => {
     expect(renderCard('full')).toContain('>very-long-account-name@example.com</span>');
   });
 
-  it('renders bulk action buttons for mixed account auth state', () => {
+  it('does not render account enable or disable controls for mixed account auth state', () => {
     const html = renderToStaticMarkup(
       <AccountOverviewCard
         row={{
@@ -370,11 +369,10 @@ describe('MonitoringCenterPage account card', () => {
           recentPattern: [true, false],
           models: [],
         }}
-        authState={{
+        authState={createAuthState({
           files: [],
-          toggleableFileNames: ['alpha.json', 'beta.json'],
           enabledState: 'mixed',
-        }}
+        })}
         hasPrices
         locale="en"
         t={t}
@@ -386,16 +384,14 @@ describe('MonitoringCenterPage account card', () => {
           endMs: Date.UTC(2026, 4, 10, 23, 59, 59),
         })}
         scopeText="Scope: 5/10 12:00 AM - 11:59 PM"
-        statusUpdating={false}
         onToggle={() => {}}
         onFocus={() => {}}
-        onToggleEnabled={() => {}}
         onRefreshQuota={() => {}}
       />
     );
 
-    expect(html).toContain('Enable all');
-    expect(html).toContain('Disable all');
+    expect(html).not.toContain('Enable all');
+    expect(html).not.toContain('Disable all');
     expect(html).not.toContain('type="checkbox"');
   });
 
@@ -457,11 +453,10 @@ describe('MonitoringCenterPage account card', () => {
             },
           ],
         }}
-        authState={{
+        authState={createAuthState({
           files: [],
-          toggleableFileNames: ['alpha.json'],
           enabledState: 'enabled',
-        }}
+        })}
         hasPrices
         locale="en"
         t={t}
@@ -473,10 +468,8 @@ describe('MonitoringCenterPage account card', () => {
           endMs: Date.UTC(2026, 4, 10, 23, 59, 59),
         })}
         scopeText="Scope: 5/10 12:00 AM - 11:59 PM"
-        statusUpdating={false}
         onToggle={() => {}}
         onFocus={() => {}}
-        onToggleEnabled={() => {}}
         onRefreshQuota={() => {}}
       />
     );
@@ -489,7 +482,7 @@ describe('MonitoringCenterPage account card', () => {
     expect(html).not.toContain('<table');
   });
 
-  it('uses a static enabled label beside the account toggle', () => {
+  it('does not render an account enabled toggle for disabled account auth state', () => {
     const html = renderToStaticMarkup(
       <AccountOverviewCard
         row={{
@@ -516,11 +509,10 @@ describe('MonitoringCenterPage account card', () => {
           recentPattern: [],
           models: [],
         }}
-        authState={{
+        authState={createAuthState({
           files: [],
-          toggleableFileNames: ['alpha.json'],
           enabledState: 'disabled',
-        }}
+        })}
         hasPrices
         locale="en"
         t={t}
@@ -532,16 +524,14 @@ describe('MonitoringCenterPage account card', () => {
           endMs: Date.UTC(2026, 4, 10, 23, 59, 59),
         })}
         scopeText="Scope: 5/10 12:00 AM - 11:59 PM"
-        statusUpdating={false}
         onToggle={() => {}}
         onFocus={() => {}}
-        onToggleEnabled={() => {}}
         onRefreshQuota={() => {}}
       />
     );
 
-    expect(html).toContain('Enabled');
-    expect(html).not.toContain('monitoring.account_overview_enabled_label_short');
+    expect(html).not.toContain('type="checkbox"');
+    expect(html).not.toContain('aria-checked');
   });
 
   it('renders table expanded details with token cards and cache columns in top model table', () => {

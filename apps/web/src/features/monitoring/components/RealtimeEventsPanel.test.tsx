@@ -202,9 +202,7 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toContain('Elapsed');
     expect(markup).toContain('1.5 s');
     expect(markup).toContain('20');
-    expect(markup).toContain('I 10 · O 20 · C 5');
-    expect(markup).not.toContain('Read 4');
-    expect(markup).not.toContain('Create 1');
+    expect(markup).toContain('I 10 · O 20 · C 5 · Create 1 · Read 4');
     expect(markup).toContain('role="tooltip"');
     expect(markup).toContain('aria-describedby=');
     expect(markup).toContain('aria-label="HTTP 429 · rate limit exceeded"');
@@ -267,7 +265,9 @@ describe('RealtimeEventsPanel', () => {
     const fullMarkup = renderPanel(row, { accountDisplayMode: 'full' });
 
     expect(maskedMarkup).toContain('>ver***@example.com</span>');
-    expect(maskedMarkup).toContain('title="ver***@example.com · Provider: openai · very-long-user@example.com');
+    expect(maskedMarkup).toContain(
+      'title="ver***@example.com · Provider: openai · very-long-user@example.com'
+    );
     expect(fullMarkup).toContain('>very-long-user@example.com</span>');
     expect(fullMarkup).toContain('title="very-long-user@example.com · Provider: openai');
   });
@@ -315,8 +315,12 @@ describe('RealtimeEventsPanel', () => {
   it('colors normal millisecond and second metrics green for both ttft and elapsed time', () => {
     const markup = renderPanel(baseRow({ latencyMs: 470, ttftMs: 120 }));
 
-    expect(markup).toMatch(/class="[^"]*realtimeMetricText[^"]*realtimeMetricLeft[^"]*goodText[^"]*">120 ms/);
-    expect(markup).toMatch(/class="[^"]*realtimeMetricText[^"]*realtimeMetricRight[^"]*goodText[^"]*">470 ms/);
+    expect(markup).toMatch(
+      /class="[^"]*realtimeMetricText[^"]*realtimeMetricLeft[^"]*goodText[^"]*">120 ms/
+    );
+    expect(markup).toMatch(
+      /class="[^"]*realtimeMetricText[^"]*realtimeMetricRight[^"]*goodText[^"]*">470 ms/
+    );
   });
 
   it('renders residual cached tokens even when they equal cache read tokens', () => {
@@ -329,8 +333,8 @@ describe('RealtimeEventsPanel', () => {
     );
 
     expect(markup).toContain('C 4');
-    expect(markup).not.toContain('Read 4');
-    expect(markup).not.toContain('Create 1');
+    expect(markup).toContain('Read 4');
+    expect(markup).toContain('Create 1');
   });
 
   it('shows the loaded vs total summary with a load-more action when more pages exist', () => {

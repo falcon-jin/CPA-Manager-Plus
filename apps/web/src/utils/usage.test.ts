@@ -247,6 +247,41 @@ describe('usage detail collection', () => {
     expect(detail.tokens.cached_tokens).toBe(0);
     expect(detail.tokens.cache_read_tokens).toBe(500);
   });
+
+  it('normalizes Anthropic cache input token fields', () => {
+    const usageData = {
+      apis: {
+        'POST /v1/messages': {
+          models: {
+            'claude-sonnet': {
+              details: [
+                {
+                  timestamp: '2026-05-19T10:00:00Z',
+                  source: 'alice@example.com',
+                  auth_index: 'auth-1',
+                  tokens: {
+                    input_tokens: 100,
+                    output_tokens: 20,
+                    cached_tokens: 34,
+                    cache_creation_input_tokens: 11,
+                    cache_read_input_tokens: 23,
+                  },
+                  failed: false,
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+
+    const detail = collectUsageDetailsWithEndpoint(usageData)[0];
+
+    expect(detail.tokens.cached_tokens).toBe(0);
+    expect(detail.tokens.cache_creation_tokens).toBe(11);
+    expect(detail.tokens.cache_read_tokens).toBe(23);
+    expect(detail.tokens.total_tokens).toBe(154);
+  });
 });
 
 describe('usage token helpers', () => {
@@ -269,6 +304,20 @@ describe('usage token helpers', () => {
         },
       })
     ).toBe(43);
+  });
+
+  it('uses Anthropic cache input fields when total tokens are missing', () => {
+    expect(
+      extractTotalTokens({
+        tokens: {
+          input_tokens: 100,
+          output_tokens: 20,
+          cached_tokens: 34,
+          cache_read_input_tokens: 23,
+          cache_creation_input_tokens: 11,
+        },
+      })
+    ).toBe(154);
   });
 });
 
