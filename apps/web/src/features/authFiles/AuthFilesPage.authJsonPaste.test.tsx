@@ -9,19 +9,16 @@ const { mocks } = vi.hoisted(() => {
     mocks: {
       files: [] as Array<Record<string, unknown>>,
       selectedFiles: new Set<string>(),
-      batchSetPriority: vi.fn(async () => undefined),
       authJsonPasteSaving: false,
       savePastedAuthJson: vi.fn(async () => 'saved.json'),
       showNotification: vi.fn(),
       navigate: vi.fn(),
-      lastModalProps: null as
-        | {
-            open: boolean;
-            saving: boolean;
-            onClose: () => void;
-            onSave: (type: 'session' | 'cpa', fileName: string, jsonText: string) => Promise<void>;
-          }
-        | null,
+      lastModalProps: null as {
+        open: boolean;
+        saving: boolean;
+        onClose: () => void;
+        onSave: (type: 'session' | 'cpa', fileName: string, jsonText: string) => Promise<void>;
+      } | null,
     },
   };
 });
@@ -78,7 +75,7 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
     deletingAll: false,
     statusUpdating: false,
     batchStatusUpdating: false,
-    batchPriorityUpdating: false,
+    batchFieldsUpdating: false,
     fileInputRef: { current: null },
     loadFiles: vi.fn(async () => undefined),
     handleUploadClick: vi.fn(),
@@ -94,7 +91,7 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
     deselectAll: vi.fn(),
     batchDownload: vi.fn(),
     batchSetStatus: vi.fn(),
-    batchSetPriority: mocks.batchSetPriority,
+    batchPatchFields: vi.fn(),
     batchDelete: vi.fn(),
   }),
 }));
@@ -158,8 +155,9 @@ vi.mock('@/features/authFiles/uiState', () => ({
 }));
 
 vi.mock('@/stores', () => ({
-  useNotificationStore: (selector: (state: { showNotification: typeof mocks.showNotification }) => unknown) =>
-    selector({ showNotification: mocks.showNotification }),
+  useNotificationStore: (
+    selector: (state: { showNotification: typeof mocks.showNotification }) => unknown
+  ) => selector({ showNotification: mocks.showNotification }),
   useAuthStore: (selector: (state: { connectionStatus: 'connected' }) => unknown) =>
     selector({ connectionStatus: 'connected' }),
   useThemeStore: (selector: (state: { resolvedTheme: 'dark' }) => unknown) =>
@@ -231,7 +229,6 @@ describe('AuthFilesPage auth JSON paste flow', () => {
     mocks.files = [];
     mocks.selectedFiles = new Set<string>();
     mocks.authJsonPasteSaving = false;
-    mocks.batchSetPriority.mockClear();
     mocks.savePastedAuthJson.mockClear();
     mocks.showNotification.mockClear();
     mocks.lastModalProps = null;
@@ -254,7 +251,11 @@ describe('AuthFilesPage auth JSON paste flow', () => {
       renderer!.root.findByProps({ id: 'modal-save-trigger' }).props.onClick();
     });
 
-    expect(mocks.savePastedAuthJson).toHaveBeenCalledWith('cpa', 'custom-auth.json', '{"type":"codex"}');
+    expect(mocks.savePastedAuthJson).toHaveBeenCalledWith(
+      'cpa',
+      'custom-auth.json',
+      '{"type":"codex"}'
+    );
     expect(mocks.lastModalProps?.open).toBe(false);
 
     renderer!.unmount();
@@ -298,41 +299,12 @@ describe('AuthFilesPage auth JSON paste flow', () => {
     expect(mocks.lastModalProps?.open).toBe(true);
 
     mocks.savePastedAuthJson.mockRejectedValueOnce(new Error('reload failed'));
-    await expect(mocks.lastModalProps!.onSave('cpa', 'custom-auth.json', '{"type":"codex"}')).rejects.toThrow(
-      'reload failed'
-    );
+    await expect(
+      mocks.lastModalProps!.onSave('cpa', 'custom-auth.json', '{"type":"codex"}')
+    ).rejects.toThrow('reload failed');
 
     expect(mocks.lastModalProps?.open).toBe(true);
     renderer!.unmount();
   });
 
-  it('keeps batch priority apply clickable after selecting files with empty input', async () => {
-    vi.stubGlobal('document', { body: {} });
-    mocks.files = [{ name: 'codex-a.json', type: 'codex' }];
-    mocks.selectedFiles = new Set(['codex-a.json']);
-
-    let renderer: ReactTestRenderer | undefined;
-    try {
-      await act(async () => {
-        renderer = create(<AuthFilesPage />);
-      });
-
-      const applyButton = findButtonByText(renderer!, 'auth_files.batch_priority_apply');
-      expect(applyButton.props.disabled).toBe(false);
-
-      await act(async () => {
-        applyButton.props.onClick();
-      });
-
-      expect(mocks.batchSetPriority).not.toHaveBeenCalled();
-      expect(mocks.showNotification).toHaveBeenCalledWith(
-        'auth_files.batch_priority_invalid',
-        'error'
-      );
-
-      renderer!.unmount();
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
 });

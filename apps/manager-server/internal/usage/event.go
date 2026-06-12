@@ -445,7 +445,25 @@ func readFailFields(record map[string]any) (int64, string) {
 	if body == "" {
 		body = readString(record, "fail_body", "failBody")
 	}
+	if headers, ok := compactJSON(first(record, "response_headers", "responseHeaders", "headers")); ok && headers != "{}" && headers != "[]" {
+		if body == "" {
+			body = headers
+		} else {
+			body = body + "\n" + headers
+		}
+	}
 	return statusCode, body
+}
+
+func compactJSON(value any) (string, bool) {
+	if value == nil {
+		return "", false
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", false
+	}
+	return string(data), true
 }
 
 func readOptionalInt(record map[string]any, keys ...string) *int64 {

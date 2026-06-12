@@ -364,6 +364,7 @@ export function MainLayout() {
             label: t('nav.monitoring_center'),
             shortLabel: navShortLabel('nav.monitoring_center', t('nav.monitoring_center')),
             icon: sidebarIcons.monitoring,
+            exact: true,
           },
         ]
       : []),

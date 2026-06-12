@@ -275,6 +275,38 @@ export interface ApiKeyAliasesResponse {
   items: ApiKeyAlias[];
 }
 
+export type AccountActionType = 'delete' | 'reauth' | 'review' | string;
+export type AccountActionStatus = 'pending' | 'ignored' | 'resolved' | 'deleted' | string;
+
+export interface AccountActionCandidate {
+  id: number;
+  actionType: AccountActionType;
+  status: AccountActionStatus;
+  provider?: string;
+  authFileName: string;
+  authIndex?: string;
+  accountSnapshot?: string;
+  accountIdSnapshot?: string;
+  authLabel?: string;
+  reason: string;
+  evidence?: unknown;
+  lastError?: string;
+  firstSeenAtMs: number;
+  lastSeenAtMs: number;
+  hitCount: number;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface AccountActionCandidatesResponse {
+  items: AccountActionCandidate[];
+  pendingCount: number;
+}
+
+export interface AccountActionCandidateResponse {
+  item: AccountActionCandidate;
+}
+
 export interface UsageImportResponse {
   format?: string;
   added: number;
@@ -1138,6 +1170,96 @@ export const usageServiceApi = {
           headers: authHeaders(managementKey),
         }
       );
+    });
+  },
+
+  listAccountActionCandidates: async (
+    base: string,
+    managementKey?: string,
+    status = 'pending',
+    limit = 100
+  ): Promise<AccountActionCandidatesResponse> => {
+    return withUsageServiceError(async () => {
+      const response = await axios.get<AccountActionCandidatesResponse>(
+        buildUrl(base, '/v0/management/account-action-candidates'),
+        {
+          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+          params: { status, limit },
+        }
+      );
+      return response.data;
+    });
+  },
+
+  ignoreAccountActionCandidate: async (
+    base: string,
+    managementKey: string | undefined,
+    id: number
+  ): Promise<AccountActionCandidateResponse> => {
+    return withUsageServiceError(async () => {
+      const response = await axios.post<AccountActionCandidateResponse>(
+        buildUrl(base, `/v0/management/account-action-candidates/${encodeURIComponent(String(id))}/ignore`),
+        undefined,
+        {
+          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+        }
+      );
+      return response.data;
+    });
+  },
+
+  resolveAccountActionCandidate: async (
+    base: string,
+    managementKey: string | undefined,
+    id: number
+  ): Promise<AccountActionCandidateResponse> => {
+    return withUsageServiceError(async () => {
+      const response = await axios.post<AccountActionCandidateResponse>(
+        buildUrl(base, `/v0/management/account-action-candidates/${encodeURIComponent(String(id))}/resolve`),
+        undefined,
+        {
+          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+        }
+      );
+      return response.data;
+    });
+  },
+
+  enableAccountActionCandidate: async (
+    base: string,
+    managementKey: string | undefined,
+    id: number
+  ): Promise<AccountActionCandidateResponse> => {
+    return withUsageServiceError(async () => {
+      const response = await axios.post<AccountActionCandidateResponse>(
+        buildUrl(base, `/v0/management/account-action-candidates/${encodeURIComponent(String(id))}/enable`),
+        undefined,
+        {
+          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+        }
+      );
+      return response.data;
+    });
+  },
+
+  deleteAccountActionCandidateAuthFile: async (
+    base: string,
+    managementKey: string | undefined,
+    id: number
+  ): Promise<AccountActionCandidateResponse> => {
+    return withUsageServiceError(async () => {
+      const response = await axios.delete<AccountActionCandidateResponse>(
+        buildUrl(base, `/v0/management/account-action-candidates/${encodeURIComponent(String(id))}/auth-file`),
+        {
+          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+        }
+      );
+      return response.data;
     });
   },
 

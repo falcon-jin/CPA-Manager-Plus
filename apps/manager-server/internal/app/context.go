@@ -5,6 +5,7 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
+	accountactionsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/accountaction"
 	adminauthsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/adminauth"
 	apikeyaliassvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/apikeyalias"
 	bootstrapsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/bootstrap"
@@ -40,6 +41,7 @@ type Context struct {
 	MonitoringService      *monitoringsvc.Service
 	ModelPriceService      *modelpricesvc.Service
 	APIKeyAliasService     *apikeyaliassvc.Service
+	AccountActionService   *accountactionsvc.Service
 	ProxyService           *proxysvc.Service
 	PanelService           *panelsvc.Service
 }
@@ -72,6 +74,7 @@ func FromExisting(
 		MonitoringService:      monitoringsvc.New(st),
 		ModelPriceService:      modelpricesvc.NewMultiSource(st, modelPriceSyncURL, openRouterModelPriceSyncURL, managerConfigService),
 		APIKeyAliasService:     apikeyaliassvc.New(st),
+		AccountActionService:   accountactionsvc.New(st, managerConfigService),
 		ProxyService:           proxysvc.New(managerConfigService),
 		PanelService:           panelsvc.New(cfg.PanelPath, embeddedPanel),
 	}

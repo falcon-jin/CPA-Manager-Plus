@@ -253,7 +253,8 @@
     minmax(0, 1fr)
     minmax(88px, 120px)
     minmax(150px, 200px)
-    minmax(170px, 220px);
+    minmax(170px, 220px)
+    minmax(150px, 200px);
   gap: 8px;
   align-items: flex-end;
   min-width: 0;
@@ -1706,6 +1707,22 @@
   font-weight: 600;
   color: var(--text-primary);
   margin-right: 2px;
+}
+
+.batchPriorityModal {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+
+  :global(.form-group) {
+    margin: 0;
+  }
+}
+
+.batchPriorityFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: $spacing-xs;
 }
 
 @include mobile {

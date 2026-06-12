@@ -73,7 +73,9 @@ func TestLoadReadsConfigAndResolvesRelativePaths(t *testing.T) {
   "queryLimit": 900,
   "panelPath": "panel.html",
   "corsOrigins": ["http://panel.local"],
-  "tlsSkipVerify": true
+  "tlsSkipVerify": true,
+  "quotaCooldownEnabled": true,
+  "accountActionsEnabled": true
 }`), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -109,6 +111,12 @@ func TestLoadReadsConfigAndResolvesRelativePaths(t *testing.T) {
 	}
 	if !cfg.TLSSkipVerify {
 		t.Fatal("TLSSkipVerify = false")
+	}
+	if !cfg.QuotaCooldownEnabled {
+		t.Fatal("QuotaCooldownEnabled = false")
+	}
+	if !cfg.AccountActionsEnabled {
+		t.Fatal("AccountActionsEnabled = false")
 	}
 }
 
@@ -187,6 +195,8 @@ func clearConfigEnv(t *testing.T) {
 		"USAGE_QUERY_LIMIT",
 		"USAGE_CORS_ORIGINS",
 		"USAGE_RESP_TLS_SKIP_VERIFY",
+		"USAGE_QUOTA_COOLDOWN_ENABLED",
+		"USAGE_ACCOUNT_ACTIONS_ENABLED",
 		"PANEL_PATH",
 	} {
 		t.Setenv(key, "")

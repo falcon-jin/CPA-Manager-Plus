@@ -1,7 +1,13 @@
 import type { ChangeEvent, ReactNode, RefObject } from 'react';
 import { Link } from 'react-router-dom';
 import type { TFunction } from 'i18next';
-import { IconDownload, IconExternalLink, IconFileText, IconSettings } from '@/components/ui/icons';
+import {
+  IconDownload,
+  IconExternalLink,
+  IconFileText,
+  IconInbox,
+  IconSettings,
+} from '@/components/ui/icons';
 import styles from '../MonitoringCenterPage.module.scss';
 
 type MonitoringActionBarProps = {
@@ -42,6 +48,7 @@ export function MonitoringActionBar({
     'usage_stats.model_price_settings_short',
     'usage_stats.model_price_settings'
   );
+  const accountActionsLabel = shortLabel(t, 'nav.account_actions_short', 'nav.account_actions');
 
   return (
     <section className={styles.actionBar} aria-label={t('common.action')}>
@@ -84,6 +91,14 @@ export function MonitoringActionBar({
             <span>{modelPriceSettingsLabel}</span>
           </Link>
         ) : null}
+        <Link
+          to="/monitoring/account-actions"
+          className={styles.actionButton}
+          title={t('nav.account_actions')}
+        >
+          <IconInbox size={16} />
+          <span>{accountActionsLabel}</span>
+        </Link>
         <input
           ref={usageImportInputRef}
           type="file"

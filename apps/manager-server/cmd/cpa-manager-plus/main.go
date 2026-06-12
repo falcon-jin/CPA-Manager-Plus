@@ -76,6 +76,30 @@ func runServer() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	usageHandlers := make([]collector.UsageEventHandler, 0, 2)
+	if cfg.QuotaCooldownEnabled {
+		rateLimitAutoDisableWorker := worker.NewRateLimitAutoDisableWorker(db, collector.RuntimeConfig{
+			CPAUpstreamURL: cfg.CPAUpstreamURL,
+			ManagementKey:  cfg.ManagementKey,
+		})
+		usageHandlers = append(usageHandlers, rateLimitAutoDisableWorker)
+		rateLimitAutoDisableWorker.Start(ctx)
+		log.Printf("quota cooldown worker enabled")
+	} else {
+		log.Printf("quota cooldown worker disabled (set USAGE_QUOTA_COOLDOWN_ENABLED=1 to enable)")
+	}
+	if cfg.AccountActionsEnabled {
+		accountActionWorker := worker.NewAccountActionCandidateWorker(db)
+		usageHandlers = append(usageHandlers, accountActionWorker)
+		accountActionWorker.Start(ctx)
+		log.Printf("account action worker enabled (queue-only)")
+	} else {
+		log.Printf("account action worker disabled (set USAGE_ACCOUNT_ACTIONS_ENABLED=1 to enable)")
+	}
+	if len(usageHandlers) > 0 {
+		manager.SetUsageEventHandler(worker.NewUsageEventFanout(usageHandlers...))
+	}
+
 	collectorWorker.Start(ctx)
 
 	serverApp := httpapi.New(cfg, db, manager)

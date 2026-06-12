@@ -131,6 +131,7 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 		affected, _ := res.RowsAffected()
 		if affected > 0 {
 			result.Inserted++
+			result.InsertedEventHashes = append(result.InsertedEventHashes, event.EventHash)
 		} else {
 			result.Skipped++
 		}

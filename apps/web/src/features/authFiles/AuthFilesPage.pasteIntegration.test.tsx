@@ -14,6 +14,8 @@ const { mocks } = vi.hoisted(() => {
       connectionStatus: 'connected' as 'connected' | 'disconnected',
       list: vi.fn(),
       saveJsonObject: vi.fn(),
+      deleteFiles: vi.fn(),
+      deleteAll: vi.fn(),
       showNotification: vi.fn(),
       showConfirmation: vi.fn(),
       navigate: vi.fn(),
@@ -89,6 +91,8 @@ vi.mock('@/services/api', () => ({
   authFilesApi: {
     list: mocks.list,
     saveJsonObject: mocks.saveJsonObject,
+    deleteFiles: mocks.deleteFiles,
+    deleteAll: mocks.deleteAll,
   },
 }));
 
@@ -260,6 +264,8 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
   beforeEach(() => {
     mocks.list.mockReset();
     mocks.saveJsonObject.mockReset();
+    mocks.deleteFiles.mockReset();
+    mocks.deleteAll.mockReset();
     mocks.showNotification.mockReset();
     mocks.showConfirmation.mockReset();
     mocks.loadExcluded.mockReset();
@@ -269,6 +275,8 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
 
     mocks.list.mockResolvedValue({ files: [] });
     mocks.saveJsonObject.mockResolvedValue(undefined);
+    mocks.deleteFiles.mockResolvedValue({ deleted: 0, failed: [], files: [] });
+    mocks.deleteAll.mockResolvedValue(undefined);
     mocks.loadExcluded.mockResolvedValue(undefined);
     mocks.loadModelAlias.mockResolvedValue(undefined);
   });
@@ -386,6 +394,115 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
     });
   });
 
+  it('filters rendered Codex rows by selected plan', async () => {
+    mocks.list.mockResolvedValue({
+      files: [
+        { name: 'plus-codex.json', type: 'codex', authIndex: 'plus', plan_type: 'plus' },
+        { name: 'team-codex.json', type: 'codex', authIndex: 'team', plan_type: 'team' },
+        { name: 'qwen.json', type: 'qwen' },
+      ],
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      const renderedCards = renderer!.root.findAll(
+        (node) => typeof node.props['data-auth-card'] === 'string'
+      );
+      expect(renderedCards.map((node) => node.props['data-auth-card']).sort()).toEqual([
+        'plus-codex.json::plus',
+        'qwen.json::-',
+        'team-codex.json::team',
+      ]);
+    });
+
+    const planSelect = renderer!.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'auth_files.codex_plan_filter_label');
+    if (!planSelect) throw new Error('Codex plan filter select not found');
+    act(() => {
+      planSelect.props.onChange('team');
+    });
+
+    await vi.waitFor(() => {
+      const renderedCards = renderer!.root.findAll(
+        (node) => typeof node.props['data-auth-card'] === 'string'
+      );
+      expect(renderedCards.map((node) => node.props['data-auth-card'])).toEqual([
+        'team-codex.json::team',
+      ]);
+    });
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+  });
+
+  it('scopes delete all to the selected Codex plan filter', async () => {
+    mocks.list.mockResolvedValue({
+      files: [
+        { name: 'plus-codex.json', type: 'codex', authIndex: 'plus', plan_type: 'plus' },
+        { name: 'team-codex.json', type: 'codex', authIndex: 'team', plan_type: 'team' },
+        { name: 'qwen.json', type: 'qwen' },
+      ],
+    });
+    mocks.deleteFiles.mockResolvedValue({
+      deleted: 1,
+      failed: [],
+      files: ['team-codex.json'],
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    const planSelect = renderer!.root
+      .findAllByType(Select)
+      .find((node) => node.props.ariaLabel === 'auth_files.codex_plan_filter_label');
+    if (!planSelect) throw new Error('Codex plan filter select not found');
+    act(() => {
+      planSelect.props.onChange('team');
+    });
+
+    await vi.waitFor(() => {
+      const renderedCards = renderer!.root.findAll(
+        (node) => typeof node.props['data-auth-card'] === 'string'
+      );
+      expect(renderedCards.map((node) => node.props['data-auth-card'])).toEqual([
+        'team-codex.json::team',
+      ]);
+    });
+
+    act(() => {
+      findButtonByText(renderer!, 'auth_files.delete_filtered_result_button').props.onClick?.();
+    });
+
+    expect(mocks.showConfirmation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'auth_files.delete_filtered_result_confirm_file_scope',
+      })
+    );
+    const confirmationCalls = mocks.showConfirmation.mock.calls;
+    const confirmation = confirmationCalls[confirmationCalls.length - 1]?.[0] as
+      | { onConfirm?: () => Promise<void> }
+      | undefined;
+
+    await act(async () => {
+      await confirmation?.onConfirm?.();
+    });
+
+    expect(mocks.deleteAll).not.toHaveBeenCalled();
+    expect(mocks.deleteFiles).toHaveBeenCalledWith(['team-codex.json']);
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+  });
+
   it('submits default session paste through modal and uploads converted codex payload', async () => {
     const sessionInput = JSON.stringify({
       user: { email: 'Session.User+tag@example.com' },
@@ -415,7 +532,7 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
 
     await vi.waitFor(() => {
       expect(mocks.saveJsonObject).toHaveBeenCalledWith(
-        'session-user-tag-example-com.codex.json',
+        'codex-session-session.user+tag@example.com.json',
         expect.objectContaining({
           type: 'codex',
           email: 'Session.User+tag@example.com',
@@ -426,7 +543,7 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
     });
     await vi.waitFor(() => {
       expect(mocks.showNotification).toHaveBeenCalledWith(
-        'auth_files.paste_success:session-user-tag-example-com.codex.json',
+        'auth_files.paste_success:codex-session-session.user+tag@example.com.json',
         'success'
       );
       expect(renderer!.root.findAllByProps({ id: 'auth-json-paste-content' })).toHaveLength(0);

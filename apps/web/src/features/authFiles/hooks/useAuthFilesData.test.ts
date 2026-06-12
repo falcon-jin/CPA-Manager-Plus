@@ -9,8 +9,9 @@ const { mocks } = vi.hoisted(() => {
       list: vi.fn(),
       saveJsonObject: vi.fn(),
       uploadFiles: vi.fn(),
-      patchFields: vi.fn(),
       deleteFiles: vi.fn(),
+      patchFields: vi.fn(),
+      patchFieldsForAuthIndexes: vi.fn(),
       showNotification: vi.fn(),
       showConfirmation: vi.fn(),
     },
@@ -40,8 +41,9 @@ vi.mock('@/services/api', () => ({
     list: mocks.list,
     saveJsonObject: mocks.saveJsonObject,
     uploadFiles: mocks.uploadFiles,
-    patchFields: mocks.patchFields,
     deleteFiles: mocks.deleteFiles,
+    patchFields: mocks.patchFields,
+    patchFieldsForAuthIndexes: mocks.patchFieldsForAuthIndexes,
   },
 }));
 
@@ -99,6 +101,8 @@ beforeEach(() => {
   mocks.uploadFiles.mockReset();
   mocks.patchFields.mockReset();
   mocks.deleteFiles.mockReset();
+  mocks.patchFields.mockReset();
+  mocks.patchFieldsForAuthIndexes.mockReset();
   mocks.showNotification.mockReset();
   mocks.showConfirmation.mockReset();
 
@@ -107,6 +111,8 @@ beforeEach(() => {
   mocks.uploadFiles.mockResolvedValue({ uploaded: 0, failed: [], files: [] });
   mocks.patchFields.mockResolvedValue(undefined);
   mocks.deleteFiles.mockResolvedValue({ deleted: 0, failed: [], files: [] });
+  mocks.patchFields.mockResolvedValue(undefined);
+  mocks.patchFieldsForAuthIndexes.mockResolvedValue(undefined);
 });
 
 describe('buildPastedAuthJsonPayload', () => {
@@ -148,7 +154,7 @@ describe('buildPastedAuthJsonPayload', () => {
       })
     );
 
-    expect(result.resolvedFileName).toBe('session-user-tag-example-com.codex.json');
+    expect(result.resolvedFileName).toBe('codex-session-session.user+tag@example.com.json');
     expect(result.authJson).toMatchObject({
       type: 'codex',
       email: 'Session.User+tag@example.com',
@@ -216,9 +222,9 @@ describe('useAuthFilesData savePastedAuthJson', () => {
       .getCurrent()
       .savePastedAuthJson('session', 'codex-account.json', sessionInput);
 
-    expect(savedName).toBe('session-user-tag-example-com.codex.json');
+    expect(savedName).toBe('codex-session-session.user+tag@example.com.json');
     expect(mocks.saveJsonObject).toHaveBeenCalledWith(
-      'session-user-tag-example-com.codex.json',
+      'codex-session-session.user+tag@example.com.json',
       expect.objectContaining({
         type: 'codex',
         email: 'Session.User+tag@example.com',
@@ -227,7 +233,7 @@ describe('useAuthFilesData savePastedAuthJson', () => {
       })
     );
     expect(mocks.showNotification).toHaveBeenCalledWith(
-      'auth_files.paste_success:session-user-tag-example-com.codex.json',
+      'auth_files.paste_success:codex-session-session.user+tag@example.com.json',
       'success'
     );
     expect(mocks.list).toHaveBeenCalledTimes(1);
@@ -653,75 +659,50 @@ describe('useAuthFilesData handleDeleteAll', () => {
   });
 });
 
-describe('useAuthFilesData batchSetPriority', () => {
-  it('sets priority for selected persisted auth files', async () => {
+describe('useAuthFilesData batchPatchFields', () => {
+  it('patches selected auth indexes from the same file in one request', async () => {
     const hook = mountUseAuthFilesData();
-    mocks.list.mockResolvedValueOnce({
-      files: [
-        { name: 'codex-a.json', type: 'codex', priority: 1 },
-        { name: 'codex-b.json', type: 'codex' },
-        { name: 'runtime.json', type: 'codex', runtimeOnly: true },
-      ],
-    });
 
+    let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
     await act(async () => {
-      await hook.getCurrent().loadFiles();
-    });
-
-    await act(async () => {
-      await hook.getCurrent().batchSetPriority(
-        ['codex-a.json', 'codex-b.json', 'runtime.json'],
-        10
+      result = await hook.getCurrent().batchPatchFields(
+        [
+          { name: 'shared-codex.json', authIndex: 'auth-1' },
+          { name: 'shared-codex.json', authIndex: 'auth-2' },
+          { name: 'shared-codex.json', authIndex: 'auth-1' },
+        ],
+        { priority: 10 }
       );
     });
 
-    expect(mocks.patchFields).toHaveBeenCalledTimes(2);
-    expect(mocks.patchFields).toHaveBeenCalledWith('codex-a.json', { priority: 10 });
-    expect(mocks.patchFields).toHaveBeenCalledWith('codex-b.json', { priority: 10 });
-    expect(hook.getCurrent().files.find((file) => file.name === 'codex-a.json')?.priority).toBe(
-      10
+    expect(mocks.patchFieldsForAuthIndexes).toHaveBeenCalledWith(
+      'shared-codex.json',
+      ['auth-1', 'auth-2'],
+      { priority: 10 }
     );
-    expect(hook.getCurrent().files.find((file) => file.name === 'codex-b.json')?.priority).toBe(
-      10
-    );
-    expect(hook.getCurrent().files.find((file) => file.name === 'runtime.json')?.priority).toBe(
-      undefined
-    );
+    expect(mocks.patchFields).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: 2, failed: 0, failedNames: [] });
+    expect(mocks.list).toHaveBeenCalledTimes(1);
     expect(mocks.showNotification).toHaveBeenCalledWith(
-      'auth_files.batch_priority_success',
+      'auth_files.batch_fields_success',
       'success'
     );
     hook.unmount();
   });
 
-  it('reverts only failed priority updates', async () => {
+  it('falls back to file-level field patching when auth index is absent', async () => {
     const hook = mountUseAuthFilesData();
-    mocks.list.mockResolvedValueOnce({
-      files: [
-        { name: 'codex-a.json', type: 'codex', priority: 1 },
-        { name: 'codex-b.json', type: 'codex', priority: 2 },
-      ],
-    });
-    mocks.patchFields
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error('patch failed'));
 
+    let result: Awaited<ReturnType<ReturnType<typeof useAuthFilesData>['batchPatchFields']>> = null;
     await act(async () => {
-      await hook.getCurrent().loadFiles();
+      result = await hook
+        .getCurrent()
+        .batchPatchFields([{ name: 'single-codex.json' }], { websockets: false });
     });
 
-    await act(async () => {
-      await hook.getCurrent().batchSetPriority(['codex-a.json', 'codex-b.json'], 0);
-    });
-
-    expect(hook.getCurrent().files.find((file) => file.name === 'codex-a.json')?.priority).toBe(
-      undefined
-    );
-    expect(hook.getCurrent().files.find((file) => file.name === 'codex-b.json')?.priority).toBe(2);
-    expect(mocks.showNotification).toHaveBeenCalledWith(
-      'auth_files.batch_priority_partial',
-      'warning'
-    );
+    expect(mocks.patchFields).toHaveBeenCalledWith('single-codex.json', { websockets: false });
+    expect(mocks.patchFieldsForAuthIndexes).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: 1, failed: 0, failedNames: [] });
     hook.unmount();
   });
 });
