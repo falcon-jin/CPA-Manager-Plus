@@ -6,24 +6,26 @@ import { apiClient } from './client';
 import {
   normalizeGeminiKeyConfig,
   normalizeOpenAIProvider,
-  normalizeProviderKeyConfig
+  normalizeProviderKeyConfig,
 } from './transformers';
 import type {
   GeminiKeyConfig,
   OpenAIProviderConfig,
   ProviderKeyConfig,
   ApiKeyEntry,
-  ModelAlias
+  ModelAlias,
 } from '@/types';
 
-const serializeHeaders = (headers?: Record<string, string>) => (headers && Object.keys(headers).length ? headers : undefined);
+const serializeHeaders = (headers?: Record<string, string>) =>
+  headers && Object.keys(headers).length ? headers : undefined;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
 const AUTH_INDEX_FIELDS = ['auth-index', 'authIndex', 'auth_index'] as const;
+const DISABLE_COOLING_FIELDS = ['disable-cooling', 'disableCooling', 'disable_cooling'] as const;
 
-const PROVIDER_KEY_FIELDS = [
+const COMMON_PROVIDER_KEY_FIELDS = [
   'api-key',
   'apiKey',
   ...AUTH_INDEX_FIELDS,
@@ -41,13 +43,22 @@ const PROVIDER_KEY_FIELDS = [
   'excluded-models',
   'excludedModels',
   'excluded_models',
-  'cloak',
 ] as const;
 
-const GEMINI_KEY_FIELDS = PROVIDER_KEY_FIELDS.filter(
-  (field) => field !== 'websockets' && field !== 'cloak'
-);
-const VERTEX_KEY_FIELDS = GEMINI_KEY_FIELDS;
+const COOLING_PROVIDER_KEY_FIELDS = [
+  ...COMMON_PROVIDER_KEY_FIELDS,
+  ...DISABLE_COOLING_FIELDS,
+] as const;
+const CODEX_KEY_FIELDS = [...COOLING_PROVIDER_KEY_FIELDS, 'websockets'] as const;
+const CLAUDE_KEY_FIELDS = [
+  ...COOLING_PROVIDER_KEY_FIELDS,
+  'cloak',
+  'experimental-cch-signing',
+  'experimentalCchSigning',
+  'experimental_cch_signing',
+] as const;
+const GEMINI_KEY_FIELDS = COOLING_PROVIDER_KEY_FIELDS;
+const VERTEX_KEY_FIELDS = COMMON_PROVIDER_KEY_FIELDS;
 
 const OPENAI_PROVIDER_FIELDS = [
   'name',
@@ -69,6 +80,9 @@ const OPENAI_PROVIDER_FIELDS = [
   'test-model',
   'testModel',
   'test_model',
+  'disable-cooling',
+  'disableCooling',
+  'disable_cooling',
 ] as const;
 
 const MODEL_ALIAS_FIELDS = [
@@ -82,6 +96,8 @@ const MODEL_ALIAS_FIELDS = [
   'test-model',
   'testModel',
   'test_model',
+  'image',
+  'thinking',
 ] as const;
 
 const API_KEY_ENTRY_FIELDS = [
@@ -103,6 +119,9 @@ const CLOAK_FIELDS = [
   'sensitive-words',
   'sensitiveWords',
   'sensitive_words',
+  'cache-user-id',
+  'cacheUserId',
+  'cache_user_id',
 ] as const;
 
 const RAW_SECTION_ALIASES: Record<string, readonly string[]> = {
@@ -139,8 +158,7 @@ const modelIdentity = (record: Record<string, unknown>) =>
   getStringField(record, ['name', 'id', 'model']);
 
 const apiKeyEntryIdentity = (record: Record<string, unknown>) =>
-  getStringField(record, AUTH_INDEX_FIELDS) ||
-  getStringField(record, ['api-key', 'apiKey', 'key']);
+  getStringField(record, AUTH_INDEX_FIELDS) || getStringField(record, ['api-key', 'apiKey', 'key']);
 
 const cloneWithoutKnownFields = (
   raw: unknown,
@@ -253,7 +271,7 @@ const mergeProviderKeyPayload = (
 const mergeOpenAIProviderPayload = (raw: unknown, payload: Record<string, unknown>) => {
   const next = mergeKnownFields(raw, payload, OPENAI_PROVIDER_FIELDS);
   const rawApiKeyEntries = isRecord(raw)
-    ? raw['api-key-entries'] ?? raw.apiKeyEntries
+    ? (raw['api-key-entries'] ?? raw.apiKeyEntries)
     : undefined;
   const apiKeyEntries = payload['api-key-entries'];
   if (Array.isArray(apiKeyEntries)) {
@@ -326,6 +344,12 @@ const serializeModelAliases = (models?: ModelAlias[]) =>
           if (model.testModel) {
             payload['test-model'] = model.testModel;
           }
+          if (model.image !== undefined) {
+            payload.image = model.image;
+          }
+          if (isRecord(model.thinking)) {
+            payload.thinking = model.thinking;
+          }
           return payload;
         })
         .filter(Boolean)
@@ -358,6 +382,10 @@ const serializeProviderKey = (config: ProviderKeyConfig) => {
   if (config.prefix?.trim()) payload.prefix = config.prefix.trim();
   if (config.baseUrl) payload['base-url'] = config.baseUrl;
   if (config.websockets !== undefined) payload.websockets = config.websockets;
+  if (config.disableCooling !== undefined) payload['disable-cooling'] = config.disableCooling;
+  if (config.experimentalCchSigning !== undefined) {
+    payload['experimental-cch-signing'] = config.experimentalCchSigning;
+  }
   if (config.proxyUrl) payload['proxy-url'] = config.proxyUrl;
   const headers = serializeHeaders(config.headers);
   if (headers) payload.headers = headers;
@@ -370,9 +398,13 @@ const serializeProviderKey = (config: ProviderKeyConfig) => {
     const cloakPayload: Record<string, unknown> = {};
     const mode = config.cloak.mode?.trim();
     if (mode) cloakPayload.mode = mode;
-    if (config.cloak.strictMode !== undefined) cloakPayload['strict-mode'] = config.cloak.strictMode;
+    if (config.cloak.strictMode !== undefined)
+      cloakPayload['strict-mode'] = config.cloak.strictMode;
     if (config.cloak.sensitiveWords && config.cloak.sensitiveWords.length) {
       cloakPayload['sensitive-words'] = config.cloak.sensitiveWords;
+    }
+    if (config.cloak.cacheUserId !== undefined) {
+      cloakPayload['cache-user-id'] = config.cloak.cacheUserId;
     }
     if (Object.keys(cloakPayload).length) {
       payload.cloak = cloakPayload;
@@ -423,6 +455,7 @@ const serializeGeminiKey = (config: GeminiKeyConfig) => {
   if (config.prefix?.trim()) payload.prefix = config.prefix.trim();
   if (config.baseUrl) payload['base-url'] = config.baseUrl;
   if (config.proxyUrl) payload['proxy-url'] = config.proxyUrl;
+  if (config.disableCooling !== undefined) payload['disable-cooling'] = config.disableCooling;
   const headers = serializeHeaders(config.headers);
   if (headers) payload.headers = headers;
   const models = serializeModelAliases(config.models);
@@ -439,12 +472,13 @@ const serializeOpenAIProvider = (provider: OpenAIProviderConfig) => {
     'base-url': provider.baseUrl,
     'api-key-entries': Array.isArray(provider.apiKeyEntries)
       ? provider.apiKeyEntries.map((entry) => serializeApiKeyEntry(entry))
-      : []
+      : [],
   };
   const authIndex = serializeAuthIndex(provider.authIndex);
   if (authIndex) payload['auth-index'] = authIndex;
   if (provider.prefix?.trim()) payload.prefix = provider.prefix.trim();
   if (provider.disabled !== undefined) payload.disabled = provider.disabled;
+  if (provider.disableCooling !== undefined) payload['disable-cooling'] = provider.disableCooling;
   const headers = serializeHeaders(provider.headers);
   if (headers) payload.headers = headers;
   const models = serializeModelAliases(provider.models);
@@ -482,7 +516,9 @@ export const providersApi = {
   async getCodexConfigs(): Promise<ProviderKeyConfig[]> {
     const data = await apiClient.get('/codex-api-key');
     const list = extractArrayPayload(data, 'codex-api-key');
-    return list.map((item) => normalizeProviderKeyConfig(item)).filter(Boolean) as ProviderKeyConfig[];
+    return list
+      .map((item) => normalizeProviderKeyConfig(item))
+      .filter(Boolean) as ProviderKeyConfig[];
   },
 
   saveCodexConfigs: async (configs: ProviderKeyConfig[]) =>
@@ -492,7 +528,7 @@ export const providersApi = {
         'codex-api-key',
         configs,
         serializeProviderKey,
-        (raw, payload) => mergeProviderKeyPayload(raw, payload, PROVIDER_KEY_FIELDS),
+        (raw, payload) => mergeProviderKeyPayload(raw, payload, CODEX_KEY_FIELDS),
         providerKeyIdentity
       )
     ),
@@ -506,7 +542,9 @@ export const providersApi = {
   async getClaudeConfigs(): Promise<ProviderKeyConfig[]> {
     const data = await apiClient.get('/claude-api-key');
     const list = extractArrayPayload(data, 'claude-api-key');
-    return list.map((item) => normalizeProviderKeyConfig(item)).filter(Boolean) as ProviderKeyConfig[];
+    return list
+      .map((item) => normalizeProviderKeyConfig(item))
+      .filter(Boolean) as ProviderKeyConfig[];
   },
 
   saveClaudeConfigs: async (configs: ProviderKeyConfig[]) =>
@@ -516,7 +554,7 @@ export const providersApi = {
         'claude-api-key',
         configs,
         serializeProviderKey,
-        (raw, payload) => mergeProviderKeyPayload(raw, payload, PROVIDER_KEY_FIELDS),
+        (raw, payload) => mergeProviderKeyPayload(raw, payload, CLAUDE_KEY_FIELDS),
         providerKeyIdentity
       )
     ),
@@ -530,7 +568,9 @@ export const providersApi = {
   async getVertexConfigs(): Promise<ProviderKeyConfig[]> {
     const data = await apiClient.get('/vertex-api-key');
     const list = extractArrayPayload(data, 'vertex-api-key');
-    return list.map((item) => normalizeProviderKeyConfig(item)).filter(Boolean) as ProviderKeyConfig[];
+    return list
+      .map((item) => normalizeProviderKeyConfig(item))
+      .filter(Boolean) as ProviderKeyConfig[];
   },
 
   saveVertexConfigs: async (configs: ProviderKeyConfig[]) =>
@@ -554,7 +594,9 @@ export const providersApi = {
   async getOpenAIProviders(): Promise<OpenAIProviderConfig[]> {
     const data = await apiClient.get('/openai-compatibility');
     const list = extractArrayPayload(data, 'openai-compatibility');
-    return list.map((item) => normalizeOpenAIProvider(item)).filter(Boolean) as OpenAIProviderConfig[];
+    return list
+      .map((item) => normalizeOpenAIProvider(item))
+      .filter(Boolean) as OpenAIProviderConfig[];
   },
 
   saveOpenAIProviders: async (providers: OpenAIProviderConfig[]) =>
@@ -576,5 +618,5 @@ export const providersApi = {
     apiClient.patch('/openai-compatibility', { index, value: { disabled } }),
 
   deleteOpenAIProvider: (name: string) =>
-    apiClient.delete(`/openai-compatibility?name=${encodeURIComponent(name)}`)
+    apiClient.delete(`/openai-compatibility?name=${encodeURIComponent(name)}`),
 };

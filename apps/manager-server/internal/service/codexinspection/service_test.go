@@ -752,6 +752,26 @@ func TestResolveProbeActionUsesMonthlyWindowAsLongQuota(t *testing.T) {
 			t.Fatalf("decision = %#v, want enable disabled account after short window reset", decision)
 		}
 	})
+
+	t.Run("treats team secondary window without duration as monthly quota", func(t *testing.T) {
+		rateLimit := &codexRateLimit{
+			PrimaryWindow: &codexWindow{
+				UsedPercent: ptrFloat(100),
+			},
+			SecondaryWindow: &codexWindow{
+				UsedPercent: ptrFloat(5),
+			},
+		}
+		decision := resolveProbeAction(item, http.StatusOK, "", rateLimit, deriveRateLimitUsedPercent(rateLimit), true, threshold, "team")
+
+		if decision.Action != "keep" ||
+			decision.ActionReason != "5 小时额度达到阈值，但月额度仍可用，暂不禁用账号" ||
+			decision.UsedPercent == nil ||
+			*decision.UsedPercent != 5 ||
+			decision.IsQuota {
+			t.Fatalf("decision = %#v, want team secondary window treated as monthly quota", decision)
+		}
+	})
 }
 
 func TestRunSuggestsDeleteForDeactivatedWorkspace(t *testing.T) {

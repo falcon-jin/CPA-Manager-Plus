@@ -79,6 +79,8 @@ const GEMINI_CLI_TIER_LABELS: Record<string, string> = {
 export type CodexQuotaData = {
   planType: string | null;
   windows: CodexQuotaWindow[];
+  subscriptionActiveUntil: string | null;
+  rateLimitResetCreditsAvailableCount: number | null;
 };
 
 export type ClaudeQuotaData = {
@@ -204,9 +206,10 @@ export const fetchAntigravityQuota = async (
 
 export const buildCodexQuotaWindows = (
   payload: CodexUsagePayload,
-  t: TFunction
+  t: TFunction,
+  planType?: string | null
 ): CodexQuotaWindow[] =>
-  buildCodexQuotaWindowInfos(payload).map((window) => ({
+  buildCodexQuotaWindowInfos(payload, { planType }).map((window) => ({
     id: window.id,
     label: t(window.labelKey, window.labelParams),
     labelKey: window.labelKey,
@@ -226,6 +229,16 @@ const buildCodexUsageRequestHeaders = (accountId?: string | null): Record<string
   }
   return headers;
 };
+
+const resolveCodexRateLimitResetCreditsAvailableCount = (
+  payload: CodexUsagePayload
+): number | null => {
+  const credits = payload.rate_limit_reset_credits ?? payload.rateLimitResetCredits;
+  return normalizeNumberValue(credits?.available_count ?? credits?.availableCount);
+};
+
+const resolveCodexSubscriptionActiveUntil = (payload: CodexUsagePayload): string | null =>
+  normalizeStringValue(payload.subscription_active_until ?? payload.subscriptionActiveUntil);
 
 export const fetchCodexQuota = async (
   file: AuthFileItem,
@@ -256,8 +269,14 @@ export const fetchCodexQuota = async (
   }
 
   const planTypeFromUsage = normalizePlanType(payload.plan_type ?? payload.planType);
-  const windows = buildCodexQuotaWindows(payload, t);
-  return { planType: planTypeFromUsage ?? planTypeFromFile, windows };
+  const planType = planTypeFromUsage ?? planTypeFromFile;
+  const windows = buildCodexQuotaWindows(payload, t, planType);
+  return {
+    planType,
+    windows,
+    subscriptionActiveUntil: resolveCodexSubscriptionActiveUntil(payload),
+    rateLimitResetCreditsAvailableCount: resolveCodexRateLimitResetCreditsAvailableCount(payload),
+  };
 };
 
 const resolveGeminiCliTierLabel = (

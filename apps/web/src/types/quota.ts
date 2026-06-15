@@ -167,6 +167,8 @@ export interface CodexUsagePayload {
   referralBeacon?: unknown;
   rate_limit_reset_credits?: CodexRateLimitResetCreditsInfo | null;
   rateLimitResetCredits?: CodexRateLimitResetCreditsInfo | null;
+  subscription_active_until?: string | number | null;
+  subscriptionActiveUntil?: string | number | null;
 }
 
 // Claude API payload types
@@ -282,6 +284,8 @@ export interface CodexQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   windows: CodexQuotaWindow[];
   planType?: string | null;
+  subscriptionActiveUntil?: string | null;
+  rateLimitResetCreditsAvailableCount?: number | null;
   error?: string;
   errorStatus?: number;
 }

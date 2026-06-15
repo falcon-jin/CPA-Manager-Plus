@@ -1,18 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { Drawer } from '@/components/ui/Drawer';
 import { Input } from '@/components/ui/Input';
 import { HeaderInputList } from '@/components/ui/HeaderInputList';
 import { ModelInputList } from '@/components/ui/ModelInputList';
 import { Modal } from '@/components/ui/Modal';
 import { SelectionCheckbox } from '@/components/ui/SelectionCheckbox';
-import { useEdgeSwipeBack } from '@/hooks/useEdgeSwipeBack';
-import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
-import { SecondaryScreenShell } from '@/components/common/SecondaryScreenShell';
 import { modelsApi, providersApi } from '@/services/api';
-import { useAuthStore, useConfigStore, useNotificationStore } from '@/stores';
+import { useConfigStore, useNotificationStore } from '@/stores';
 import type { GeminiKeyConfig } from '@/types';
 import { buildHeaderObject, headersToEntries, normalizeHeaderEntries } from '@/utils/headers';
 import { normalizeAuthIndex } from '@/utils/authIndex';
@@ -25,11 +21,17 @@ import type { ModelInfo } from '@/utils/models';
 import { entriesToModels, modelsToEntries } from '@/components/ui/modelInputListUtils';
 import { excludedModelsToText, parseExcludedModels } from '@/components/providers/utils';
 import type { GeminiFormState } from '@/components/providers';
-import { parseProviderIndexParam } from '@/features/aiProviders/model/routeParams';
-import layoutStyles from './AiProvidersEditLayout.module.scss';
-import styles from './AiProvidersPage.module.scss';
+import styles from '@/features/aiProviders/AiProvidersPage.module.scss';
 
-type LocationState = { fromAiProviders?: boolean } | null;
+interface GeminiEditDrawerProps {
+  open: boolean;
+  editIndex: number | null;
+  disabled: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+type GeminiFormBaseline = ReturnType<typeof buildGeminiBaseline>;
 
 const buildEmptyForm = (): GeminiFormState => ({
   apiKey: '',
@@ -43,37 +45,22 @@ const buildEmptyForm = (): GeminiFormState => ({
   excludedText: '',
 });
 
-const stripGeminiModelResourceName = (value: string) => {
-  return String(value ?? '')
+const stripGeminiModelResourceName = (value: string) =>
+  String(value ?? '')
     .trim()
     .replace(/^\/?models\//i, '');
-};
 
 const normalizeModelEntries = (entries: Array<{ name: string; alias: string }>) =>
   (entries ?? []).reduce<Array<{ name: string; alias: string }>>((acc, entry) => {
     const name = stripGeminiModelResourceName(entry?.name ?? '').trim();
     let alias = String(entry?.alias ?? '').trim();
-    if (name && alias === name) {
-      alias = '';
-    }
+    if (name && alias === name) alias = '';
     if (!name && !alias) return acc;
     acc.push({ name, alias });
     return acc;
   }, []);
 
-type GeminiFormBaseline = {
-  apiKey: string;
-  authIndex: string;
-  priority: number | null;
-  prefix: string;
-  baseUrl: string;
-  proxyUrl: string;
-  headers: ReturnType<typeof normalizeHeaderEntries>;
-  models: ReturnType<typeof normalizeModelEntries>;
-  excludedModels: string[];
-};
-
-const buildGeminiBaseline = (form: GeminiFormState): GeminiFormBaseline => ({
+const buildGeminiBaseline = (form: GeminiFormState) => ({
   apiKey: String(form.apiKey ?? '').trim(),
   authIndex: normalizeAuthIndex(form.authIndex) ?? '',
   priority:
@@ -88,46 +75,46 @@ const buildGeminiBaseline = (form: GeminiFormState): GeminiFormBaseline => ({
   excludedModels: parseExcludedModels(form.excludedText ?? ''),
 });
 
-export function AiProvidersGeminiEditPage() {
+const getErrorMessage = (err: unknown) => {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  return '';
+};
+
+export function GeminiEditDrawer({
+  open,
+  editIndex,
+  disabled,
+  onClose,
+  onSaved,
+}: GeminiEditDrawerProps) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const params = useParams<{ index?: string }>();
-
   const { showNotification } = useNotificationStore();
-  const connectionStatus = useAuthStore((state) => state.connectionStatus);
-  const disableControls = connectionStatus !== 'connected';
-
   const fetchConfig = useConfigStore((state) => state.fetchConfig);
   const updateConfigValue = useConfigStore((state) => state.updateConfigValue);
   const clearCache = useConfigStore((state) => state.clearCache);
 
   const [configs, setConfigs] = useState<GeminiKeyConfig[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [form, setForm] = useState<GeminiFormState>(() => buildEmptyForm());
-  const [baseline, setBaseline] = useState(() => buildGeminiBaseline(buildEmptyForm()));
+  const [form, setForm] = useState<GeminiFormState>(buildEmptyForm);
+  const [baseline, setBaseline] = useState<GeminiFormBaseline>(
+    buildGeminiBaseline(buildEmptyForm())
+  );
+  const [loaded, setLoaded] = useState(false);
 
   const [modelDiscoveryOpen, setModelDiscoveryOpen] = useState(false);
-  const [modelDiscoveryEndpoint, setModelDiscoveryEndpoint] = useState('');
-  const [discoveredModels, setDiscoveredModels] = useState<ModelInfo[]>([]);
   const [modelDiscoveryFetching, setModelDiscoveryFetching] = useState(false);
   const [modelDiscoveryError, setModelDiscoveryError] = useState('');
+  const [discoveredModels, setDiscoveredModels] = useState<ModelInfo[]>([]);
   const [modelDiscoverySearch, setModelDiscoverySearch] = useState('');
   const [modelDiscoverySelected, setModelDiscoverySelected] = useState<Set<string>>(new Set());
-  const autoFetchSignatureRef = useRef<string>('');
-  const modelDiscoveryRequestIdRef = useRef(0);
-
-  const hasIndexParam = typeof params.index === 'string';
-  const editIndex = useMemo(() => parseProviderIndexParam(params.index), [params.index]);
-  const invalidIndexParam = hasIndexParam && editIndex === null;
 
   const initialData = useMemo(() => {
     if (editIndex === null) return undefined;
     return configs[editIndex];
   }, [configs, editIndex]);
-
   const invalidIndex = editIndex !== null && !initialData;
 
   const title =
@@ -135,32 +122,12 @@ export function AiProvidersGeminiEditPage() {
       ? t('ai_providers.gemini_edit_modal_title')
       : t('ai_providers.gemini_add_modal_title');
 
-  const handleBack = useCallback(() => {
-    const state = location.state as LocationState;
-    if (state?.fromAiProviders) {
-      navigate(-1);
-      return;
-    }
-    navigate('/ai-providers', { replace: true });
-  }, [location.state, navigate]);
-
-  const swipeRef = useEdgeSwipeBack({ onBack: handleBack });
-
+  // Load configs on open
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        handleBack();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleBack]);
-
-  useEffect(() => {
+    if (!open) return;
     let cancelled = false;
     setLoading(true);
     setError('');
-
     fetchConfig('gemini-api-key')
       .then((value) => {
         if (cancelled) return;
@@ -168,22 +135,21 @@ export function AiProvidersGeminiEditPage() {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        const message = err instanceof Error ? err.message : '';
-        setError(message || t('notification.refresh_failed'));
+        setError(getErrorMessage(err) || t('notification.refresh_failed'));
       })
       .finally(() => {
         if (cancelled) return;
         setLoading(false);
+        setLoaded(true);
       });
-
     return () => {
       cancelled = true;
     };
-  }, [fetchConfig, t]);
+  }, [open, fetchConfig, t]);
 
+  // Init form when configs loaded
   useEffect(() => {
-    if (loading) return;
-
+    if (!open || !loaded) return;
     if (initialData) {
       const { headers, models, ...rest } = initialData;
       const nextForm: GeminiFormState = {
@@ -197,14 +163,32 @@ export function AiProvidersGeminiEditPage() {
       };
       setForm(nextForm);
       setBaseline(buildGeminiBaseline(nextForm));
-      return;
+    } else {
+      const nextForm = buildEmptyForm();
+      setForm(nextForm);
+      setBaseline(buildGeminiBaseline(nextForm));
     }
-    const nextForm = buildEmptyForm();
-    setForm(nextForm);
-    setBaseline(buildGeminiBaseline(nextForm));
-  }, [initialData, loading]);
+  }, [open, loaded, initialData]);
 
-  const canSave = !disableControls && !saving && !loading && !invalidIndexParam && !invalidIndex;
+  const canSave = !disabled && !saving && !loading && !invalidIndex;
+
+  const isDirty = useMemo(() => {
+    const normalizedPriority =
+      form.priority !== undefined && Number.isFinite(form.priority)
+        ? Math.trunc(form.priority)
+        : null;
+    return (
+      baseline.apiKey !== form.apiKey.trim() ||
+      baseline.authIndex !== (normalizeAuthIndex(form.authIndex) ?? '') ||
+      baseline.priority !== normalizedPriority ||
+      baseline.prefix !== String(form.prefix ?? '').trim() ||
+      baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
+      baseline.proxyUrl !== String(form.proxyUrl ?? '').trim() ||
+      !areKeyValueEntriesEqual(baseline.headers, normalizeHeaderEntries(form.headers)) ||
+      !areModelEntriesEqual(baseline.models, normalizeModelEntries(form.modelEntries)) ||
+      !areStringArraysEqual(baseline.excludedModels, parseExcludedModels(form.excludedText ?? ''))
+    );
+  }, [baseline, form]);
 
   const discoveredModelsFiltered = useMemo(() => {
     const filter = modelDiscoverySearch.trim().toLowerCase();
@@ -216,21 +200,10 @@ export function AiProvidersGeminiEditPage() {
       return name.includes(filter) || alias.includes(filter) || description.includes(filter);
     });
   }, [discoveredModels, modelDiscoverySearch]);
-  const visibleDiscoveredModelNames = useMemo(
-    () => discoveredModelsFiltered.map((model) => model.name),
-    [discoveredModelsFiltered]
-  );
-  const allVisibleDiscoveredSelected = useMemo(
-    () =>
-      visibleDiscoveredModelNames.length > 0 &&
-      visibleDiscoveredModelNames.every((name) => modelDiscoverySelected.has(name)),
-    [modelDiscoverySelected, visibleDiscoveredModelNames]
-  );
 
   const mergeDiscoveredModels = useCallback(
     (selectedModels: ModelInfo[]) => {
       if (!selectedModels.length) return;
-
       let addedCount = 0;
       setForm((prev) => {
         const mergedMap = new Map<string, { name: string; alias: string }>();
@@ -239,21 +212,18 @@ export function AiProvidersGeminiEditPage() {
           if (!name) return;
           mergedMap.set(name, { ...entry, name, alias: entry.alias?.trim() || '' });
         });
-
         selectedModels.forEach((model) => {
           const name = stripGeminiModelResourceName(model.name);
           if (!name || mergedMap.has(name)) return;
           mergedMap.set(name, { name, alias: model.alias ?? '' });
           addedCount += 1;
         });
-
         const mergedEntries = Array.from(mergedMap.values());
         return {
           ...prev,
           modelEntries: mergedEntries.length ? mergedEntries : [{ name: '', alias: '' }],
         };
       });
-
       if (addedCount > 0) {
         showNotification(
           t('ai_providers.gemini_models_fetch_added', { count: addedCount }),
@@ -261,11 +231,10 @@ export function AiProvidersGeminiEditPage() {
         );
       }
     },
-    [setForm, showNotification, t]
+    [showNotification, t]
   );
 
-  const fetchGeminiModelDiscovery = useCallback(async () => {
-    const requestId = (modelDiscoveryRequestIdRef.current += 1);
+  const fetchModelDiscovery = useCallback(async () => {
     setModelDiscoveryFetching(true);
     setModelDiscoveryError('');
     const headerObject = buildHeaderObject(form.headers);
@@ -276,182 +245,27 @@ export function AiProvidersGeminiEditPage() {
         headerObject,
         normalizeAuthIndex(form.authIndex) ?? undefined
       );
-      if (modelDiscoveryRequestIdRef.current !== requestId) return;
       setDiscoveredModels(list);
     } catch (err: unknown) {
-      if (modelDiscoveryRequestIdRef.current !== requestId) return;
       setDiscoveredModels([]);
-      const message = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
-      const hasCustomXGoogApiKey = Object.keys(headerObject).some(
-        (key) => key.toLowerCase() === 'x-goog-api-key'
+      setModelDiscoveryError(
+        `${t('ai_providers.gemini_models_fetch_error')}: ${getErrorMessage(err)}`
       );
-      const hasAuthorization = Object.keys(headerObject).some(
-        (key) => key.toLowerCase() === 'authorization'
-      );
-      const shouldAttachDiag = message.toLowerCase().includes('api key') || message.includes('401');
-      const diag = shouldAttachDiag
-        ? ` [diag: apiKeyField=${form.apiKey.trim() ? 'yes' : 'no'}, customXGoogApiKey=${
-            hasCustomXGoogApiKey ? 'yes' : 'no'
-          }, customAuthorization=${hasAuthorization ? 'yes' : 'no'}]`
-        : '';
-      setModelDiscoveryError(`${t('ai_providers.gemini_models_fetch_error')}: ${message}${diag}`);
     } finally {
-      if (modelDiscoveryRequestIdRef.current === requestId) {
-        setModelDiscoveryFetching(false);
-      }
+      setModelDiscoveryFetching(false);
     }
   }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, t]);
 
-  useEffect(() => {
-    if (!modelDiscoveryOpen) {
-      autoFetchSignatureRef.current = '';
-      modelDiscoveryRequestIdRef.current += 1;
-      setModelDiscoveryFetching(false);
-      return;
-    }
-
-    const nextEndpoint = modelsApi.buildGeminiModelsEndpoint(form.baseUrl ?? '');
-    setModelDiscoveryEndpoint(nextEndpoint);
-    setDiscoveredModels([]);
-    setModelDiscoverySearch('');
-    setModelDiscoverySelected(new Set());
-    setModelDiscoveryError('');
-
-    const headerObject = buildHeaderObject(form.headers);
-    const hasCustomXGoogApiKey = Object.keys(headerObject).some(
-      (key) => key.toLowerCase() === 'x-goog-api-key'
-    );
-    const hasAuthorization = Object.keys(headerObject).some(
-      (key) => key.toLowerCase() === 'authorization'
-    );
-    const hasApiKeyField = Boolean(form.apiKey.trim());
-    const hasAuthIndex = Boolean(normalizeAuthIndex(form.authIndex));
-    const canAutoFetch = hasApiKeyField || hasCustomXGoogApiKey || hasAuthorization || hasAuthIndex;
-
-    if (!canAutoFetch) return;
-
-    const headerSignature = Object.entries(headerObject)
-      .sort(([a], [b]) => a.toLowerCase().localeCompare(b.toLowerCase()))
-      .map(([key, value]) => `${key}:${value}`)
-      .join('|');
-    const signature = `${nextEndpoint}||${form.apiKey.trim()}||${normalizeAuthIndex(form.authIndex) ?? ''}||${headerSignature}`;
-    if (autoFetchSignatureRef.current === signature) return;
-    autoFetchSignatureRef.current = signature;
-
-    void fetchGeminiModelDiscovery();
-  }, [
-    fetchGeminiModelDiscovery,
-    form.apiKey,
-    form.authIndex,
-    form.baseUrl,
-    form.headers,
-    modelDiscoveryOpen,
-  ]);
-
-  useEffect(() => {
-    const availableNames = new Set(discoveredModels.map((model) => model.name));
-    setModelDiscoverySelected((prev) => {
-      let changed = false;
-      const next = new Set<string>();
-      prev.forEach((name) => {
-        if (availableNames.has(name)) {
-          next.add(name);
-        } else {
-          changed = true;
-        }
-      });
-      return changed ? next : prev;
-    });
-  }, [discoveredModels]);
-
-  const toggleModelDiscoverySelection = (name: string) => {
-    setModelDiscoverySelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) {
-        next.delete(name);
-      } else {
-        next.add(name);
-      }
-      return next;
-    });
-  };
-
-  const handleSelectVisibleDiscoveredModels = useCallback(() => {
-    setModelDiscoverySelected((prev) => {
-      const next = new Set(prev);
-      visibleDiscoveredModelNames.forEach((name) => next.add(name));
-      return next;
-    });
-  }, [visibleDiscoveredModelNames]);
-
-  const handleClearDiscoveredModelSelection = useCallback(() => {
-    setModelDiscoverySelected(new Set());
-  }, []);
-
-  const handleApplyDiscoveredModels = () => {
-    const selectedModels = discoveredModels.filter((model) =>
-      modelDiscoverySelected.has(model.name)
-    );
-    if (selectedModels.length) {
-      mergeDiscoveredModels(selectedModels);
-    }
-    setModelDiscoveryOpen(false);
-  };
-
-  const normalizedHeaders = useMemo(() => normalizeHeaderEntries(form.headers), [form.headers]);
-  const normalizedModels = useMemo(
-    () => normalizeModelEntries(form.modelEntries),
-    [form.modelEntries]
-  );
-  const normalizedExcludedModels = useMemo(
-    () => parseExcludedModels(form.excludedText ?? ''),
-    [form.excludedText]
-  );
-  const normalizedPriority = useMemo(() => {
-    return form.priority !== undefined && Number.isFinite(form.priority)
-      ? Math.trunc(form.priority)
-      : null;
-  }, [form.priority]);
-  const isHeadersDirty = useMemo(
-    () => !areKeyValueEntriesEqual(baseline.headers, normalizedHeaders),
-    [baseline.headers, normalizedHeaders]
-  );
-  const isModelsDirty = useMemo(
-    () => !areModelEntriesEqual(baseline.models, normalizedModels),
-    [baseline.models, normalizedModels]
-  );
-  const isExcludedModelsDirty = useMemo(
-    () => !areStringArraysEqual(baseline.excludedModels, normalizedExcludedModels),
-    [baseline.excludedModels, normalizedExcludedModels]
-  );
-  const isDirty =
-    baseline.apiKey !== form.apiKey.trim() ||
-    baseline.authIndex !== (normalizeAuthIndex(form.authIndex) ?? '') ||
-    baseline.priority !== normalizedPriority ||
-    baseline.prefix !== String(form.prefix ?? '').trim() ||
-    baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
-    baseline.proxyUrl !== String(form.proxyUrl ?? '').trim() ||
-    isHeadersDirty ||
-    isModelsDirty ||
-    isExcludedModelsDirty;
-  const canGuard = !loading && !saving && !invalidIndexParam && !invalidIndex;
-
-  const { allowNextNavigation } = useUnsavedChangesGuard({
-    enabled: canGuard,
-    shouldBlock: ({ currentLocation, nextLocation }) =>
-      isDirty && currentLocation.pathname !== nextLocation.pathname,
-    dialog: {
-      title: t('common.unsaved_changes_title'),
-      message: t('common.unsaved_changes_message'),
-      confirmText: t('common.leave'),
-      cancelText: t('common.stay'),
-      variant: 'danger',
-    },
-  });
-
   const handleSave = useCallback(async () => {
     if (!canSave) return;
-
+    const apiKey = form.apiKey.trim();
+    if (!apiKey && !normalizeAuthIndex(form.authIndex)) {
+      showNotification(
+        t('ai_providers.gemini_key_required', { defaultValue: 'Please enter a Gemini API Key' }),
+        'error'
+      );
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -459,7 +273,6 @@ export function AiProvidersGeminiEditPage() {
         ...entry,
         name: stripGeminiModelResourceName(entry.name),
       }));
-
       const payload: GeminiKeyConfig = {
         apiKey: form.apiKey.trim(),
         priority: form.priority !== undefined ? Math.trunc(form.priority) : undefined,
@@ -472,12 +285,10 @@ export function AiProvidersGeminiEditPage() {
         authIndex: normalizeAuthIndex(form.authIndex) ?? undefined,
         disableCooling: form.disableCooling,
       };
-
       const nextList =
         editIndex !== null
           ? configs.map((item, idx) => (idx === editIndex ? payload : item))
           : [...configs, payload];
-
       await providersApi.saveGeminiKeys(nextList);
       updateConfigValue('gemini-api-key', nextList);
       clearCache('gemini-api-key');
@@ -487,80 +298,89 @@ export function AiProvidersGeminiEditPage() {
           : t('notification.gemini_key_added'),
         'success'
       );
-      allowNextNavigation();
-      setBaseline(buildGeminiBaseline(form));
-      handleBack();
+      onSaved();
+      onClose();
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : '';
-      setError(message);
-      showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
+      setError(getErrorMessage(err));
+      showNotification(`${t('notification.update_failed')}: ${getErrorMessage(err)}`, 'error');
     } finally {
       setSaving(false);
     }
   }, [
-    allowNextNavigation,
     canSave,
     clearCache,
     configs,
     editIndex,
     form,
-    handleBack,
+    onClose,
+    onSaved,
     showNotification,
     t,
     updateConfigValue,
   ]);
 
-  const canOpenModelDiscovery =
-    !disableControls && !saving && !loading && !invalidIndexParam && !invalidIndex;
+  const handleClose = useCallback(() => {
+    if (isDirty && !saving) {
+      if (!window.confirm(t('common.unsaved_changes_message'))) return;
+    }
+    onClose();
+  }, [isDirty, onClose, saving, t]);
+
+  useEffect(() => {
+    if (!modelDiscoveryOpen) return;
+    setDiscoveredModels([]);
+    setModelDiscoverySearch('');
+    setModelDiscoverySelected(new Set());
+    setModelDiscoveryError('');
+    void fetchModelDiscovery();
+  }, [modelDiscoveryOpen, fetchModelDiscovery]);
+
+  const toggleModelDiscoverySelection = (name: string) => {
+    setModelDiscoverySelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const canOpenModelDiscovery = !disabled && !saving && !loading && !invalidIndex;
   const canApplyModelDiscovery =
-    !disableControls && !saving && !modelDiscoveryFetching && modelDiscoverySelected.size > 0;
+    !disabled && !saving && !modelDiscoveryFetching && modelDiscoverySelected.size > 0;
+
+  const footer = (
+    <>
+      <Button variant="secondary" size="sm" onClick={handleClose} disabled={saving}>
+        {t('common.cancel')}
+      </Button>
+      <Button size="sm" onClick={handleSave} loading={saving} disabled={!canSave}>
+        {t('common.save')}
+      </Button>
+    </>
+  );
 
   return (
-    <SecondaryScreenShell
-      ref={swipeRef}
-      contentClassName={layoutStyles.content}
-      title={title}
-      onBack={handleBack}
-      backLabel={t('common.back')}
-      backAriaLabel={t('common.back')}
-      hideTopBarBackButton
-      hideTopBarRightAction
-      floatingAction={
-        <div className={layoutStyles.floatingActions}>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleBack}
-            className={layoutStyles.floatingBackButton}
-          >
-            {t('common.back')}
-          </Button>
-          <Button
-            size="sm"
-            onClick={handleSave}
-            loading={saving}
-            disabled={!canSave}
-            className={layoutStyles.floatingSaveButton}
-          >
-            {t('common.save')}
-          </Button>
-        </div>
-      }
-      isLoading={loading}
-      loadingLabel={t('common.loading')}
-    >
-      <Card>
+    <Drawer open={open} onClose={handleClose} width={820} footer={footer} title={title}>
+      <div className={styles.openaiEditForm}>
         {error && <div className="error-box">{error}</div>}
-        {invalidIndexParam || invalidIndex ? (
-          <div className="hint">{t('common.invalid_provider_index')}</div>
-        ) : (
+        {loading && <div className={styles.sectionHint}>{t('common.loading')}</div>}
+        {invalidIndex && <div className="hint">{t('common.invalid_provider_index')}</div>}
+        {!loading && !invalidIndex && (
           <>
             <Input
               label={t('ai_providers.gemini_add_modal_key_label')}
               placeholder={t('ai_providers.gemini_add_modal_key_placeholder')}
               value={form.apiKey}
               onChange={(e) => setForm((prev) => ({ ...prev, apiKey: e.target.value }))}
-              disabled={disableControls || saving}
+              disabled={disabled || saving}
+              required
+            />
+            <Input
+              label={t('ai_providers.gemini_base_url_label')}
+              placeholder={t('ai_providers.gemini_base_url_placeholder')}
+              value={form.baseUrl ?? ''}
+              onChange={(e) => setForm((prev) => ({ ...prev, baseUrl: e.target.value }))}
+              disabled={disabled || saving}
             />
             <Input
               label={t('ai_providers.priority_label')}
@@ -576,7 +396,7 @@ export function AiProvidersGeminiEditPage() {
                   priority: parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined,
                 }));
               }}
-              disabled={disableControls || saving}
+              disabled={disabled || saving}
             />
             <Input
               label={t('ai_providers.prefix_label')}
@@ -584,21 +404,14 @@ export function AiProvidersGeminiEditPage() {
               value={form.prefix ?? ''}
               onChange={(e) => setForm((prev) => ({ ...prev, prefix: e.target.value }))}
               hint={t('ai_providers.prefix_hint')}
-              disabled={disableControls || saving}
-            />
-            <Input
-              label={t('ai_providers.gemini_base_url_label')}
-              placeholder={t('ai_providers.gemini_base_url_placeholder')}
-              value={form.baseUrl ?? ''}
-              onChange={(e) => setForm((prev) => ({ ...prev, baseUrl: e.target.value }))}
-              disabled={disableControls || saving}
+              disabled={disabled || saving}
             />
             <Input
               label={t('ai_providers.gemini_add_modal_proxy_label')}
               placeholder={t('ai_providers.gemini_add_modal_proxy_placeholder')}
               value={form.proxyUrl ?? ''}
               onChange={(e) => setForm((prev) => ({ ...prev, proxyUrl: e.target.value }))}
-              disabled={disableControls || saving}
+              disabled={disabled || saving}
             />
             <HeaderInputList
               entries={form.headers}
@@ -608,7 +421,7 @@ export function AiProvidersGeminiEditPage() {
               valuePlaceholder={t('common.custom_headers_value_placeholder')}
               removeButtonTitle={t('common.delete')}
               removeButtonAriaLabel={t('common.delete')}
-              disabled={disableControls || saving}
+              disabled={disabled || saving}
             />
 
             <div className={styles.modelConfigSection}>
@@ -626,7 +439,7 @@ export function AiProvidersGeminiEditPage() {
                         modelEntries: [...prev.modelEntries, { name: '', alias: '' }],
                       }))
                     }
-                    disabled={disableControls || saving}
+                    disabled={disabled || saving}
                   >
                     {t('ai_providers.gemini_models_add_btn')}
                   </Button>
@@ -641,13 +454,12 @@ export function AiProvidersGeminiEditPage() {
                 </div>
               </div>
               <div className={styles.sectionHint}>{t('ai_providers.gemini_models_hint')}</div>
-
               <ModelInputList
                 entries={form.modelEntries}
                 onChange={(entries) => setForm((prev) => ({ ...prev, modelEntries: entries }))}
                 namePlaceholder={t('common.model_name_placeholder')}
                 aliasPlaceholder={t('common.model_alias_placeholder')}
-                disabled={disableControls || saving}
+                disabled={disabled || saving}
                 hideAddButton
                 className={styles.modelInputList}
                 rowClassName={styles.modelInputRow}
@@ -666,7 +478,7 @@ export function AiProvidersGeminiEditPage() {
                 value={form.excludedText}
                 onChange={(e) => setForm((prev) => ({ ...prev, excludedText: e.target.value }))}
                 rows={4}
-                disabled={disableControls || saving}
+                disabled={disabled || saving}
               />
               <div className="hint">{t('ai_providers.excluded_models_hint')}</div>
             </div>
@@ -688,7 +500,13 @@ export function AiProvidersGeminiEditPage() {
                   </Button>
                   <Button
                     size="sm"
-                    onClick={handleApplyDiscoveredModels}
+                    onClick={() => {
+                      const selectedModels = discoveredModels.filter((m) =>
+                        modelDiscoverySelected.has(m.name)
+                      );
+                      mergeDiscoveredModels(selectedModels);
+                      setModelDiscoveryOpen(false);
+                    }}
                     disabled={!canApplyModelDiscovery}
                   >
                     {t('ai_providers.gemini_models_fetch_apply')}
@@ -700,27 +518,6 @@ export function AiProvidersGeminiEditPage() {
                 <div className={styles.sectionHint}>
                   {t('ai_providers.gemini_models_fetch_hint')}
                 </div>
-                <div className={styles.openaiModelsEndpointSection}>
-                  <label className={styles.openaiModelsEndpointLabel}>
-                    {t('ai_providers.gemini_models_fetch_url_label')}
-                  </label>
-                  <div className={styles.openaiModelsEndpointControls}>
-                    <input
-                      className={`input ${styles.openaiModelsEndpointInput}`}
-                      readOnly
-                      value={modelDiscoveryEndpoint}
-                    />
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => void fetchGeminiModelDiscovery()}
-                      loading={modelDiscoveryFetching}
-                      disabled={disableControls || saving}
-                    >
-                      {t('ai_providers.gemini_models_fetch_refresh')}
-                    </Button>
-                  </div>
-                </div>
                 <Input
                   label={t('ai_providers.gemini_models_search_label')}
                   placeholder={t('ai_providers.gemini_models_search_placeholder')}
@@ -728,56 +525,14 @@ export function AiProvidersGeminiEditPage() {
                   onChange={(e) => setModelDiscoverySearch(e.target.value)}
                   disabled={modelDiscoveryFetching}
                 />
-                {discoveredModels.length > 0 && (
-                  <div className={styles.modelDiscoveryToolbar}>
-                    <div className={styles.modelDiscoveryToolbarActions}>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={handleSelectVisibleDiscoveredModels}
-                        disabled={
-                          disableControls ||
-                          saving ||
-                          modelDiscoveryFetching ||
-                          discoveredModelsFiltered.length === 0 ||
-                          allVisibleDiscoveredSelected
-                        }
-                      >
-                        {t('ai_providers.model_discovery_select_visible')}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleClearDiscoveredModelSelection}
-                        disabled={
-                          disableControls ||
-                          saving ||
-                          modelDiscoveryFetching ||
-                          modelDiscoverySelected.size === 0
-                        }
-                      >
-                        {t('ai_providers.model_discovery_clear_selection')}
-                      </Button>
-                    </div>
-                    <div className={styles.modelDiscoverySelectionSummary}>
-                      {t('ai_providers.model_discovery_selected_count', {
-                        count: modelDiscoverySelected.size,
-                      })}
-                    </div>
-                  </div>
-                )}
                 {modelDiscoveryError && <div className="error-box">{modelDiscoveryError}</div>}
                 {modelDiscoveryFetching ? (
                   <div className={styles.sectionHint}>
                     {t('ai_providers.gemini_models_fetch_loading')}
                   </div>
-                ) : discoveredModels.length === 0 ? (
-                  <div className={styles.sectionHint}>
-                    {t('ai_providers.gemini_models_fetch_empty')}
-                  </div>
                 ) : discoveredModelsFiltered.length === 0 ? (
                   <div className={styles.sectionHint}>
-                    {t('ai_providers.gemini_models_search_empty')}
+                    {t('ai_providers.gemini_models_fetch_empty')}
                   </div>
                 ) : (
                   <div className={styles.modelDiscoveryList}>
@@ -788,11 +543,9 @@ export function AiProvidersGeminiEditPage() {
                           key={model.name}
                           checked={checked}
                           onChange={() => toggleModelDiscoverySelection(model.name)}
-                          disabled={disableControls || saving || modelDiscoveryFetching}
+                          disabled={disabled || saving || modelDiscoveryFetching}
                           ariaLabel={model.name}
-                          className={`${styles.modelDiscoveryRow} ${
-                            checked ? styles.modelDiscoveryRowSelected : ''
-                          }`}
+                          className={`${styles.modelDiscoveryRow} ${checked ? styles.modelDiscoveryRowSelected : ''}`}
                           labelClassName={styles.modelDiscoverySelectionLabel}
                           label={
                             <div className={styles.modelDiscoveryMeta}>
@@ -816,7 +569,7 @@ export function AiProvidersGeminiEditPage() {
             </Modal>
           </>
         )}
-      </Card>
-    </SecondaryScreenShell>
+      </div>
+    </Drawer>
   );
 }

@@ -4,6 +4,10 @@ import type { HeaderEntry } from '@/utils/headers';
 export interface ModelEntry {
   name: string;
   alias: string;
+  priority?: number;
+  testModel?: string;
+  image?: boolean;
+  thinking?: Record<string, unknown>;
 }
 
 export interface OpenAIFormState {
@@ -15,6 +19,7 @@ export interface OpenAIFormState {
   testModel?: string;
   modelEntries: ModelEntry[];
   apiKeyEntries: ApiKeyEntry[];
+  disableCooling?: boolean;
 }
 
 export interface AmpcodeUpstreamApiKeyEntry {

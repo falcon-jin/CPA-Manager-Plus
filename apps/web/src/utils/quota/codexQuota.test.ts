@@ -99,6 +99,30 @@ describe('buildCodexQuotaWindowInfos', () => {
     expect(isCodexRateLimitReached(payload.rate_limit)).toBe(false);
   });
 
+  it('treats a Team secondary window without duration as monthly quota', () => {
+    const windows = buildCodexQuotaWindowInfos(
+      {
+        plan_type: 'team',
+        rate_limit: {
+          primary_window: {
+            used_percent: 10,
+            reset_after_seconds: 60,
+          },
+          secondary_window: {
+            used_percent: 70,
+            reset_after_seconds: 120,
+          },
+        },
+      },
+      { planType: 'team' }
+    );
+
+    expect(windows.map((window) => [window.id, window.labelKey, window.usedPercent])).toEqual([
+      ['five-hour', 'codex_quota.primary_window', 10],
+      ['monthly', 'codex_quota.monthly_window', 70],
+    ]);
+  });
+
   it('normalizes additional rate limit labels into stable ids and params', () => {
     const windows = buildCodexQuotaWindowInfos({
       additional_rate_limits: [

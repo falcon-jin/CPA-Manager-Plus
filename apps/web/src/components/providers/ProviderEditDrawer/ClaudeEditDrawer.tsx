@@ -1,26 +1,109 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useOutletContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { Drawer } from '@/components/ui/Drawer';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { HeaderInputList } from '@/components/ui/HeaderInputList';
 import { ModelInputList } from '@/components/ui/ModelInputList';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
-import { useEdgeSwipeBack } from '@/hooks/useEdgeSwipeBack';
-import { SecondaryScreenShell } from '@/components/common/SecondaryScreenShell';
-import { apiCallApi, getApiCallErrorMessage } from '@/services/api';
-import { useNotificationStore } from '@/stores';
+import { apiCallApi, getApiCallErrorMessage, providersApi } from '@/services/api';
+import { useConfigStore, useNotificationStore } from '@/stores';
+import type { ProviderKeyConfig } from '@/types';
+import { buildHeaderObject, headersToEntries, normalizeHeaderEntries } from '@/utils/headers';
 import { normalizeAuthIndex } from '@/utils/authIndex';
-import { buildHeaderObject } from '@/utils/headers';
-import { buildClaudeMessagesEndpoint, parseTextList } from '@/components/providers/utils';
-import type { ClaudeEditOutletContext } from './AiProvidersClaudeEditLayout';
-import styles from './AiProvidersPage.module.scss';
-import layoutStyles from './AiProvidersEditLayout.module.scss';
+import {
+  areKeyValueEntriesEqual,
+  areModelEntriesEqual,
+  areStringArraysEqual,
+} from '@/utils/compare';
+import {
+  excludedModelsToText,
+  parseExcludedModels,
+  buildClaudeMessagesEndpoint,
+  parseTextList,
+} from '@/components/providers/utils';
+import { modelsToEntries } from '@/components/ui/modelInputListUtils';
+import type { ProviderFormState } from '@/components/providers';
+import styles from '@/features/aiProviders/AiProvidersPage.module.scss';
+
+interface ClaudeEditDrawerProps {
+  open: boolean;
+  editIndex: number | null;
+  disabled: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+type ClaudeFormBaseline = ReturnType<typeof buildClaudeBaseline>;
 
 const CLAUDE_TEST_TIMEOUT_MS = 30_000;
 const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
+
+const buildEmptyForm = (): ProviderFormState => ({
+  apiKey: '',
+  authIndex: '',
+  priority: undefined,
+  prefix: '',
+  baseUrl: '',
+  proxyUrl: '',
+  headers: [],
+  models: [],
+  excludedModels: [],
+  modelEntries: [{ name: '', alias: '' }],
+  excludedText: '',
+});
+
+const normalizeClaudeModelEntries = (entries: Array<{ name: string; alias: string }>) =>
+  (entries ?? []).reduce<Array<{ name: string; alias: string }>>((acc, entry) => {
+    const name = String(entry?.name ?? '').trim();
+    let alias = String(entry?.alias ?? '').trim();
+    if (name) alias = alias || name;
+    if (!name && !alias) return acc;
+    acc.push({ name, alias });
+    return acc;
+  }, []);
+
+const normalizeCloakConfig = (cloak: ProviderFormState['cloak']) => {
+  if (!cloak) return null;
+  const mode =
+    String(cloak.mode ?? '')
+      .trim()
+      .toLowerCase() || 'auto';
+  const strictMode = Boolean(cloak.strictMode);
+  const sensitiveWords = Array.isArray(cloak.sensitiveWords)
+    ? cloak.sensitiveWords.map((word) => String(word ?? '').trim()).filter(Boolean)
+    : [];
+  return { mode, strictMode, sensitiveWords: sensitiveWords.length ? sensitiveWords : null };
+};
+
+const areCloakConfigsEqual = (
+  left: ReturnType<typeof normalizeCloakConfig>,
+  right: ReturnType<typeof normalizeCloakConfig>
+) => {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  if (left.mode !== right.mode || left.strictMode !== right.strictMode) return false;
+  if (left.sensitiveWords === null || right.sensitiveWords === null)
+    return left.sensitiveWords === right.sensitiveWords;
+  return areStringArraysEqual(left.sensitiveWords, right.sensitiveWords);
+};
+
+const buildClaudeBaseline = (form: ProviderFormState) => ({
+  apiKey: String(form.apiKey ?? '').trim(),
+  authIndex: normalizeAuthIndex(form.authIndex) ?? '',
+  priority:
+    form.priority !== undefined && Number.isFinite(form.priority)
+      ? Math.trunc(form.priority)
+      : null,
+  prefix: String(form.prefix ?? '').trim(),
+  baseUrl: String(form.baseUrl ?? '').trim(),
+  proxyUrl: String(form.proxyUrl ?? '').trim(),
+  headers: normalizeHeaderEntries(form.headers),
+  models: normalizeClaudeModelEntries(form.modelEntries),
+  excludedModels: parseExcludedModels(form.excludedText ?? ''),
+  cloak: normalizeCloakConfig(form.cloak),
+});
 
 const getErrorMessage = (err: unknown) => {
   if (err instanceof Error) return err.message;
@@ -42,55 +125,123 @@ const resolveBearerTokenFromAuthorization = (headers: Record<string, string>): s
   return match?.[1]?.trim() || '';
 };
 
-export function AiProvidersClaudeEditPage() {
+export function ClaudeEditDrawer({
+  open,
+  editIndex,
+  disabled,
+  onClose,
+  onSaved,
+}: ClaudeEditDrawerProps) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const { showNotification } = useNotificationStore();
-  const {
-    hasIndexParam,
-    invalidIndexParam,
-    invalidIndex,
-    disableControls,
-    loading,
-    saving,
-    form,
-    setForm,
-    testModel,
-    setTestModel,
-    testStatus,
-    setTestStatus,
-    testMessage,
-    setTestMessage,
-    availableModels,
-    handleBack,
-    handleSave,
-  } = useOutletContext<ClaudeEditOutletContext>();
+  const fetchConfig = useConfigStore((state) => state.fetchConfig);
+  const updateConfigValue = useConfigStore((state) => state.updateConfigValue);
+  const clearCache = useConfigStore((state) => state.clearCache);
 
-  const title = hasIndexParam
-    ? t('ai_providers.claude_edit_modal_title')
-    : t('ai_providers.claude_add_modal_title');
-
-  const swipeRef = useEdgeSwipeBack({ onBack: handleBack });
+  const [configs, setConfigs] = useState<ProviderKeyConfig[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState<ProviderFormState>(buildEmptyForm);
+  const [baseline, setBaseline] = useState<ClaudeFormBaseline>(
+    buildClaudeBaseline(buildEmptyForm())
+  );
+  const [loaded, setLoaded] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [testModel, setTestModel] = useState('');
+  const [testStatus, setTestStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [testMessage, setTestMessage] = useState('');
   const lastCloakConfigRef = useRef<typeof form.cloak>(null);
 
+  const initialData = useMemo(() => {
+    if (editIndex === null) return undefined;
+    return configs[editIndex];
+  }, [configs, editIndex]);
+  const invalidIndex = editIndex !== null && !initialData;
+
+  const title =
+    editIndex !== null
+      ? t('ai_providers.claude_edit_modal_title')
+      : t('ai_providers.claude_add_modal_title');
+
+  const availableModels = useMemo(
+    () => form.modelEntries.map((entry) => entry.name.trim()).filter(Boolean),
+    [form.modelEntries]
+  );
+
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        handleBack();
-      }
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    fetchConfig('claude-api-key')
+      .then((value) => {
+        if (cancelled) return;
+        setConfigs(Array.isArray(value) ? (value as ProviderKeyConfig[]) : []);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        showNotification(`${t('notification.load_failed')}: ${getErrorMessage(err)}`, 'error');
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoading(false);
+        setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleBack]);
+  }, [open, fetchConfig, showNotification, t]);
+
+  useEffect(() => {
+    if (!open || !loaded) return;
+    if (initialData) {
+      const seededForm: ProviderFormState = {
+        ...initialData,
+        headers: headersToEntries(initialData.headers),
+        modelEntries: modelsToEntries(initialData.models),
+        excludedText: excludedModelsToText(initialData.excludedModels),
+      };
+      setForm(seededForm);
+      setBaseline(buildClaudeBaseline(seededForm));
+      const available = seededForm.modelEntries.map((entry) => entry.name.trim()).filter(Boolean);
+      setTestModel(available[0] || '');
+    } else {
+      const emptyForm = buildEmptyForm();
+      setForm(emptyForm);
+      setBaseline(buildClaudeBaseline(emptyForm));
+      setTestModel('');
+    }
+    setTestStatus('idle');
+    setTestMessage('');
+  }, [open, loaded, initialData]);
 
   useEffect(() => {
     if (!form.cloak) return;
     lastCloakConfigRef.current = form.cloak;
   }, [form.cloak]);
 
-  const canSave =
-    !disableControls && !loading && !saving && !invalidIndexParam && !invalidIndex && !isTesting;
+  const canSave = !disabled && !loading && !saving && !invalidIndex && !isTesting;
+
+  const isDirty = useMemo(() => {
+    const normalizedPriority =
+      form.priority !== undefined && Number.isFinite(form.priority)
+        ? Math.trunc(form.priority)
+        : null;
+    return (
+      baseline.apiKey !== form.apiKey.trim() ||
+      baseline.authIndex !== (normalizeAuthIndex(form.authIndex) ?? '') ||
+      baseline.priority !== normalizedPriority ||
+      baseline.prefix !== String(form.prefix ?? '').trim() ||
+      baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
+      baseline.proxyUrl !== String(form.proxyUrl ?? '').trim() ||
+      !areKeyValueEntriesEqual(baseline.headers, normalizeHeaderEntries(form.headers)) ||
+      !areModelEntriesEqual(baseline.models, normalizeClaudeModelEntries(form.modelEntries)) ||
+      !areStringArraysEqual(
+        baseline.excludedModels,
+        parseExcludedModels(form.excludedText ?? '')
+      ) ||
+      !areCloakConfigsEqual(baseline.cloak, normalizeCloakConfig(form.cloak))
+    );
+  }, [baseline, form]);
 
   const modelSelectOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -99,10 +250,7 @@ export function AiProvidersClaudeEditPage() {
       if (!name || seen.has(name)) return acc;
       seen.add(name);
       const alias = entry.alias.trim();
-      acc.push({
-        value: name,
-        label: alias && alias !== name ? `${name} (${alias})` : name,
-      });
+      acc.push({ value: name, label: alias && alias !== name ? `${name} (${alias})` : name });
       return acc;
     }, []);
   }, [form.modelEntries]);
@@ -124,99 +272,44 @@ export function AiProvidersClaudeEditPage() {
     return 'auto';
   }, [form.cloak?.mode]);
 
-  const connectivityConfigSignature = useMemo(() => {
-    const headersSignature = form.headers
-      .map((entry) => `${entry.key.trim()}:${entry.value.trim()}`)
-      .join('|');
-    const modelsSignature = form.modelEntries
-      .map((entry) => `${entry.name.trim()}:${entry.alias.trim()}`)
-      .join('|');
-    return [
-      form.apiKey.trim(),
-      normalizeAuthIndex(form.authIndex) ?? '',
-      form.baseUrl?.trim() ?? '',
-      testModel.trim(),
-      headersSignature,
-      modelsSignature,
-    ].join('||');
-  }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, form.modelEntries, testModel]);
-
-  const previousConnectivityConfigRef = useRef(connectivityConfigSignature);
-
-  useEffect(() => {
-    if (previousConnectivityConfigRef.current === connectivityConfigSignature) {
-      return;
-    }
-    previousConnectivityConfigRef.current = connectivityConfigSignature;
-    setTestStatus('idle');
-    setTestMessage('');
-  }, [connectivityConfigSignature, setTestMessage, setTestStatus]);
-
-  const openClaudeModelDiscovery = () => {
-    navigate('models');
-  };
-
-  const runClaudeConnectivityTest = useCallback(async () => {
+  const runConnectivityTest = useCallback(async () => {
     if (isTesting) return;
-
     const modelName = testModel.trim() || availableModels[0] || '';
     if (!modelName) {
-      const message = t('ai_providers.claude_test_model_required');
-      setTestStatus('error');
-      setTestMessage(message);
-      showNotification(message, 'error');
+      showNotification(t('ai_providers.claude_test_model_required'), 'error');
       return;
     }
-
     const customHeaders = buildHeaderObject(form.headers);
     const apiKey = form.apiKey.trim();
     const keyAuthIndex = normalizeAuthIndex(form.authIndex) ?? undefined;
     const hasApiKeyHeader = hasHeader(customHeaders, 'x-api-key');
     const apiKeyFromAuthorization = resolveBearerTokenFromAuthorization(customHeaders);
     const resolvedApiKey = apiKey || apiKeyFromAuthorization;
-
     if (!resolvedApiKey && !hasApiKeyHeader && !keyAuthIndex) {
-      const message = t('ai_providers.claude_test_key_required');
-      setTestStatus('error');
-      setTestMessage(message);
-      showNotification(message, 'error');
+      showNotification(t('ai_providers.claude_test_key_required'), 'error');
       return;
     }
-
     const endpoint = buildClaudeMessagesEndpoint(form.baseUrl ?? '');
     if (!endpoint) {
-      const message = t('ai_providers.claude_test_endpoint_invalid');
-      setTestStatus('error');
-      setTestMessage(message);
-      showNotification(message, 'error');
+      showNotification(t('ai_providers.claude_test_endpoint_invalid'), 'error');
       return;
     }
-
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...customHeaders,
     };
-
-    if (!hasHeader(headers, 'anthropic-version')) {
+    if (!hasHeader(headers, 'anthropic-version'))
       headers['anthropic-version'] = DEFAULT_ANTHROPIC_VERSION;
-    }
-    if (!Object.prototype.hasOwnProperty.call(headers, 'Anthropic-Version')) {
+    if (!Object.prototype.hasOwnProperty.call(headers, 'Anthropic-Version'))
       headers['Anthropic-Version'] = headers['anthropic-version'] ?? DEFAULT_ANTHROPIC_VERSION;
-    }
-
     const tokenValue = resolvedApiKey || (keyAuthIndex ? '$TOKEN$' : '');
-
-    if (!hasApiKeyHeader && tokenValue) {
-      headers['x-api-key'] = tokenValue;
-    }
-    if (!Object.prototype.hasOwnProperty.call(headers, 'X-Api-Key') && tokenValue) {
+    if (!hasApiKeyHeader && tokenValue) headers['x-api-key'] = tokenValue;
+    if (!Object.prototype.hasOwnProperty.call(headers, 'X-Api-Key') && tokenValue)
       headers['X-Api-Key'] = tokenValue;
-    }
 
     setIsTesting(true);
     setTestStatus('loading');
     setTestMessage(t('ai_providers.claude_test_running'));
-
     try {
       const result = await apiCallApi.request(
         {
@@ -232,11 +325,8 @@ export function AiProvidersClaudeEditPage() {
         },
         { timeout: CLAUDE_TEST_TIMEOUT_MS }
       );
-
-      if (result.statusCode < 200 || result.statusCode >= 300) {
+      if (result.statusCode < 200 || result.statusCode >= 300)
         throw new Error(getApiCallErrorMessage(result));
-      }
-
       const message = t('ai_providers.claude_test_success');
       setTestStatus('success');
       setTestMessage(message);
@@ -264,57 +354,127 @@ export function AiProvidersClaudeEditPage() {
     form.baseUrl,
     form.headers,
     isTesting,
-    setTestMessage,
-    setTestStatus,
     showNotification,
     t,
     testModel,
   ]);
 
+  const handleSave = useCallback(async () => {
+    if (!canSave) return;
+    const apiKey = form.apiKey.trim();
+    if (!apiKey && !normalizeAuthIndex(form.authIndex)) {
+      showNotification(
+        t('ai_providers.claude_key_required', { defaultValue: 'Please enter a Claude API Key' }),
+        'error'
+      );
+      return;
+    }
+    const baseUrl = (form.baseUrl ?? '').trim();
+    if (!baseUrl) {
+      showNotification(
+        t('ai_providers.claude_base_url_required', {
+          defaultValue: 'Please enter the Claude Base URL',
+        }),
+        'error'
+      );
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload: ProviderKeyConfig = {
+        apiKey: form.apiKey.trim(),
+        priority: form.priority !== undefined ? Math.trunc(form.priority) : undefined,
+        prefix: form.prefix?.trim() || undefined,
+        baseUrl: (form.baseUrl ?? '').trim() || undefined,
+        proxyUrl: form.proxyUrl?.trim() || undefined,
+        headers: buildHeaderObject(form.headers),
+        models: form.modelEntries
+          .map((entry) => {
+            const name = entry.name.trim();
+            if (!name) return null;
+            const alias = entry.alias.trim();
+            return { ...entry, name, alias: alias || name };
+          })
+          .filter(Boolean) as ProviderKeyConfig['models'],
+        excludedModels: parseExcludedModels(form.excludedText),
+        cloak: form.cloak,
+        authIndex: normalizeAuthIndex(form.authIndex) ?? undefined,
+        disableCooling: form.disableCooling,
+        experimentalCchSigning: form.experimentalCchSigning,
+      };
+      const nextList =
+        editIndex !== null
+          ? configs.map((item, idx) => (idx === editIndex ? payload : item))
+          : [...configs, payload];
+      await providersApi.saveClaudeConfigs(nextList);
+      updateConfigValue('claude-api-key', nextList);
+      clearCache('claude-api-key');
+      showNotification(
+        editIndex !== null
+          ? t('notification.claude_config_updated')
+          : t('notification.claude_config_added'),
+        'success'
+      );
+      onSaved();
+      onClose();
+    } catch (err: unknown) {
+      showNotification(`${t('notification.update_failed')}: ${getErrorMessage(err)}`, 'error');
+    } finally {
+      setSaving(false);
+    }
+  }, [
+    canSave,
+    clearCache,
+    configs,
+    editIndex,
+    form,
+    onClose,
+    onSaved,
+    showNotification,
+    t,
+    updateConfigValue,
+  ]);
+
+  const handleClose = useCallback(() => {
+    if (isDirty && !saving) {
+      if (!window.confirm(t('common.unsaved_changes_message'))) return;
+    }
+    onClose();
+  }, [isDirty, onClose, saving, t]);
+
+  const footer = (
+    <>
+      <Button variant="secondary" size="sm" onClick={handleClose} disabled={saving || isTesting}>
+        {t('common.cancel')}
+      </Button>
+      <Button size="sm" onClick={handleSave} loading={saving} disabled={!canSave}>
+        {t('common.save')}
+      </Button>
+    </>
+  );
+
   return (
-    <SecondaryScreenShell
-      ref={swipeRef}
-      contentClassName={layoutStyles.content}
-      title={title}
-      onBack={handleBack}
-      backLabel={t('common.back')}
-      backAriaLabel={t('common.back')}
-      hideTopBarBackButton
-      hideTopBarRightAction
-      floatingAction={
-        <div className={layoutStyles.floatingActions}>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleBack}
-            className={layoutStyles.floatingBackButton}
-          >
-            {t('common.back')}
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => void handleSave()}
-            loading={saving}
-            disabled={!canSave}
-            className={layoutStyles.floatingSaveButton}
-          >
-            {t('common.save')}
-          </Button>
-        </div>
-      }
-      isLoading={loading}
-      loadingLabel={t('common.loading')}
-    >
-      <Card>
-        {invalidIndexParam || invalidIndex ? (
+    <Drawer open={open} onClose={handleClose} width={820} footer={footer} title={title}>
+      <div className={styles.openaiEditForm}>
+        {loading && <div className={styles.sectionHint}>{t('common.loading')}</div>}
+        {invalidIndex && (
           <div className={styles.sectionHint}>{t('common.invalid_provider_index')}</div>
-        ) : (
-          <div className={styles.openaiEditForm}>
+        )}
+        {!loading && !invalidIndex && (
+          <>
             <Input
               label={t('ai_providers.claude_add_modal_key_label')}
               value={form.apiKey}
               onChange={(e) => setForm((prev) => ({ ...prev, apiKey: e.target.value }))}
-              disabled={saving || disableControls || isTesting}
+              disabled={saving || disabled || isTesting}
+              required
+            />
+            <Input
+              label={t('ai_providers.claude_add_modal_url_label')}
+              value={form.baseUrl ?? ''}
+              onChange={(e) => setForm((prev) => ({ ...prev, baseUrl: e.target.value }))}
+              disabled={saving || disabled || isTesting}
+              required
             />
             <Input
               label={t('ai_providers.priority_label')}
@@ -330,7 +490,7 @@ export function AiProvidersClaudeEditPage() {
                   priority: parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined,
                 }));
               }}
-              disabled={saving || disableControls || isTesting}
+              disabled={saving || disabled || isTesting}
             />
             <Input
               label={t('ai_providers.prefix_label')}
@@ -338,19 +498,13 @@ export function AiProvidersClaudeEditPage() {
               value={form.prefix ?? ''}
               onChange={(e) => setForm((prev) => ({ ...prev, prefix: e.target.value }))}
               hint={t('ai_providers.prefix_hint')}
-              disabled={saving || disableControls || isTesting}
-            />
-            <Input
-              label={t('ai_providers.claude_add_modal_url_label')}
-              value={form.baseUrl ?? ''}
-              onChange={(e) => setForm((prev) => ({ ...prev, baseUrl: e.target.value }))}
-              disabled={saving || disableControls || isTesting}
+              disabled={saving || disabled || isTesting}
             />
             <Input
               label={t('ai_providers.claude_add_modal_proxy_label')}
               value={form.proxyUrl ?? ''}
               onChange={(e) => setForm((prev) => ({ ...prev, proxyUrl: e.target.value }))}
-              disabled={saving || disableControls || isTesting}
+              disabled={saving || disabled || isTesting}
             />
             <HeaderInputList
               entries={form.headers}
@@ -360,7 +514,7 @@ export function AiProvidersClaudeEditPage() {
               valuePlaceholder={t('common.custom_headers_value_placeholder')}
               removeButtonTitle={t('common.delete')}
               removeButtonAriaLabel={t('common.delete')}
-              disabled={saving || disableControls || isTesting}
+              disabled={saving || disabled || isTesting}
             />
 
             <div className={styles.modelConfigSection}>
@@ -378,29 +532,19 @@ export function AiProvidersClaudeEditPage() {
                         modelEntries: [...prev.modelEntries, { name: '', alias: '' }],
                       }))
                     }
-                    disabled={saving || disableControls || isTesting}
+                    disabled={saving || disabled || isTesting}
                   >
                     {t('ai_providers.claude_models_add_btn')}
                   </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={openClaudeModelDiscovery}
-                    disabled={saving || disableControls || isTesting}
-                  >
-                    {t('ai_providers.claude_models_fetch_button')}
-                  </Button>
                 </div>
               </div>
-
               <div className={styles.sectionHint}>{t('ai_providers.claude_models_hint')}</div>
-
               <ModelInputList
                 entries={form.modelEntries}
                 onChange={(entries) => setForm((prev) => ({ ...prev, modelEntries: entries }))}
                 namePlaceholder={t('common.model_name_placeholder')}
                 aliasPlaceholder={t('common.model_alias_placeholder')}
-                disabled={saving || disableControls || isTesting}
+                disabled={saving || disabled || isTesting}
                 hideAddButton
                 className={styles.modelInputList}
                 rowClassName={styles.modelInputRow}
@@ -435,7 +579,7 @@ export function AiProvidersClaudeEditPage() {
                     ariaLabel={t('ai_providers.claude_test_title')}
                     disabled={
                       saving ||
-                      disableControls ||
+                      disabled ||
                       isTesting ||
                       testStatus === 'loading' ||
                       availableModels.length === 0
@@ -444,11 +588,11 @@ export function AiProvidersClaudeEditPage() {
                   <Button
                     variant={testStatus === 'error' ? 'danger' : 'secondary'}
                     size="sm"
-                    onClick={() => void runClaudeConnectivityTest()}
+                    onClick={() => void runConnectivityTest()}
                     loading={testStatus === 'loading'}
                     disabled={
                       saving ||
-                      disableControls ||
+                      disabled ||
                       isTesting ||
                       testStatus === 'loading' ||
                       availableModels.length === 0
@@ -459,16 +603,9 @@ export function AiProvidersClaudeEditPage() {
                   </Button>
                 </div>
               </div>
-
               {testMessage && (
                 <div
-                  className={`status-badge ${
-                    testStatus === 'error'
-                      ? 'error'
-                      : testStatus === 'success'
-                        ? 'success'
-                        : 'muted'
-                  }`}
+                  className={`status-badge ${testStatus === 'error' ? 'error' : testStatus === 'success' ? 'success' : 'muted'}`}
                 >
                   {testMessage}
                 </div>
@@ -483,7 +620,7 @@ export function AiProvidersClaudeEditPage() {
                 value={form.excludedText}
                 onChange={(e) => setForm((prev) => ({ ...prev, excludedText: e.target.value }))}
                 rows={4}
-                disabled={saving || disableControls || isTesting}
+                disabled={saving || disabled || isTesting}
               />
               <div className="hint">{t('ai_providers.excluded_models_hint')}</div>
             </div>
@@ -499,23 +636,19 @@ export function AiProvidersClaudeEditPage() {
                     onChange={(enabled) =>
                       setForm((prev) => {
                         if (!enabled) {
-                          if (prev.cloak) {
-                            lastCloakConfigRef.current = prev.cloak;
-                          }
+                          if (prev.cloak) lastCloakConfigRef.current = prev.cloak;
                           return { ...prev, cloak: undefined };
                         }
-
                         const restored = prev.cloak ??
                           lastCloakConfigRef.current ?? {
                             mode: 'auto',
                             strictMode: false,
                             sensitiveWords: [],
                           };
-                        const mode = String(restored.mode ?? 'auto').trim() || 'auto';
                         return {
                           ...prev,
                           cloak: {
-                            mode,
+                            mode: String(restored.mode ?? 'auto').trim() || 'auto',
                             strictMode: restored.strictMode ?? false,
                             sensitiveWords: restored.sensitiveWords ?? [],
                             cacheUserId: restored.cacheUserId,
@@ -523,14 +656,13 @@ export function AiProvidersClaudeEditPage() {
                         };
                       })
                     }
-                    disabled={saving || disableControls || isTesting}
+                    disabled={saving || disabled || isTesting}
                     ariaLabel={t('ai_providers.claude_cloak_toggle_aria')}
                     label={t('ai_providers.claude_cloak_toggle_label')}
                   />
                 </div>
               </div>
               <div className={styles.sectionHint}>{t('ai_providers.claude_cloak_hint')}</div>
-
               {form.cloak ? (
                 <>
                   <div className="form-group">
@@ -541,18 +673,14 @@ export function AiProvidersClaudeEditPage() {
                       onChange={(value) =>
                         setForm((prev) => ({
                           ...prev,
-                          cloak: {
-                            ...(prev.cloak ?? {}),
-                            mode: value,
-                          },
+                          cloak: { ...(prev.cloak ?? {}), mode: value },
                         }))
                       }
                       ariaLabel={t('ai_providers.claude_cloak_mode_label')}
-                      disabled={saving || disableControls || isTesting}
+                      disabled={saving || disabled || isTesting}
                     />
                     <div className="hint">{t('ai_providers.claude_cloak_mode_hint')}</div>
                   </div>
-
                   <div className="form-group">
                     <label>{t('ai_providers.claude_cloak_strict_label')}</label>
                     <ToggleSwitch
@@ -560,18 +688,14 @@ export function AiProvidersClaudeEditPage() {
                       onChange={(value) =>
                         setForm((prev) => ({
                           ...prev,
-                          cloak: {
-                            ...(prev.cloak ?? {}),
-                            strictMode: value,
-                          },
+                          cloak: { ...(prev.cloak ?? {}), strictMode: value },
                         }))
                       }
-                      disabled={saving || disableControls || isTesting}
+                      disabled={saving || disabled || isTesting}
                       ariaLabel={t('ai_providers.claude_cloak_strict_label')}
                     />
                     <div className="hint">{t('ai_providers.claude_cloak_strict_hint')}</div>
                   </div>
-
                   <div className="form-group">
                     <label>{t('ai_providers.claude_cloak_sensitive_words_label')}</label>
                     <textarea
@@ -589,7 +713,7 @@ export function AiProvidersClaudeEditPage() {
                         }));
                       }}
                       rows={3}
-                      disabled={saving || disableControls || isTesting}
+                      disabled={saving || disabled || isTesting}
                     />
                     <div className="hint">
                       {t('ai_providers.claude_cloak_sensitive_words_hint')}
@@ -598,9 +722,9 @@ export function AiProvidersClaudeEditPage() {
                 </>
               ) : null}
             </div>
-          </div>
+          </>
         )}
-      </Card>
-    </SecondaryScreenShell>
+      </div>
+    </Drawer>
   );
 }

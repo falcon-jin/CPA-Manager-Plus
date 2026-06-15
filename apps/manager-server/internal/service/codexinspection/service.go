@@ -634,6 +634,7 @@ func (s *Service) inspectSingleAccount(
 	if payload == nil {
 		payload = parseRecord(response.BodyText)
 	}
+	planType := normalizeCodexPlanType(readString(payload, "plan_type", "planType"))
 	rateLimit := parseRateLimit(readMap(payload, "rate_limit", "rateLimit"))
 	usedPercent := deriveRateLimitUsedPercent(rateLimit)
 	bodyLower := strings.ToLower(response.BodyText)
@@ -643,7 +644,7 @@ func (s *Service) inspectSingleAccount(
 		strings.Contains(bodyLower, "payment_required") ||
 		isRateLimitReached(rateLimit) ||
 		(usedPercent != nil && *usedPercent >= settings.UsedPercentThreshold)
-	decision := resolveProbeAction(item, statusCode, response.BodyText, rateLimit, usedPercent, isQuota, settings.UsedPercentThreshold)
+	decision := resolveProbeAction(item, statusCode, response.BodyText, rateLimit, usedPercent, isQuota, settings.UsedPercentThreshold, planType)
 
 	base.Action = decision.Action
 	base.ActionReason = decision.ActionReason
@@ -1031,11 +1032,15 @@ func (l runLogger) log(ctx context.Context, level string, message string, detail
 	})
 }
 
-func resolveProbeAction(item account, statusCode int, bodyText string, rateLimit *codexRateLimit, usedPercent *float64, isQuota bool, threshold float64) inspectionDecision {
+func resolveProbeAction(item account, statusCode int, bodyText string, rateLimit *codexRateLimit, usedPercent *float64, isQuota bool, threshold float64, planTypes ...string) inspectionDecision {
 	if isDeactivatedWorkspaceResponse(statusCode, bodyText) {
 		return resolveDeactivatedWorkspaceProbeAction(usedPercent)
 	}
-	if decision := resolveWindowAwareProbeAction(item, statusCode, bodyText, rateLimit, threshold); decision != nil {
+	planType := ""
+	if len(planTypes) > 0 {
+		planType = planTypes[0]
+	}
+	if decision := resolveWindowAwareProbeAction(item, statusCode, bodyText, rateLimit, threshold, planType); decision != nil {
 		return *decision
 	}
 	return resolveLegacyProbeAction(item, statusCode, bodyText, usedPercent, isQuota, threshold)
@@ -1055,11 +1060,11 @@ func resolveDeactivatedWorkspaceProbeAction(usedPercent *float64) inspectionDeci
 	}
 }
 
-func resolveWindowAwareProbeAction(item account, statusCode int, bodyText string, rateLimit *codexRateLimit, threshold float64) *inspectionDecision {
+func resolveWindowAwareProbeAction(item account, statusCode int, bodyText string, rateLimit *codexRateLimit, threshold float64, planType string) *inspectionDecision {
 	if rateLimit == nil {
 		return nil
 	}
-	classified := classifyWindows(rateLimit)
+	classified := classifyWindows(rateLimit, planType)
 	longWindow := classified.longWindow()
 	if longWindow == nil || longWindow.UsedPercent == nil {
 		return nil
@@ -1778,10 +1783,11 @@ func parseWindow(raw map[string]any) *codexWindow {
 	return window
 }
 
-func classifyWindows(limit *codexRateLimit) codexClassifiedWindows {
+func classifyWindows(limit *codexRateLimit, planType string) codexClassifiedWindows {
 	if limit == nil {
 		return codexClassifiedWindows{}
 	}
+	teamPlan := normalizeCodexPlanType(planType) == "team"
 	raw := []*codexWindow{limit.PrimaryWindow, limit.SecondaryWindow}
 	var fiveHour *codexWindow
 	var weekly *codexWindow
@@ -1805,10 +1811,20 @@ func classifyWindows(limit *codexRateLimit) codexClassifiedWindows {
 	if fiveHour == nil && limit.PrimaryWindow != weekly && limit.PrimaryWindow != monthly && limit.PrimaryWindow != genericLong && !hasExplicitWindowSeconds(limit.PrimaryWindow) {
 		fiveHour = limit.PrimaryWindow
 	}
-	if weekly == nil && limit.SecondaryWindow != fiveHour && !hasExplicitWindowSeconds(limit.SecondaryWindow) {
+	if teamPlan {
+		if monthly == nil && limit.SecondaryWindow != fiveHour && !hasExplicitWindowSeconds(limit.SecondaryWindow) {
+			monthly = limit.SecondaryWindow
+		}
+	} else if weekly == nil && limit.SecondaryWindow != fiveHour && !hasExplicitWindowSeconds(limit.SecondaryWindow) {
 		weekly = limit.SecondaryWindow
 	}
 	return codexClassifiedWindows{FiveHour: fiveHour, Weekly: weekly, Monthly: monthly, GenericLong: genericLong}
+}
+
+func normalizeCodexPlanType(value string) string {
+	normalized := strings.TrimSpace(strings.ToLower(value))
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	return normalized
 }
 
 func hasExplicitWindowSeconds(window *codexWindow) bool {

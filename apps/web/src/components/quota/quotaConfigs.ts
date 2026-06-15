@@ -21,6 +21,7 @@ import type {
   XaiBillingSummary,
   XaiQuotaState,
 } from '@/types';
+import { resetCodexQuota } from '@/services/api/codexQuota';
 import { useQuotaStore } from '@/stores';
 import {
   normalizePlanType,
@@ -98,6 +99,8 @@ export interface QuotaConfig<TState, TData> {
   gridClassName: string;
   getSearchText?: (file: AuthFileItem, quota: TState | undefined, t: TFunction) => unknown[];
   getPlanSortRank?: (file: AuthFileItem, quota: TState | undefined) => number | null;
+  resetQuota?: (file: AuthFileItem, t: TFunction) => Promise<TData>;
+  canResetQuota?: (file: AuthFileItem, quota: TState | undefined) => boolean;
   renderQuotaItems: (quota: TState, t: TFunction, helpers: QuotaRenderHelpers) => ReactNode;
 }
 
@@ -290,16 +293,52 @@ const renderCodexItems = (
   const planType = quota.planType ?? null;
   const planLabel = getCodexPlanLabel(planType, t);
   const isPremiumPlan = PREMIUM_CODEX_PLAN_TYPES.has(normalizePlanType(planType) ?? '');
+  const resetCreditsAvailableCount = quota.rateLimitResetCreditsAvailableCount;
+  const hasResetCreditsAvailableCount =
+    typeof resetCreditsAvailableCount === 'number' &&
+    Number.isFinite(resetCreditsAvailableCount);
   const nodes: ReactNode[] = [];
 
-  if (planLabel) {
+  if (planLabel || hasResetCreditsAvailableCount) {
     const valueClass = isPremiumPlan ? styleMap.premiumPlanValue : styleMap.codexPlanValue;
+    const planNodes: ReactNode[] = [];
+
+    if (planLabel) {
+      planNodes.push(
+        h(
+          'span',
+          { key: 'plan-label', className: styleMap.codexPlanLabel },
+          t('codex_quota.plan_label')
+        ),
+        h('span', { key: 'plan-value', className: valueClass }, planLabel)
+      );
+    }
+
+    if (hasResetCreditsAvailableCount) {
+      if (planNodes.length > 0) {
+        planNodes.push(
+          h('span', { key: 'reset-separator', className: styleMap.codexPlanLabel }, '|')
+        );
+      }
+      planNodes.push(
+        h(
+          'span',
+          { key: 'reset-label', className: styleMap.codexPlanLabel },
+          t('codex_quota.reset_credits_label')
+        ),
+        h(
+          'span',
+          { key: 'reset-value', className: styleMap.codexPlanValue },
+          String(resetCreditsAvailableCount)
+        )
+      );
+    }
+
     nodes.push(
       h(
         'div',
         { key: 'plan', className: styleMap.codexPlan },
-        h('span', { className: styleMap.codexPlanLabel }, t('codex_quota.plan_label')),
-        h('span', { className: valueClass }, planLabel)
+        ...planNodes
       )
     );
   }
@@ -578,7 +617,12 @@ export const ANTIGRAVITY_CONFIG: QuotaConfig<AntigravityQuotaState, AntigravityQ
 
 export const CODEX_CONFIG: QuotaConfig<
   CodexQuotaState,
-  { planType: string | null; windows: CodexQuotaWindow[] }
+  {
+    planType: string | null;
+    windows: CodexQuotaWindow[];
+    subscriptionActiveUntil: string | null;
+    rateLimitResetCreditsAvailableCount: number | null;
+  }
 > = {
   type: 'codex',
   i18nPrefix: 'codex_quota',
@@ -592,6 +636,8 @@ export const CODEX_CONFIG: QuotaConfig<
     status: 'success',
     windows: data.windows,
     planType: data.planType,
+    subscriptionActiveUntil: data.subscriptionActiveUntil,
+    rateLimitResetCreditsAvailableCount: data.rateLimitResetCreditsAvailableCount,
   }),
   buildErrorState: (message, status) => ({
     status: 'error',
@@ -605,6 +651,9 @@ export const CODEX_CONFIG: QuotaConfig<
   gridClassName: styles.codexGrid,
   getSearchText: getCodexSearchText,
   getPlanSortRank: getCodexPlanSortRank,
+  resetQuota: resetCodexQuota,
+  canResetQuota: (_file, quota) =>
+    quota?.status === 'success' && (quota.rateLimitResetCreditsAvailableCount ?? 0) > 0,
   renderQuotaItems: renderCodexItems,
 };
 
@@ -796,7 +845,11 @@ const renderXaiItems = (
         'div',
         { key: 'on-demand-cap', className: styleMap.codexPlan },
         h('span', { className: styleMap.codexPlanLabel }, t('xai_quota.on_demand_cap')),
-        h('span', { className: styleMap.codexPlanValue }, formatXaiCurrency(billing.onDemandCapCents))
+        h(
+          'span',
+          { className: styleMap.codexPlanValue },
+          formatXaiCurrency(billing.onDemandCapCents)
+        )
       )
     );
   }

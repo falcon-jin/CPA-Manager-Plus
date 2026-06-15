@@ -233,6 +233,8 @@ describe('monitoringCenterPageModel account quota', () => {
   it('maps Codex monthly quota windows into account quota entries', async () => {
     vi.mocked(fetchCodexQuota).mockResolvedValue({
       planType: 'free',
+      subscriptionActiveUntil: null,
+      rateLimitResetCreditsAvailableCount: null,
       windows: [
         {
           id: 'monthly',
