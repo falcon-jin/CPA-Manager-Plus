@@ -99,12 +99,13 @@ func rootHandler(
 			middleware.WithCORS(appCtx.Config, proxyHandler.Management)(w, r)
 			return
 		}
-		if proxysvc.IsModelListPath(r.URL.Path) {
+		if r.URL.Path == "/v1/models" || r.URL.Path == "/v1/models/" ||
+			r.URL.Path == "/models" || r.URL.Path == "/models/" {
 			middleware.WithCORS(appCtx.Config, proxyHandler.ModelList)(w, r)
 			return
 		}
-		if proxysvc.IsCPAProxyPath(r.URL.Path) {
-			middleware.WithCORS(appCtx.Config, proxyHandler.CPA)(w, r)
+		if proxysvc.IsCPAPluginResourcePath(r.URL.Path) {
+			middleware.WithCORS(appCtx.Config, proxyHandler.CPAResource)(w, r)
 			return
 		}
 		if r.URL.Path == "/" {

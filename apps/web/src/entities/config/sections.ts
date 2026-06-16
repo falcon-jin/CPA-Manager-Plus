@@ -8,6 +8,7 @@ export const CONFIG_SECTION_KEYS: RawConfigSection[] = [
   'request-log',
   'logging-to-file',
   'logs-max-total-size-mb',
+  'plugins',
   'ws-auth',
   'force-model-prefix',
   'routing/strategy',
@@ -41,6 +42,10 @@ export const extractConfigSectionValue = (
       return config.loggingToFile;
     case 'logs-max-total-size-mb':
       return config.logsMaxTotalSizeMb;
+    case 'plugins':
+      return config.pluginsEnabled === undefined
+        ? config.raw?.plugins
+        : { enabled: config.pluginsEnabled };
     case 'ws-auth':
       return config.wsAuth;
     case 'force-model-prefix':

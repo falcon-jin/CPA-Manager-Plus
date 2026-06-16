@@ -36,6 +36,7 @@ export interface Config {
   requestLog?: boolean;
   loggingToFile?: boolean;
   logsMaxTotalSizeMb?: number;
+  pluginsEnabled?: boolean;
   wsAuth?: boolean;
   forceModelPrefix?: boolean;
   routingStrategy?: string;
@@ -60,6 +61,7 @@ export type RawConfigSection =
   | 'request-log'
   | 'logging-to-file'
   | 'logs-max-total-size-mb'
+  | 'plugins'
   | 'ws-auth'
   | 'force-model-prefix'
   | 'routing/strategy'

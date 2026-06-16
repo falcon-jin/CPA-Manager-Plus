@@ -109,9 +109,12 @@
 }
 
 .panelExtra {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
 }
 
@@ -588,6 +591,10 @@
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  justify-content: flex-end;
 }
 
 .filterRow {
@@ -597,6 +604,8 @@
   gap: 8px;
   margin-top: -2px;
   flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .segmentedControl {
@@ -604,19 +613,39 @@
   align-items: stretch;
   flex-wrap: nowrap;
   gap: 0;
+  min-width: 0;
   max-width: 100%;
   padding: 0;
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--inspect-line) 86%, transparent);
   background: color-mix(in srgb, var(--inspect-surface-elevated) 82%, var(--inspect-surface));
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-sizing: border-box;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  scrollbar-color: color-mix(in srgb, var(--inspect-muted) 34%, transparent) transparent;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
 }
 
 .segmentedControl::-webkit-scrollbar {
-  display: none;
+  height: 4px;
+}
+
+.segmentedControl::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.segmentedControl::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--inspect-muted) 34%, transparent);
+}
+
+.filterRow .segmentedControl,
+.resultsHeaderActions .segmentedControl,
+.logFilterGroup .segmentedControl {
+  flex: 1 1 auto;
 }
 
 .segmentButton {
@@ -690,9 +719,13 @@
 }
 
 .tableWrap {
+  width: 100%;
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .resultPaginationBar {
@@ -750,7 +783,7 @@
 }
 
 .table {
-  width: 100%;
+  width: max(100%, 920px);
   min-width: 920px;
   border-collapse: separate;
   border-spacing: 0 8px;
@@ -1931,17 +1964,25 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 10px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .logFilterGroup {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  flex: 1 1 320px;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .logToolbarRight {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -2070,6 +2111,15 @@
 
   .logRow {
     grid-template-columns: 1fr;
+  }
+
+  .tableWrap {
+    margin-inline: -2px;
+    padding-inline: 2px;
+  }
+
+  .table {
+    width: 920px;
   }
 
   .resultPaginationControls {

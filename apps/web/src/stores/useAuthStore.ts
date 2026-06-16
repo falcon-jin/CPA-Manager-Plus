@@ -34,6 +34,7 @@ interface AuthStoreState extends AuthState {
   checkAuth: () => Promise<boolean>;
   restoreSession: (options?: RestoreSessionOptions) => Promise<RestoreSessionResult>;
   updateServerVersion: (version: string | null, buildDate?: string | null) => void;
+  updateServerPluginSupport: (supportsPlugin: boolean) => void;
   updateConnectionStatus: (status: ConnectionStatus, error?: string | null) => void;
 }
 
@@ -77,6 +78,7 @@ export const useAuthStore = create<AuthStoreState>()(
       rememberPassword: false,
       serverVersion: null,
       serverBuildDate: null,
+      supportsPlugin: false,
       sessionMode: '',
       sessionPanelBase: '',
       connectionStatus: 'disconnected',
@@ -182,7 +184,7 @@ export const useAuthStore = create<AuthStoreState>()(
         };
 
         try {
-          set({ connectionStatus: 'connecting' });
+          set({ connectionStatus: 'connecting', supportsPlugin: false });
           useModelsStore.getState().clearCache();
 
           // 配置 API 客户端
@@ -224,7 +226,8 @@ export const useAuthStore = create<AuthStoreState>()(
                 : 'Connection failed';
           set({
             connectionStatus: 'error',
-            connectionError: message || 'Connection failed'
+            connectionError: message || 'Connection failed',
+            supportsPlugin: false
           });
           throw error;
         }
@@ -243,6 +246,7 @@ export const useAuthStore = create<AuthStoreState>()(
           managementKey: '',
           serverVersion: null,
           serverBuildDate: null,
+          supportsPlugin: false,
           sessionMode: '',
           sessionPanelBase: '',
           connectionStatus: 'disconnected',
@@ -262,6 +266,7 @@ export const useAuthStore = create<AuthStoreState>()(
         try {
           // 重新配置客户端
           apiClient.setConfig({ apiBase, managementKey });
+          set({ supportsPlugin: false });
 
           // 验证连接
           await useConfigStore.getState().fetchConfig();
@@ -275,7 +280,8 @@ export const useAuthStore = create<AuthStoreState>()(
         } catch {
           set({
             isAuthenticated: false,
-            connectionStatus: 'error'
+            connectionStatus: 'error',
+            supportsPlugin: false
           });
           return false;
         }
@@ -284,6 +290,10 @@ export const useAuthStore = create<AuthStoreState>()(
       // 更新服务器版本
       updateServerVersion: (version, buildDate) => {
         set({ serverVersion: version || null, serverBuildDate: buildDate || null });
+      },
+
+      updateServerPluginSupport: (supportsPlugin) => {
+        set({ supportsPlugin });
       },
 
       // 更新连接状态
@@ -332,6 +342,13 @@ if (typeof window !== 'undefined') {
     ((e: CustomEvent) => {
       const detail = e.detail || {};
       useAuthStore.getState().updateServerVersion(detail.version || null, detail.buildDate || null);
+    }) as EventListener
+  );
+
+  window.addEventListener(
+    'server-plugin-support-update',
+    ((e: CustomEvent) => {
+      useAuthStore.getState().updateServerPluginSupport(e.detail?.supportsPlugin === true);
     }) as EventListener
   );
 }

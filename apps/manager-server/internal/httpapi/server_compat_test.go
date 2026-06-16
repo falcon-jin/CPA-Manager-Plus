@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -503,16 +504,6 @@ func TestServerCompatProxyRoutes(t *testing.T) {
 		t.Fatalf("reload proxy request = %#v", reloadReq)
 	}
 
-	configRR := testutil.Request(t, handler, http.MethodGet, "/config", "", testutil.AdminKey)
-	testutil.RequireStatus(t, configRR, http.StatusOK)
-	configReq, ok := cpa.LastRequest("/config")
-	if !ok {
-		t.Fatal("CPA mock did not receive /config")
-	}
-	if configReq.Authorization != "Bearer management-key" {
-		t.Fatalf("config proxy request = %#v", configReq)
-	}
-
 	modelsReq := httptest.NewRequest(http.MethodGet, "/v1/models?limit=20", nil)
 	modelsReq.Header.Set("Authorization", "Bearer upstream-key")
 	modelsRR := httptest.NewRecorder()
@@ -525,6 +516,109 @@ func TestServerCompatProxyRoutes(t *testing.T) {
 	if modelsProxyReq.Authorization != "Bearer upstream-key" || modelsProxyReq.Query != "limit=20" {
 		t.Fatalf("model list proxy request = %#v", modelsProxyReq)
 	}
+}
+
+func TestServerCompatPluginProxyRoutes(t *testing.T) {
+	type observedRequest struct {
+		method        string
+		path          string
+		query         string
+		authorization string
+		body          string
+	}
+
+	observed := make(chan observedRequest, 4)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		observed <- observedRequest{
+			method:        r.Method,
+			path:          r.URL.Path,
+			query:         r.URL.RawQuery,
+			authorization: r.Header.Get("Authorization"),
+			body:          string(body),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	setup := &store.Setup{
+		CPAUpstreamURL: upstream.URL,
+		ManagementKey:  "management-key",
+		Queue:          "usage",
+		PopSide:        "right",
+	}
+	handler, _ := newCompatHandler(t, testutil.NewConfig(t), setup)
+
+	assertObserved := func(path string, want observedRequest) {
+		t.Helper()
+		select {
+		case got := <-observed:
+			if got != want {
+				t.Fatalf("%s proxy request = %#v, want %#v", path, got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("CPA upstream did not receive %s", path)
+		}
+	}
+
+	managementInstallRR := testutil.Request(
+		t,
+		handler,
+		http.MethodPost,
+		"/v0/management/plugin-store/demo/install?source=official",
+		"",
+		testutil.AdminKey,
+	)
+	testutil.RequireStatus(t, managementInstallRR, http.StatusOK)
+	assertObserved("/v0/management/plugin-store/demo/install", observedRequest{
+		method:        http.MethodPost,
+		path:          "/v0/management/plugin-store/demo/install",
+		query:         "source=official",
+		authorization: "Bearer management-key",
+	})
+
+	pluginManagementRR := testutil.Request(
+		t,
+		handler,
+		http.MethodPatch,
+		"/v0/management/plugins/demo/custom?mode=full",
+		`{"refresh":true}`,
+		testutil.AdminKey,
+	)
+	testutil.RequireStatus(t, pluginManagementRR, http.StatusOK)
+	assertObserved("/v0/management/plugins/demo/custom", observedRequest{
+		method:        http.MethodPatch,
+		path:          "/v0/management/plugins/demo/custom",
+		query:         "mode=full",
+		authorization: "Bearer management-key",
+		body:          `{"refresh":true}`,
+	})
+
+	resourcePostRR := testutil.Request(
+		t,
+		handler,
+		http.MethodPost,
+		"/v0/resource/plugins/codex-invite/invite",
+		"",
+		"",
+	)
+	testutil.RequireStatus(t, resourcePostRR, http.StatusMethodNotAllowed)
+
+	resourceRR := testutil.Request(
+		t,
+		handler,
+		http.MethodGet,
+		"/v0/resource/plugins/codex-invite/invite",
+		"",
+		"",
+	)
+	testutil.RequireStatus(t, resourceRR, http.StatusOK)
+	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
+		method:        http.MethodGet,
+		path:          "/v0/resource/plugins/codex-invite/invite",
+		authorization: "Bearer management-key",
+	})
 }
 
 func compatEvent(hash string, offset int64) usage.Event {

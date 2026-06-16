@@ -54,9 +54,9 @@ func TestClientPatchDisabledAndDelete(t *testing.T) {
 			return
 		}
 		switch r.Method + " " + r.URL.Path {
-		case "GET /auth-files":
+		case "GET /v0/management/auth-files":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{"name": "codex-auth.json", "auth_index": "7"}})
-		case "PATCH /auth-files":
+		case "PATCH /v0/management/auth-files/status":
 			var payload struct {
 				Name     string `json:"name"`
 				Disabled bool   `json:"disabled"`
@@ -70,7 +70,7 @@ func TestClientPatchDisabledAndDelete(t *testing.T) {
 			}
 			patched = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
-		case "DELETE /auth-files":
+		case "DELETE /v0/management/auth-files":
 			if r.URL.Query().Get("name") != "codex-auth.json" {
 				t.Fatalf("delete query = %s", r.URL.RawQuery)
 			}

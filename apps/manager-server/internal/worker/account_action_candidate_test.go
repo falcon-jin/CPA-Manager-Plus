@@ -102,7 +102,7 @@ func TestAccountActionCandidateWorkerAutoDisablesMatchingIdentity(t *testing.T) 
 			return
 		}
 		switch r.Method + " " + r.URL.Path {
-		case "GET /auth-files":
+		case "GET /v0/management/auth-files":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
 				"name":       "codex-auth.json",
 				"auth_index": "7",
@@ -111,7 +111,7 @@ func TestAccountActionCandidateWorkerAutoDisablesMatchingIdentity(t *testing.T) 
 				"account_id": "acct-123",
 				"disabled":   false,
 			}})
-		case "PATCH /auth-files":
+		case "PATCH /v0/management/auth-files/status":
 			var payload struct {
 				Name     string `json:"name"`
 				Disabled bool   `json:"disabled"`
@@ -166,7 +166,7 @@ func TestAccountActionCandidateWorkerAutoDisableRejectsIdentityMismatch(t *testi
 	var patched bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /auth-files":
+		case "GET /v0/management/auth-files":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
 				"name":       "codex-auth.json",
 				"auth_index": "7",
@@ -174,7 +174,7 @@ func TestAccountActionCandidateWorkerAutoDisableRejectsIdentityMismatch(t *testi
 				"account":    "different@example.com",
 				"account_id": "acct-456",
 			}})
-		case "PATCH /auth-files":
+		case "PATCH /v0/management/auth-files/status":
 			patched = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:
@@ -218,7 +218,7 @@ func TestAccountActionCandidateWorkerAutoDisablesReauth(t *testing.T) {
 	var patched bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /auth-files":
+		case "GET /v0/management/auth-files":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
 				"name":       "codex-auth.json",
 				"auth_index": "7",
@@ -227,7 +227,7 @@ func TestAccountActionCandidateWorkerAutoDisablesReauth(t *testing.T) {
 				"account_id": "acct-123",
 				"disabled":   false,
 			}})
-		case "PATCH /auth-files":
+		case "PATCH /v0/management/auth-files/status":
 			patched = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:
@@ -271,7 +271,7 @@ func TestAccountActionCandidateWorkerAutoDisableSkipsAlreadyDisabled(t *testing.
 	var patched bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /auth-files":
+		case "GET /v0/management/auth-files":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
 				"name":       "codex-auth.json",
 				"auth_index": "7",
@@ -280,7 +280,7 @@ func TestAccountActionCandidateWorkerAutoDisableSkipsAlreadyDisabled(t *testing.
 				"account_id": "acct-123",
 				"disabled":   true,
 			}})
-		case "PATCH /auth-files":
+		case "PATCH /v0/management/auth-files/status":
 			patched = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:

@@ -22,7 +22,7 @@ import (
 const (
 	quotaAutoDisableQueueSize     = 256
 	quotaAutoDisableDefaultTick   = 15 * time.Second
-	quotaAutoDisableActionTimeout = 15 * time.Second
+	quotaAutoDisableActionTimeout = 30 * time.Second
 	quotaCooldownDueLimit         = 100
 )
 
@@ -533,14 +533,6 @@ func (w *RateLimitAutoDisableWorker) currentAuthFile(ctx context.Context, baseUR
 	}
 	file, ok := cpaauthfiles.Find(files, fileName, authIndex)
 	return file, ok, nil
-}
-
-func (w *RateLimitAutoDisableWorker) disableAuthFile(ctx context.Context, baseURL string, managementKey string, fileName string) error {
-	return w.patchAuthFile(ctx, baseURL, managementKey, fileName, true)
-}
-
-func (w *RateLimitAutoDisableWorker) enableAuthFile(ctx context.Context, baseURL string, managementKey string, fileName string) error {
-	return w.patchAuthFile(ctx, baseURL, managementKey, fileName, false)
 }
 
 func (w *RateLimitAutoDisableWorker) patchAuthFile(ctx context.Context, baseURL string, managementKey string, fileName string, disabled bool) error {

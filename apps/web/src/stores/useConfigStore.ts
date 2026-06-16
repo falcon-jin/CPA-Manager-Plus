@@ -140,6 +140,13 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         case 'logging-to-file':
           nextConfig.loggingToFile = value as Config['loggingToFile'];
           break;
+        case 'plugins':
+          nextConfig.pluginsEnabled =
+            value !== null &&
+            typeof value === 'object' &&
+            !Array.isArray(value) &&
+            (value as { enabled?: unknown }).enabled === true;
+          break;
         case 'logs-max-total-size-mb':
           nextConfig.logsMaxTotalSizeMb = value as Config['logsMaxTotalSizeMb'];
           break;

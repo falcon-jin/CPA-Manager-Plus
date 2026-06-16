@@ -507,6 +507,12 @@ export const normalizeConfigResponse = (raw: unknown): Config => {
       config.logsMaxTotalSizeMb = parsed;
     }
   }
+  const plugins = raw.plugins;
+  if (isRecord(plugins)) {
+    config.pluginsEnabled = normalizeBoolean(plugins.enabled);
+  } else {
+    config.pluginsEnabled = normalizeBoolean(raw['plugins-enabled'] ?? raw.pluginsEnabled);
+  }
   config.wsAuth = normalizeBoolean(raw['ws-auth'] ?? raw.wsAuth);
   config.forceModelPrefix = normalizeBoolean(raw['force-model-prefix'] ?? raw.forceModelPrefix);
   const routing = raw.routing;

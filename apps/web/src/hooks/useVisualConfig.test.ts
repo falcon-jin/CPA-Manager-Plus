@@ -1,6 +1,7 @@
 import { act, createElement, createRef, useImperativeHandle, type Ref } from 'react';
 import { create, type ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { useVisualConfig } from './useVisualConfig';
 
 type UseVisualConfigResult = ReturnType<typeof useVisualConfig>;
@@ -41,6 +42,148 @@ const mountUseVisualConfig = (): UseVisualConfigHarness => {
 };
 
 describe('useVisualConfig', () => {
+  it('loads plugin system state from plugins.enabled', () => {
+    const harness = mountUseVisualConfig();
+    const yaml = ['plugins:', '  enabled: true', ''].join('\n');
+
+    act(() => {
+      const result = harness.getCurrent().loadVisualValuesFromYaml(yaml);
+      expect(result.ok).toBe(true);
+    });
+
+    expect(harness.getCurrent().visualValues.pluginsEnabled).toBe(true);
+    harness.unmount();
+  });
+
+  it('loads plugin directory and store sources from plugins config', () => {
+    const harness = mountUseVisualConfig();
+    const yaml = [
+      'plugins:',
+      '  enabled: true',
+      '  dir: /data/cpa/plugins',
+      '  store-sources:',
+      '    - https://plugins.example.com/official.json',
+      '    - https://plugins.example.com/private.json',
+      '',
+    ].join('\n');
+
+    act(() => {
+      const result = harness.getCurrent().loadVisualValuesFromYaml(yaml);
+      expect(result.ok).toBe(true);
+    });
+
+    expect(harness.getCurrent().visualValues.pluginsEnabled).toBe(true);
+    expect(harness.getCurrent().visualValues.pluginsDir).toBe('/data/cpa/plugins');
+    expect(harness.getCurrent().visualValues.pluginStoreSourcesText).toBe(
+      [
+        'https://plugins.example.com/official.json',
+        'https://plugins.example.com/private.json',
+      ].join('\n')
+    );
+
+    harness.unmount();
+  });
+
+  it('writes plugins.enabled when enabling plugin system from visual editor', () => {
+    const harness = mountUseVisualConfig();
+    const yaml = ['host: 127.0.0.1', ''].join('\n');
+
+    act(() => {
+      const result = harness.getCurrent().loadVisualValuesFromYaml(yaml);
+      expect(result.ok).toBe(true);
+    });
+
+    act(() => {
+      harness.getCurrent().setVisualValues({ pluginsEnabled: true });
+    });
+
+    const savedYaml = harness.getCurrent().applyVisualChangesToYaml(yaml);
+    expect(savedYaml).toContain('plugins:');
+    expect(savedYaml).toContain('enabled: true');
+
+    harness.unmount();
+  });
+
+  it('writes plugin directory and store sources while preserving plugin configs', () => {
+    const harness = mountUseVisualConfig();
+    const yaml = ['plugins:', '  configs:', '    demo:', '      enabled: true', ''].join('\n');
+
+    act(() => {
+      const result = harness.getCurrent().loadVisualValuesFromYaml(yaml);
+      expect(result.ok).toBe(true);
+    });
+
+    act(() => {
+      harness.getCurrent().setVisualValues({
+        pluginsDir: '/opt/cpa/plugins',
+        pluginStoreSourcesText: [
+          'https://plugins.example.com/official.json',
+          '',
+          ' https://plugins.example.com/private.json ',
+        ].join('\n'),
+      });
+    });
+
+    const savedYaml = harness.getCurrent().applyVisualChangesToYaml(yaml);
+    const parsed = parseYaml(savedYaml) as {
+      plugins?: {
+        dir?: string;
+        'store-sources'?: string[];
+        configs?: { demo?: { enabled?: boolean } };
+      };
+    };
+
+    expect(parsed.plugins?.dir).toBe('/opt/cpa/plugins');
+    expect(parsed.plugins?.['store-sources']).toEqual([
+      'https://plugins.example.com/official.json',
+      'https://plugins.example.com/private.json',
+    ]);
+    expect(parsed.plugins?.configs?.demo?.enabled).toBe(true);
+
+    harness.unmount();
+  });
+
+  it('clears plugin directory and store sources without removing plugin configs', () => {
+    const harness = mountUseVisualConfig();
+    const yaml = [
+      'plugins:',
+      '  dir: /opt/cpa/plugins',
+      '  store-sources:',
+      '    - https://plugins.example.com/official.json',
+      '  configs:',
+      '    demo:',
+      '      enabled: true',
+      '',
+    ].join('\n');
+
+    act(() => {
+      const result = harness.getCurrent().loadVisualValuesFromYaml(yaml);
+      expect(result.ok).toBe(true);
+    });
+
+    act(() => {
+      harness.getCurrent().setVisualValues({
+        pluginsDir: '',
+        pluginStoreSourcesText: '',
+      });
+    });
+
+    const savedYaml = harness.getCurrent().applyVisualChangesToYaml(yaml);
+    const parsed = parseYaml(savedYaml) as {
+      plugins?: {
+        dir?: string;
+        'store-sources'?: string[];
+        configs?: { demo?: { enabled?: boolean } };
+      };
+    };
+
+    expect(parsed.plugins?.dir).toBeUndefined();
+    expect(parsed.plugins?.['store-sources']).toBeUndefined();
+    expect(parsed.plugins?.configs?.demo?.enabled).toBe(true);
+
+    harness.unmount();
+  });
+
   it('clears camelCase codex identityConfuse when disabling from visual editor', () => {
     const harness = mountUseVisualConfig();
     const yaml = [

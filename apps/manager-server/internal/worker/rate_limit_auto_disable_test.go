@@ -110,34 +110,37 @@ func TestRateLimitAutoDisableWorkerRecoversDueCooldownFromManagerRuntimeConfigAf
 			return
 		}
 		switch r.URL.Path {
-		case "/auth-files", "/v0/management/auth-files":
-			switch r.Method {
-			case http.MethodGet:
-				mu.Lock()
-				currentDisabled := disabled
-				mu.Unlock()
-				_ = json.NewEncoder(w).Encode([]map[string]any{{
-					"name":       "codex-auth.json",
-					"auth_index": "auth-1",
-					"disabled":   currentDisabled,
-				}})
-			case http.MethodPatch:
-				var item struct {
-					Name     string `json:"name"`
-					Disabled bool   `json:"disabled"`
-				}
-				if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
-				mu.Lock()
-				disabled = item.Disabled
-				patches++
-				mu.Unlock()
-				w.WriteHeader(http.StatusOK)
-			default:
+		case "/v0/management/auth-files":
+			if r.Method != http.MethodGet {
 				http.NotFound(w, r)
+				return
 			}
+			mu.Lock()
+			currentDisabled := disabled
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"name":       "codex-auth.json",
+				"auth_index": "auth-1",
+				"disabled":   currentDisabled,
+			}})
+		case "/v0/management/auth-files/status":
+			if r.Method != http.MethodPatch {
+				http.NotFound(w, r)
+				return
+			}
+			var item struct {
+				Name     string `json:"name"`
+				Disabled bool   `json:"disabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			disabled = item.Disabled
+			patches++
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
 		case "/v0/management/usage-queue":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[]`))
@@ -215,7 +218,7 @@ func TestRateLimitAutoDisableWorkerPersistsAndRecoversAfterRestart(t *testing.T)
 			http.Error(w, "missing auth", http.StatusUnauthorized)
 			return
 		}
-		if r.URL.Path != "/auth-files" {
+		if r.URL.Path != "/v0/management/auth-files" && r.URL.Path != "/v0/management/auth-files/status" {
 			http.NotFound(w, r)
 			return
 		}
@@ -230,6 +233,10 @@ func TestRateLimitAutoDisableWorkerPersistsAndRecoversAfterRestart(t *testing.T)
 				"disabled":  currentDisabled,
 			}})
 		case http.MethodPatch:
+			if r.URL.Path != "/v0/management/auth-files/status" {
+				http.NotFound(w, r)
+				return
+			}
 			var item action
 			if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)

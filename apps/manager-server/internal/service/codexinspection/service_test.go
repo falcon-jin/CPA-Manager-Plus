@@ -22,11 +22,11 @@ import (
 func TestRunPersistsLogsResultsAndDetail(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{"status_code":401,"body":{"message":"unauthorized"}}`))
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodDelete:
+		case strings.HasPrefix(r.URL.Path, "/v0/management/auth-files") && r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:
@@ -88,11 +88,11 @@ func TestRunAutoActionNoneDoesNotExecuteActions(t *testing.T) {
 	var patchCalled bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","disabled":true,"status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{"status_code":200,"body":{"ok":true}}`))
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodPatch:
+		case strings.HasPrefix(r.URL.Path, "/v0/management/auth-files") && r.Method == http.MethodPatch:
 			patchCalled = true
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:
@@ -129,11 +129,11 @@ func TestRunAutoActionEnableEnablesRecoveredDisabledAccount(t *testing.T) {
 	var patchedDisabled bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","disabled":true,"status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{"status_code":200,"body":{"ok":true}}`))
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodPatch:
+		case strings.HasPrefix(r.URL.Path, "/v0/management/auth-files") && r.Method == http.MethodPatch:
 			patchCalled = true
 			var payload struct {
 				Name     string `json:"name"`
@@ -191,11 +191,11 @@ func TestRunAutoActionDisableExecutesDeleteSuggestionAsDisable(t *testing.T) {
 	var patchedDisabled bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{"status_code":401,"body":{"message":"Your authentication token has been invalidated."}}`))
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodPatch:
+		case strings.HasPrefix(r.URL.Path, "/v0/management/auth-files") && r.Method == http.MethodPatch:
 			patchCalled = true
 			var payload struct {
 				Name     string `json:"name"`
@@ -209,7 +209,7 @@ func TestRunAutoActionDisableExecutesDeleteSuggestionAsDisable(t *testing.T) {
 			}
 			patchedDisabled = payload.Disabled
 			_, _ = w.Write([]byte(`{"ok":true}`))
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodDelete:
+		case strings.HasPrefix(r.URL.Path, "/v0/management/auth-files") && r.Method == http.MethodDelete:
 			deleteCalled = true
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:
@@ -376,11 +376,11 @@ func TestRunAutoActionSkipsDuplicateFileNameResults(t *testing.T) {
 	var deleteCalls int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"},{"name":"auth-a.json","auth_index":"auth-2","provider":"codex","account":"bob@example.com","status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{"status_code":401,"body":{"message":"Your authentication token has been invalidated."}}`))
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodDelete:
+		case strings.HasPrefix(r.URL.Path, "/v0/management/auth-files") && r.Method == http.MethodDelete:
 			deleteCalls++
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:
@@ -498,11 +498,11 @@ func TestRunClassifiesExpiredUnauthorizedAsReauth(t *testing.T) {
 	var deleteCalled bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{"status_code":401,"body":{"message":"Provided authentication token is expired. Please try signing in again."}}`))
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodDelete:
+		case strings.HasPrefix(r.URL.Path, "/v0/management/auth-files") && r.Method == http.MethodDelete:
 			deleteCalled = true
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:
@@ -538,9 +538,9 @@ func TestRunClassifiesExpiredUnauthorizedAsReauth(t *testing.T) {
 func TestRunClassifiesInvalidatedUnauthorizedAsDelete(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{"status_code":401,"body":{"message":"Your authentication token has been invalidated. Please try signing in again."}}`))
 		default:
 			http.NotFound(w, r)
@@ -777,9 +777,9 @@ func TestResolveProbeActionUsesMonthlyWindowAsLongQuota(t *testing.T) {
 func TestRunSuggestsDeleteForDeactivatedWorkspace(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{"status_code":402,"body":{"detail":{"code":"deactivated_workspace"}}}`))
 		default:
 			http.NotFound(w, r)
@@ -810,55 +810,14 @@ func TestRunSuggestsDeleteForDeactivatedWorkspace(t *testing.T) {
 	}
 }
 
-func TestRunFallsBackToManagementAPICallPath(t *testing.T) {
-	var legacyAPICalls int
-	var managementAPICalls int
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
-			http.NotFound(w, r)
-		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
-			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
-			legacyAPICalls++
-			http.NotFound(w, r)
-		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
-			managementAPICalls++
-			_, _ = w.Write([]byte(`{"status_code":200,"body":{"ok":true}}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(upstream.Close)
-
-	db := newCodexInspectionTestStore(t)
-	if err := db.SaveManagerConfig(context.Background(), newCodexInspectionManagerConfig(upstream.URL)); err != nil {
-		t.Fatalf("save manager config: %v", err)
-	}
-	svc := newCodexInspectionTestService(t, db)
-
-	result, err := svc.Run(context.Background(), RunRequest{
-		TriggerType: "manual",
-		TriggerKey:  "manual",
-	})
-	if err != nil {
-		t.Fatalf("run inspection: %v", err)
-	}
-	if result.Run.Status != model.CodexInspectionStatusCompleted {
-		t.Fatalf("run status = %q", result.Run.Status)
-	}
-	if legacyAPICalls != 1 || managementAPICalls != 1 {
-		t.Fatalf("api-call counts legacy=%d management=%d, want 1/1", legacyAPICalls, managementAPICalls)
-	}
-}
 
 func TestRunSendsDirectCodexAccountIDHeader(t *testing.T) {
 	var accountIDHeader string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account_id":"acct-direct","account":"alice@example.com","status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			var payload struct {
 				Header map[string]string `json:"header"`
 			}
@@ -890,144 +849,17 @@ func TestRunSendsDirectCodexAccountIDHeader(t *testing.T) {
 	}
 }
 
-func TestRunFallsBackToManagementAuthFileActionPath(t *testing.T) {
-	var legacyDeleteCalls int
-	var managementDeleteCalls int
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
-			http.NotFound(w, r)
-		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
-			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
-			http.NotFound(w, r)
-		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
-			_, _ = w.Write([]byte(`{"status_code":401,"body":{"message":"unauthorized"}}`))
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodDelete:
-			legacyDeleteCalls++
-			http.NotFound(w, r)
-		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodDelete:
-			managementDeleteCalls++
-			if r.URL.Query().Get("name") != "auth-a.json" {
-				t.Fatalf("delete name = %q, want auth-a.json", r.URL.Query().Get("name"))
-			}
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(upstream.Close)
 
-	db := newCodexInspectionTestStore(t)
-	if err := db.SaveManagerConfig(context.Background(), newCodexInspectionManagerConfig(upstream.URL)); err != nil {
-		t.Fatalf("save manager config: %v", err)
-	}
-	svc := newCodexInspectionTestService(t, db)
-
-	result, err := svc.Run(context.Background(), RunRequest{
-		TriggerType: "manual",
-		TriggerKey:  "manual",
-	})
-	if err != nil {
-		t.Fatalf("run inspection: %v", err)
-	}
-	if result.Run.DeleteCount != 1 || result.Run.KeepCount != 0 {
-		t.Fatalf("run counts delete=%d keep=%d, want 1/0", result.Run.DeleteCount, result.Run.KeepCount)
-	}
-	if result.Results[0].Action != "delete" ||
-		result.Results[0].ActionStatus != model.CodexInspectionActionStatusSuccess ||
-		result.Results[0].ExecutedAction != "delete" {
-		t.Fatalf("result after delete = %#v", result.Results[0])
-	}
-	if result.Run.Error != "" {
-		t.Fatalf("run error = %q", result.Run.Error)
-	}
-	if legacyDeleteCalls != 1 || managementDeleteCalls != 1 {
-		t.Fatalf("delete counts legacy=%d management=%d, want 1/1", legacyDeleteCalls, managementDeleteCalls)
-	}
-}
-
-func TestRunFallsBackToManagementAuthFileStatusActionPath(t *testing.T) {
-	var legacyPatchCalls int
-	var managementPatchCalls int
-	var patchedDisabled bool
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
-			http.NotFound(w, r)
-		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
-			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
-			http.NotFound(w, r)
-		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
-			_, _ = w.Write([]byte(`{"status_code":402,"body":{"message":"limit reached"}}`))
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodPatch:
-			legacyPatchCalls++
-			http.NotFound(w, r)
-		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodPatch:
-			managementPatchCalls++
-			var payload struct {
-				Name     string `json:"name"`
-				Disabled bool   `json:"disabled"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Fatalf("decode patch payload: %v", err)
-			}
-			if payload.Name != "auth-a.json" {
-				t.Fatalf("patch name = %q, want auth-a.json", payload.Name)
-			}
-			patchedDisabled = payload.Disabled
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(upstream.Close)
-
-	db := newCodexInspectionTestStore(t)
-	if err := db.SaveManagerConfig(context.Background(), newCodexInspectionManagerConfig(upstream.URL)); err != nil {
-		t.Fatalf("save manager config: %v", err)
-	}
-	svc := newCodexInspectionTestService(t, db)
-
-	result, err := svc.Run(context.Background(), RunRequest{
-		TriggerType: "manual",
-		TriggerKey:  "manual",
-	})
-	if err != nil {
-		t.Fatalf("run inspection: %v", err)
-	}
-	if result.Run.DisableCount != 1 || result.Run.KeepCount != 0 {
-		t.Fatalf("run counts disable=%d keep=%d, want 1/0", result.Run.DisableCount, result.Run.KeepCount)
-	}
-	if result.Run.DisabledCount != 1 {
-		t.Fatalf("disabled count = %d, want 1", result.Run.DisabledCount)
-	}
-	if result.Run.Error != "" {
-		t.Fatalf("run error = %q", result.Run.Error)
-	}
-	if legacyPatchCalls != 2 || managementPatchCalls != 1 {
-		t.Fatalf("patch counts legacy=%d management=%d, want 2/1", legacyPatchCalls, managementPatchCalls)
-	}
-	if !patchedDisabled {
-		t.Fatal("management patch did not disable the auth file")
-	}
-	if result.Results[0].Action != "disable" ||
-		result.Results[0].ActionStatus != model.CodexInspectionActionStatusSuccess ||
-		result.Results[0].ExecutedAction != "disable" {
-		t.Fatalf("result after disable = %#v", result.Results[0])
-	}
-}
 
 func TestExecuteManualActionsProcessesCompletedRunResults(t *testing.T) {
 	var patchCalled bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","disabled":true,"status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{"status_code":200,"body":{"ok":true}}`))
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodPatch:
+		case strings.HasPrefix(r.URL.Path, "/v0/management/auth-files") && r.Method == http.MethodPatch:
 			patchCalled = true
 			var payload struct {
 				Name     string `json:"name"`
@@ -1093,16 +925,16 @@ func TestExecuteManualActionsRejectsChangedAuthIndex(t *testing.T) {
 	var deleteCalled bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			authFilesCalls++
 			if authFilesCalls == 1 {
 				_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
 				return
 			}
 			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-2","provider":"codex","account":"bob@example.com","status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{"status_code":401,"body":{"message":"Your authentication token has been invalidated."}}`))
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodDelete:
+		case strings.HasPrefix(r.URL.Path, "/v0/management/auth-files") && r.Method == http.MethodDelete:
 			deleteCalled = true
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:
@@ -1151,16 +983,16 @@ func TestExecuteManualActionsRejectsMissingAuthFile(t *testing.T) {
 	var patchCalled bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			authFilesCalls++
 			if authFilesCalls == 1 {
 				_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
 				return
 			}
 			_, _ = w.Write([]byte(`{"files":[]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{"status_code":402,"body":{"message":"limit reached"}}`))
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodPatch:
+		case strings.HasPrefix(r.URL.Path, "/v0/management/auth-files") && r.Method == http.MethodPatch:
 			patchCalled = true
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:
@@ -1207,11 +1039,11 @@ func TestExecuteManualActionsSkipsDuplicateFileNameSelections(t *testing.T) {
 	var deleteCalls int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"},{"name":"auth-a.json","auth_index":"auth-2","provider":"codex","account":"bob@example.com","status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{"status_code":401,"body":{"message":"Your authentication token has been invalidated."}}`))
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodDelete:
+		case strings.HasPrefix(r.URL.Path, "/v0/management/auth-files") && r.Method == http.MethodDelete:
 			deleteCalls++
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:
@@ -1262,9 +1094,9 @@ func TestRunFinalizesAfterContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","status":"ok","state":"ready"}]}`))
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			cancel()
 			time.Sleep(20 * time.Millisecond)
 			_, _ = w.Write([]byte(`{"status_code":200,"body":{"ok":true}}`))
@@ -1303,12 +1135,10 @@ func TestRunFinalizesAfterContextCancellation(t *testing.T) {
 	}
 }
 
-func TestExecuteActionReturnsCombinedPatchFallbackErrors(t *testing.T) {
+func TestExecuteActionReturnsPatchError(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPatch && r.URL.Path == "/auth-files":
-			http.Error(w, "primary patch failed", http.StatusInternalServerError)
-		case r.Method == http.MethodPatch && r.URL.Path == "/auth-files/status":
+		case r.Method == http.MethodPatch && r.URL.Path == "/v0/management/auth-files/status":
 			http.Error(w, "status patch failed", http.StatusInternalServerError)
 		default:
 			http.NotFound(w, r)
@@ -1325,14 +1155,11 @@ func TestExecuteActionReturnsCombinedPatchFallbackErrors(t *testing.T) {
 		Action:   "disable",
 	})
 	if err == nil {
-		t.Fatal("execute action succeeded, want combined patch error")
+		t.Fatal("execute action succeeded, want patch error")
 	}
 	message := err.Error()
-	if !strings.Contains(message, "/auth-files:") ||
-		!strings.Contains(message, "primary patch failed") ||
-		!strings.Contains(message, "/auth-files/status:") ||
-		!strings.Contains(message, "status patch failed") {
-		t.Fatalf("combined patch error = %q", message)
+	if !strings.Contains(message, "status patch failed") {
+		t.Fatalf("patch error = %q", message)
 	}
 }
 
@@ -1411,7 +1238,7 @@ func newMixedAutoActionServer(
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/auth-files" && r.Method == http.MethodGet:
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
 			switch fixture {
 			case mixedAutoActionFixtureEnableDelete:
 				_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","disabled":true,"status":"ok","state":"ready"},{"name":"auth-a.json","auth_index":"auth-2","provider":"codex","account":"bob@example.com","status":"ok","state":"ready"}]}`))
@@ -1420,7 +1247,7 @@ func newMixedAutoActionServer(
 			default:
 				t.Fatalf("unexpected mixed fixture %q", fixture)
 			}
-		case r.URL.Path == "/api-call" && r.Method == http.MethodPost:
+		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			var payload struct {
 				AuthIndex string `json:"authIndex"`
 			}
@@ -1439,10 +1266,10 @@ func newMixedAutoActionServer(
 			default:
 				t.Fatalf("unexpected authIndex %q", payload.AuthIndex)
 			}
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodDelete:
+		case strings.HasPrefix(r.URL.Path, "/v0/management/auth-files") && r.Method == http.MethodDelete:
 			*deleteCalled = true
 			_, _ = w.Write([]byte(`{"ok":true}`))
-		case strings.HasPrefix(r.URL.Path, "/auth-files") && r.Method == http.MethodPatch:
+		case strings.HasPrefix(r.URL.Path, "/v0/management/auth-files") && r.Method == http.MethodPatch:
 			*patchCalled = true
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:

@@ -188,6 +188,8 @@ export function VisualConfigEditor({
   const routingStrategyHintId = `${routingStrategyLabelId}-hint`;
   const disableImageGenerationLabelId = useId();
   const disableImageGenerationHintId = `${disableImageGenerationLabelId}-hint`;
+  const pluginStoreSourcesInputId = useId();
+  const pluginStoreSourcesHintId = `${pluginStoreSourcesInputId}-hint`;
   const keepaliveInputId = useId();
   const keepaliveHintId = `${keepaliveInputId}-hint`;
   const keepaliveErrorId = `${keepaliveInputId}-error`;
@@ -454,7 +456,8 @@ export function VisualConfigEditor({
         220
       );
       const maxHeight = Math.max(window.innerHeight - top - viewportPadding, 160);
-      const isVisible = workspaceRect.bottom > stickyTop + 24 && anchorRect.top < window.innerHeight;
+      const isVisible =
+        workspaceRect.bottom > stickyTop + 24 && anchorRect.top < window.innerHeight;
 
       floatingElement.style.transform = `translate3d(${left}px, ${top}px, 0)`;
       floatingElement.style.width = `${width}px`;
@@ -773,6 +776,13 @@ export function VisualConfigEditor({
                   onChange={(loggingToFile) => onChange({ loggingToFile })}
                 />
                 <ToggleRow
+                  title={t('config_management.visual.sections.system.plugins_enabled')}
+                  description={t('config_management.visual.sections.system.plugins_enabled_desc')}
+                  checked={values.pluginsEnabled}
+                  disabled={disabled}
+                  onChange={(pluginsEnabled) => onChange({ pluginsEnabled })}
+                />
+                <ToggleRow
                   title={t('config_management.visual.sections.system.antigravity_signature_cache')}
                   description={t(
                     'config_management.visual.sections.system.antigravity_signature_cache_desc'
@@ -794,6 +804,34 @@ export function VisualConfigEditor({
                     onChange({ antigravitySignatureBypassStrict })
                   }
                 />
+              </SectionGrid>
+
+              <SectionGrid>
+                <Input
+                  label={t('config_management.visual.sections.system.plugins_dir')}
+                  placeholder="plugins"
+                  value={values.pluginsDir}
+                  onChange={(e) => onChange({ pluginsDir: e.target.value })}
+                  disabled={disabled}
+                  hint={t('config_management.visual.sections.system.plugins_dir_desc')}
+                />
+                <FieldShell
+                  label={t('config_management.visual.sections.system.plugin_store_sources')}
+                  htmlFor={pluginStoreSourcesInputId}
+                  hint={t('config_management.visual.sections.system.plugin_store_sources_desc')}
+                  hintId={pluginStoreSourcesHintId}
+                >
+                  <textarea
+                    id={pluginStoreSourcesInputId}
+                    className="input"
+                    rows={4}
+                    value={values.pluginStoreSourcesText}
+                    onChange={(e) => onChange({ pluginStoreSourcesText: e.target.value })}
+                    disabled={disabled}
+                    aria-describedby={pluginStoreSourcesHintId}
+                    placeholder="https://example.com/plugins.json"
+                  />
+                </FieldShell>
               </SectionGrid>
 
               <SectionGrid>
@@ -822,9 +860,7 @@ export function VisualConfigEditor({
                   max="3600"
                   placeholder="60"
                   value={values.redisUsageQueueRetentionSeconds}
-                  onChange={(e) =>
-                    onChange({ redisUsageQueueRetentionSeconds: e.target.value })
-                  }
+                  onChange={(e) => onChange({ redisUsageQueueRetentionSeconds: e.target.value })}
                   disabled={disabled}
                   hint={t(
                     'config_management.visual.sections.system.redis_usage_queue_retention_hint'
@@ -1041,17 +1077,13 @@ export function VisualConfigEditor({
                       <Input
                         label={t('config_management.visual.sections.headers.package_version')}
                         value={values.claudeHeaderPackageVersion}
-                        onChange={(e) =>
-                          onChange({ claudeHeaderPackageVersion: e.target.value })
-                        }
+                        onChange={(e) => onChange({ claudeHeaderPackageVersion: e.target.value })}
                         disabled={disabled}
                       />
                       <Input
                         label={t('config_management.visual.sections.headers.runtime_version')}
                         value={values.claudeHeaderRuntimeVersion}
-                        onChange={(e) =>
-                          onChange({ claudeHeaderRuntimeVersion: e.target.value })
-                        }
+                        onChange={(e) => onChange({ claudeHeaderRuntimeVersion: e.target.value })}
                         disabled={disabled}
                       />
                       <Input
@@ -1144,9 +1176,7 @@ export function VisualConfigEditor({
               />
               <ToggleRow
                 title={t('config_management.visual.sections.quota.antigravity_credits')}
-                description={t(
-                  'config_management.visual.sections.quota.antigravity_credits_desc'
-                )}
+                description={t('config_management.visual.sections.quota.antigravity_credits_desc')}
                 checked={values.quotaAntigravityCredits}
                 disabled={disabled}
                 onChange={(quotaAntigravityCredits) => onChange({ quotaAntigravityCredits })}

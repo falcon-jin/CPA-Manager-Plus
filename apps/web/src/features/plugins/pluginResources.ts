@@ -1,0 +1,91 @@
+import type { PluginListEntry, PluginMenu } from '@/types';
+import { normalizeApiBase } from '@/utils/connection';
+
+export const PLUGIN_RESOURCES_REFRESH_EVENT = 'plugin-resources-refresh';
+export const PLUGIN_RESOURCES_SETTLE_REFRESH_DELAY_MS = 1600;
+
+export const notifyPluginResourcesChanged = (options?: { delayMs?: number }) => {
+  const dispatch = () => window.dispatchEvent(new Event(PLUGIN_RESOURCES_REFRESH_EVENT));
+  const delayMs = options?.delayMs ?? 0;
+  if (delayMs > 0) {
+    window.setTimeout(dispatch, delayMs);
+    return;
+  }
+  dispatch();
+};
+
+export const isPluginManagementNavVisible = ({
+  supportsPlugin,
+}: {
+  supportsPlugin: boolean;
+}) => supportsPlugin;
+
+export const isPluginResourceNavVisible = ({
+  supportsPlugin,
+  pluginsEnabled,
+}: {
+  supportsPlugin: boolean;
+  pluginsEnabled?: boolean | null;
+}) => supportsPlugin && pluginsEnabled === true;
+
+export interface PluginResourceEntry {
+  pluginID: string;
+  pluginTitle: string;
+  pluginLogo: string;
+  menuIndex: number;
+  menu: PluginMenu;
+  label: string;
+  description: string;
+  route: string;
+}
+
+export const getPluginTitle = (plugin: PluginListEntry) =>
+  plugin.metadata?.name.trim() || plugin.id;
+
+export const buildPluginResourceRoute = (pluginID: string, menuIndex: number) =>
+  `/plugin-pages/${encodeURIComponent(pluginID)}/${menuIndex}`;
+
+export const resolvePluginAssetURL = (value: string, apiBase: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (/^(https?:|data:|blob:)/i.test(trimmed)) return trimmed;
+  if (!trimmed.startsWith('/')) return trimmed;
+  const base = normalizeApiBase(apiBase);
+  return base ? `${base}${trimmed}` : trimmed;
+};
+
+export const buildRepositoryURL = (repository: string) => {
+  const trimmed = repository.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://github.com/${trimmed.replace(/^\/+/, '')}`;
+};
+
+export const collectPluginResourceEntries = (
+  plugins: PluginListEntry[]
+): PluginResourceEntry[] =>
+  plugins.flatMap((plugin) => {
+    if (!plugin.effectiveEnabled) return [];
+
+    const pluginTitle = getPluginTitle(plugin);
+    const pluginLogo = plugin.logo || plugin.metadata?.logo || '';
+
+    return plugin.menus
+      .map((menu, menuIndex): PluginResourceEntry | null => {
+        const path = menu.path.trim();
+        if (!path) return null;
+
+        const menuLabel = menu.menu.trim();
+        return {
+          pluginID: plugin.id,
+          pluginTitle,
+          pluginLogo,
+          menuIndex,
+          menu: { ...menu, path },
+          label: menuLabel || pluginTitle,
+          description: menu.description.trim() || pluginTitle,
+          route: buildPluginResourceRoute(plugin.id, menuIndex),
+        };
+      })
+      .filter((entry): entry is PluginResourceEntry => Boolean(entry));
+  });

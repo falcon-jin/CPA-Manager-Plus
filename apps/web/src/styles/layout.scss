@@ -26,6 +26,10 @@
   &.sidebar-is-collapsed {
     --sidebar-active-width: var(--sidebar-collapsed-width);
   }
+
+  &.plugin-resource-shell {
+    background: var(--bg-primary);
+  }
 }
 
 .main-body {
@@ -474,6 +478,14 @@
     height: var(--sidebar-icon-size);
     display: block;
   }
+
+  img {
+    width: var(--sidebar-icon-size);
+    height: var(--sidebar-icon-size);
+    display: block;
+    object-fit: contain;
+    border-radius: 5px;
+  }
 }
 
 .nav-label {
@@ -498,6 +510,11 @@
   &.content-logs {
     overflow: hidden;
   }
+
+  &.content-plugin-resource {
+    overflow: hidden;
+    scrollbar-gutter: auto;
+  }
 }
 
 .main-content {
@@ -516,6 +533,14 @@
   &.main-content-logs {
     height: 100vh;
     min-height: 0;
+    overflow: hidden;
+  }
+
+  &.main-content-plugin-resource {
+    height: 100vh;
+    min-height: 0;
+    padding: var(--header-height) 0 0;
+    gap: 0;
     overflow: hidden;
   }
 }
@@ -628,6 +653,17 @@
       height: auto;
       overflow: visible;
     }
+
+    &.content-plugin-resource {
+      height: 100vh;
+      min-height: 100vh;
+      overflow: hidden;
+
+      @supports (height: 100dvh) {
+        height: 100dvh;
+        min-height: 100dvh;
+      }
+    }
   }
 
   .main-content {
@@ -638,6 +674,13 @@
       height: auto;
       min-height: 100vh;
       overflow: visible;
+    }
+
+    &.main-content-plugin-resource {
+      height: 100%;
+      min-height: 0;
+      padding: var(--header-height) 0 0;
+      overflow: hidden;
     }
   }
 }

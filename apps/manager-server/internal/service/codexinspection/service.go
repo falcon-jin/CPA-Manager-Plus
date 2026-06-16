@@ -116,11 +116,6 @@ type fileActionGroup struct {
 	Mixed    bool
 }
 
-type actionEndpointError struct {
-	Endpoint string
-	Err      error
-}
-
 type unauthorizedReason string
 
 const (
@@ -474,15 +469,8 @@ func (s *Service) failRun(ctx context.Context, run model.CodexInspectionRun, cau
 }
 
 func (s *Service) fetchAuthFiles(ctx context.Context, setup store.Setup) ([]authFile, error) {
-	files, status, err := s.fetchAuthFilesAt(ctx, setup, "/auth-files")
-	if err == nil {
-		return files, nil
-	}
-	if status == http.StatusNotFound || status == http.StatusMethodNotAllowed {
-		files, _, err := s.fetchAuthFilesAt(ctx, setup, "/v0/management/auth-files")
-		return files, err
-	}
-	return nil, err
+	files, _, err := s.fetchAuthFilesAt(ctx, setup, "/v0/management/auth-files")
+	return files, err
 }
 
 func (s *Service) fetchAuthFilesAt(ctx context.Context, setup store.Setup, path string) ([]authFile, int, error) {
@@ -678,15 +666,8 @@ func (s *Service) requestCodexUsage(
 	settings model.ManagerCodexInspectionConfig,
 	item account,
 ) (apiCallResponse, error) {
-	result, status, err := s.requestCodexUsageAt(ctx, setup, settings, item, "/api-call")
-	if err == nil {
-		return result, nil
-	}
-	if status == http.StatusNotFound || status == http.StatusMethodNotAllowed {
-		result, _, err := s.requestCodexUsageAt(ctx, setup, settings, item, "/v0/management/api-call")
-		return result, err
-	}
-	return apiCallResponse{}, err
+	result, _, err := s.requestCodexUsageAt(ctx, setup, settings, item, "/v0/management/api-call")
+	return result, err
 }
 
 func (s *Service) requestCodexUsageAt(
@@ -881,44 +862,12 @@ func collectActionOutcomes(outcomes <-chan ActionOutcome, capacity int) []Action
 func (s *Service) executeAction(ctx context.Context, setup store.Setup, item model.CodexInspectionResult) error {
 	switch item.Action {
 	case "delete":
-		if err, status := s.deleteAuthFile(ctx, setup, "/auth-files", item.FileName); err != nil {
-			if shouldFallbackManagement(status) {
-				return s.deleteAuthFileOnly(ctx, setup, "/v0/management/auth-files", item.FileName)
-			}
-			return err
-		}
-		return nil
+		return s.deleteAuthFileOnly(ctx, setup, "/v0/management/auth-files", item.FileName)
 	case "disable", "enable":
 		disabled := item.Action == "disable"
 		payload := map[string]any{"name": item.FileName, "disabled": disabled}
-		primaryErr, primaryStatus := s.patchAuthFile(ctx, setup, "/auth-files", payload)
-		if primaryErr == nil {
-			return nil
-		}
-		statusErr, statusCode := s.patchAuthFile(ctx, setup, "/auth-files/status", payload)
-		if statusErr == nil {
-			return nil
-		}
-		if shouldFallbackManagement(primaryStatus) && shouldFallbackManagement(statusCode) {
-			managementErr, _ := s.patchAuthFile(ctx, setup, "/v0/management/auth-files", payload)
-			if managementErr == nil {
-				return nil
-			}
-			managementStatusErr, _ := s.patchAuthFile(ctx, setup, "/v0/management/auth-files/status", payload)
-			if managementStatusErr == nil {
-				return nil
-			}
-			return combineActionEndpointErrors(
-				actionEndpointError{Endpoint: "/auth-files", Err: primaryErr},
-				actionEndpointError{Endpoint: "/auth-files/status", Err: statusErr},
-				actionEndpointError{Endpoint: "/v0/management/auth-files", Err: managementErr},
-				actionEndpointError{Endpoint: "/v0/management/auth-files/status", Err: managementStatusErr},
-			)
-		}
-		return combineActionEndpointErrors(
-			actionEndpointError{Endpoint: "/auth-files", Err: primaryErr},
-			actionEndpointError{Endpoint: "/auth-files/status", Err: statusErr},
-		)
+		err, _ := s.patchAuthFile(ctx, setup, "/v0/management/auth-files/status", payload)
+		return err
 	default:
 		return nil
 	}
@@ -936,25 +885,6 @@ func (s *Service) deleteAuthFile(ctx context.Context, setup store.Setup, path st
 		return err, 0
 	}
 	return s.doCPAAction(req, setup.ManagementKey)
-}
-
-func (s *Service) patchAuthFileOnly(ctx context.Context, setup store.Setup, path string, payload map[string]any) error {
-	err, _ := s.patchAuthFile(ctx, setup, path, payload)
-	return err
-}
-
-func combineActionEndpointErrors(items ...actionEndpointError) error {
-	parts := make([]string, 0, len(items))
-	for _, item := range items {
-		if item.Err == nil {
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("%s: %v", item.Endpoint, item.Err))
-	}
-	if len(parts) == 0 {
-		return nil
-	}
-	return errors.New(strings.Join(parts, "; "))
 }
 
 func (s *Service) patchAuthFile(ctx context.Context, setup store.Setup, path string, payload map[string]any) (error, int) {
@@ -993,10 +923,6 @@ func (s *Service) doCPAAction(req *http.Request, managementKey string) (error, i
 		}
 	}
 	return nil, res.StatusCode
-}
-
-func shouldFallbackManagement(status int) bool {
-	return status == http.StatusNotFound || status == http.StatusMethodNotAllowed
 }
 
 type runLogger struct {

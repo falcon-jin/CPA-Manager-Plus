@@ -26,7 +26,7 @@ func TestEnableValidatesCurrentAuthFileBeforePatch(t *testing.T) {
 	var patched bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /auth-files":
+		case "GET /v0/management/auth-files":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
 				"name":       "codex-auth.json",
 				"auth_index": "7",
@@ -35,7 +35,7 @@ func TestEnableValidatesCurrentAuthFileBeforePatch(t *testing.T) {
 				"account_id": "acct-123",
 				"disabled":   true,
 			}})
-		case "PATCH /auth-files":
+		case "PATCH /v0/management/auth-files/status":
 			patched = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:
@@ -66,7 +66,7 @@ func TestEnableValidatesCurrentAuthFileBeforePatch(t *testing.T) {
 		t.Fatalf("enable: %v", err)
 	}
 	if !patched {
-		t.Fatal("expected PATCH /auth-files")
+		t.Fatal("expected PATCH /v0/management/auth-files/status")
 	}
 	if updated.Status != model.AccountActionStatusResolved {
 		t.Fatalf("status = %q", updated.Status)
@@ -84,7 +84,7 @@ func TestDeleteRejectsMismatchedCurrentAuthFile(t *testing.T) {
 	var deleted bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /auth-files":
+		case "GET /v0/management/auth-files":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
 				"name":       "codex-auth.json",
 				"auth_index": "7",
@@ -92,7 +92,7 @@ func TestDeleteRejectsMismatchedCurrentAuthFile(t *testing.T) {
 				"account":    "different@example.com",
 				"account_id": "acct-456",
 			}})
-		case "DELETE /auth-files":
+		case "DELETE /v0/management/auth-files":
 			deleted = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:
@@ -145,7 +145,7 @@ func TestDeleteAcceptsCurrentAuthFileProjectID(t *testing.T) {
 	var deleted bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /auth-files":
+		case "GET /v0/management/auth-files":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
 				"name":       "gemini-auth.json",
 				"auth_index": "gemini-1",
@@ -153,7 +153,7 @@ func TestDeleteAcceptsCurrentAuthFileProjectID(t *testing.T) {
 				"account":    "vertex@example.com",
 				"project_id": "vertex-project-42",
 			}})
-		case "DELETE /auth-files":
+		case "DELETE /v0/management/auth-files":
 			deleted = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:
@@ -184,7 +184,7 @@ func TestDeleteAcceptsCurrentAuthFileProjectID(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 	if !deleted {
-		t.Fatal("expected DELETE /auth-files")
+		t.Fatal("expected DELETE /v0/management/auth-files")
 	}
 	if updated.Status != model.AccountActionStatusDeleted {
 		t.Fatalf("status = %q", updated.Status)

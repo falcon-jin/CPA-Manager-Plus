@@ -803,7 +803,7 @@ export interface MonitoringAnalyticsResponse {
   events?: MonitoringAnalyticsEventsResponse;
 }
 
-const USAGE_SERVICE_TIMEOUT_MS = 15 * 1000;
+const USAGE_SERVICE_TIMEOUT_MS = 30 * 1000;
 const USAGE_SERVICE_TRANSFER_TIMEOUT_MS = 60 * 1000;
 const CODEX_INSPECTION_RUN_TIMEOUT_MS = 10 * 60 * 1000;
 export const USAGE_SERVICE_ID = 'cpa-manager-plus';

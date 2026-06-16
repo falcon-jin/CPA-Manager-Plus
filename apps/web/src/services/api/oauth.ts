@@ -4,13 +4,14 @@
 
 import { apiClient } from './client';
 
-export type OAuthProvider =
+export type BuiltInOAuthProvider =
   | 'codex'
   | 'anthropic'
   | 'antigravity'
   | 'gemini-cli'
   | 'kimi'
   | 'xai';
+export type OAuthProvider = BuiltInOAuthProvider | (string & {});
 
 export interface OAuthStartResponse {
   url: string;
@@ -21,15 +22,9 @@ export interface OAuthCallbackResponse {
   status: 'ok';
 }
 
-const WEBUI_SUPPORTED: OAuthProvider[] = [
-  'codex',
-  'anthropic',
-  'antigravity',
-  'gemini-cli',
-  'xai'
-];
-const CALLBACK_PROVIDER_MAP: Partial<Record<OAuthProvider, string>> = {
-  'gemini-cli': 'gemini'
+const WEBUI_SUPPORTED: string[] = ['codex', 'anthropic', 'antigravity', 'gemini-cli', 'xai'];
+const CALLBACK_PROVIDER_MAP: Partial<Record<string, string>> = {
+  'gemini-cli': 'gemini',
 };
 
 export const oauthApi = {
@@ -42,20 +37,20 @@ export const oauthApi = {
       params.project_id = options.projectId;
     }
     return apiClient.get<OAuthStartResponse>(`/${provider}-auth-url`, {
-      params: Object.keys(params).length ? params : undefined
+      params: Object.keys(params).length ? params : undefined,
     });
   },
 
   getAuthStatus: (state: string) =>
     apiClient.get<{ status: 'ok' | 'wait' | 'error'; error?: string }>(`/get-auth-status`, {
-      params: { state }
+      params: { state },
     }),
 
   submitCallback: (provider: OAuthProvider, redirectUrl: string) => {
     const callbackProvider = CALLBACK_PROVIDER_MAP[provider] ?? provider;
     return apiClient.post<OAuthCallbackResponse>('/oauth-callback', {
       provider: callbackProvider,
-      redirect_url: redirectUrl
+      redirect_url: redirectUrl,
     });
-  }
+  },
 };

@@ -16,7 +16,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/cpa"
 )
 
-const DefaultTimeout = 15 * time.Second
+const DefaultTimeout = 30 * time.Second
 
 var ErrAuthFileNotFound = errors.New("CPA auth file not found")
 
@@ -56,40 +56,32 @@ func New(client *http.Client, timeout ...time.Duration) *Client {
 	return &Client{httpClient: client, timeout: d}
 }
 
+const authFilesPath = "/v0/management/auth-files"
+const authFilesStatusPath = "/v0/management/auth-files/status"
+
 func (c *Client) Fetch(ctx context.Context, baseURL string, managementKey string) ([]File, error) {
 	base := cpa.NormalizeBaseURL(baseURL)
-	paths := []string{"/auth-files", "/v0/management/auth-files"}
-	var endpointErrors []error
-	for _, path := range paths {
-		reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, base+path, nil)
-		if err != nil {
-			cancel()
-			endpointErrors = append(endpointErrors, fmt.Errorf("GET %s: %w", path, err))
-			continue
-		}
-		req.Header.Set("Authorization", "Bearer "+managementKey)
-		res, err := c.httpClient.Do(req)
-		if err != nil {
-			cancel()
-			endpointErrors = append(endpointErrors, fmt.Errorf("GET %s: %w", path, err))
-			continue
-		}
-		body, _ := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
-		_ = res.Body.Close()
-		cancel()
-		if res.StatusCode < 200 || res.StatusCode >= 300 {
-			endpointErrors = append(endpointErrors, fmt.Errorf("GET %s: HTTP %d %s", path, res.StatusCode, strings.TrimSpace(string(body))))
-			continue
-		}
-		files, err := Parse(body)
-		if err != nil {
-			endpointErrors = append(endpointErrors, fmt.Errorf("GET %s: %w", path, err))
-			continue
-		}
-		return files, nil
+	reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, base+authFilesPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", authFilesPath, err)
 	}
-	return nil, combineErrors(endpointErrors...)
+	req.Header.Set("Authorization", "Bearer "+managementKey)
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", authFilesPath, err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, fmt.Errorf("GET %s: HTTP %d %s", authFilesPath, res.StatusCode, strings.TrimSpace(string(body)))
+	}
+	files, err := Parse(body)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", authFilesPath, err)
+	}
+	return files, nil
 }
 
 func Parse(body []byte) ([]File, error) {
@@ -145,68 +137,49 @@ func (c *Client) PatchDisabled(ctx context.Context, baseURL string, managementKe
 		return fmt.Errorf("marshal payload: %w", err)
 	}
 	base := cpa.NormalizeBaseURL(baseURL)
-	paths := []string{"/auth-files", "/auth-files/status", "/v0/management/auth-files", "/v0/management/auth-files/status"}
-	var endpointErrors []error
-	for _, path := range paths {
-		reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodPatch, base+path, bytes.NewReader(data))
-		if err != nil {
-			cancel()
-			endpointErrors = append(endpointErrors, fmt.Errorf("PATCH %s: %w", path, err))
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+managementKey)
-		res, err := c.httpClient.Do(req)
-		if err != nil {
-			cancel()
-			endpointErrors = append(endpointErrors, fmt.Errorf("PATCH %s: %w", path, err))
-			continue
-		}
-		body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-		_ = res.Body.Close()
-		cancel()
-		if res.StatusCode >= 200 && res.StatusCode < 300 {
-			return nil
-		}
-		endpointErrors = append(endpointErrors, fmt.Errorf("PATCH %s: HTTP %d %s", path, res.StatusCode, strings.TrimSpace(string(body))))
+	reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPatch, base+authFilesStatusPath, bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("PATCH %s: %w", authFilesStatusPath, err)
 	}
-	return combineErrors(endpointErrors...)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+managementKey)
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("PATCH %s: %w", authFilesStatusPath, err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+	if res.StatusCode >= 200 && res.StatusCode < 300 {
+		return nil
+	}
+	return fmt.Errorf("PATCH %s: HTTP %d %s", authFilesStatusPath, res.StatusCode, strings.TrimSpace(string(body)))
 }
 
 func (c *Client) Delete(ctx context.Context, baseURL string, managementKey string, fileName string) error {
 	base := cpa.NormalizeBaseURL(baseURL)
-	paths := []string{"/auth-files", "/v0/management/auth-files"}
-	var endpointErrors []error
-	for _, path := range paths {
-		reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
-		endpoint := base + path + "?name=" + url.QueryEscape(fileName)
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodDelete, endpoint, nil)
-		if err != nil {
-			cancel()
-			endpointErrors = append(endpointErrors, fmt.Errorf("DELETE %s: %w", path, err))
-			continue
-		}
-		req.Header.Set("Authorization", "Bearer "+managementKey)
-		res, err := c.httpClient.Do(req)
-		if err != nil {
-			cancel()
-			endpointErrors = append(endpointErrors, fmt.Errorf("DELETE %s: %w", path, err))
-			continue
-		}
-		body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-		_ = res.Body.Close()
-		cancel()
-		if res.StatusCode >= 200 && res.StatusCode < 300 {
-			if actionFailed(body) {
-				endpointErrors = append(endpointErrors, fmt.Errorf("DELETE %s: CPA action failed", path))
-				continue
-			}
-			return nil
-		}
-		endpointErrors = append(endpointErrors, fmt.Errorf("DELETE %s: HTTP %d %s", path, res.StatusCode, strings.TrimSpace(string(body))))
+	reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	endpoint := base + authFilesPath + "?name=" + url.QueryEscape(fileName)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("DELETE %s: %w", authFilesPath, err)
 	}
-	return combineErrors(endpointErrors...)
+	req.Header.Set("Authorization", "Bearer "+managementKey)
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("DELETE %s: %w", authFilesPath, err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+	if res.StatusCode >= 200 && res.StatusCode < 300 {
+		if actionFailed(body) {
+			return fmt.Errorf("DELETE %s: CPA action failed", authFilesPath)
+		}
+		return nil
+	}
+	return fmt.Errorf("DELETE %s: HTTP %d %s", authFilesPath, res.StatusCode, strings.TrimSpace(string(body)))
 }
 
 func filesFromJSON(value any) []File {
@@ -288,17 +261,4 @@ func actionFailed(body []byte) bool {
 	}
 	failed, ok := payload["failed"].([]any)
 	return ok && len(failed) > 0
-}
-
-func combineErrors(errs ...error) error {
-	parts := make([]string, 0, len(errs))
-	for _, err := range errs {
-		if err != nil {
-			parts = append(parts, err.Error())
-		}
-	}
-	if len(parts) == 0 {
-		return nil
-	}
-	return errors.New(strings.Join(parts, "; "))
 }

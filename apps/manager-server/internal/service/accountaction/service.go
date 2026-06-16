@@ -32,7 +32,7 @@ type ListResponse struct {
 type authFile = cpaauthfiles.File
 
 func New(st *store.Store, managerConfigService *managerconfigsvc.Service, clients ...*http.Client) *Service {
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: 30 * time.Second}
 	if len(clients) > 0 && clients[0] != nil {
 		client = clients[0]
 	}

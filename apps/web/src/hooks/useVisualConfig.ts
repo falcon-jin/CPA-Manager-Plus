@@ -60,6 +60,14 @@ function parseApiKeysText(raw: unknown): string {
   return keys.join('\n');
 }
 
+function parseStringArrayText(raw: unknown): string {
+  if (!Array.isArray(raw)) return '';
+  return raw
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean)
+    .join('\n');
+}
+
 function resolveApiKeysText(parsed: Record<string, unknown>): string {
   if (Object.prototype.hasOwnProperty.call(parsed, 'api-keys')) {
     return parseApiKeysText(parsed['api-keys']);
@@ -183,9 +191,7 @@ function getPortError(value: string): 'port_range' | undefined {
   return parsed >= 1 && parsed <= 65535 ? undefined : 'port_range';
 }
 
-function getRedisUsageQueueRetentionError(
-  value: string
-): 'retention_seconds_range' | undefined {
+function getRedisUsageQueueRetentionError(value: string): 'retention_seconds_range' | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   if (!/^\d+$/.test(trimmed)) return 'retention_seconds_range';
@@ -308,6 +314,9 @@ function getNextDirtyFields(
     [
       'rmDisableAutoUpdatePanel',
       'errorLogsMaxFiles',
+      'pluginsEnabled',
+      'pluginsDir',
+      'pluginStoreSourcesText',
       'passthroughHeaders',
       'disableCooling',
       'disableImageGeneration',
@@ -388,8 +397,7 @@ function getNextDirtyFields(
   if (Object.prototype.hasOwnProperty.call(patch, 'redisUsageQueueRetentionSeconds')) {
     updateDirty(
       'redisUsageQueueRetentionSeconds',
-      nextValues.redisUsageQueueRetentionSeconds ===
-        baselineValues.redisUsageQueueRetentionSeconds
+      nextValues.redisUsageQueueRetentionSeconds === baselineValues.redisUsageQueueRetentionSeconds
     );
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'proxyUrl')) {
@@ -587,6 +595,7 @@ export function useVisualConfig() {
       const remoteManagement = asRecord(parsed['remote-management']);
       const quotaExceeded = asRecord(parsed['quota-exceeded']);
       const routing = asRecord(parsed.routing);
+      const plugins = asRecord(parsed.plugins);
       const payload = asRecord(parsed.payload);
       const streaming = asRecord(parsed.streaming);
       const claudeHeaderDefaults = asRecord(parsed['claude-header-defaults']);
@@ -617,6 +626,11 @@ export function useVisualConfig() {
 
         authDir: typeof parsed['auth-dir'] === 'string' ? parsed['auth-dir'] : '',
         apiKeysText: resolveApiKeysText(parsed),
+        pluginsEnabled: Boolean(plugins?.enabled),
+        pluginsDir: typeof plugins?.dir === 'string' ? plugins.dir : '',
+        pluginStoreSourcesText: parseStringArrayText(
+          plugins?.['store-sources'] ?? plugins?.storeSources
+        ),
 
         debug: Boolean(parsed.debug),
         commercialMode: Boolean(parsed['commercial-mode']),
@@ -683,9 +697,7 @@ export function useVisualConfig() {
 
         routingStrategy: routing?.strategy === 'fill-first' ? 'fill-first' : 'round-robin',
         routingSessionAffinity: Boolean(
-          routing?.['session-affinity'] ??
-            routing?.sessionAffinity ??
-            routing?.['sessionAffinity']
+          routing?.['session-affinity'] ?? routing?.sessionAffinity ?? routing?.['sessionAffinity']
         ),
         routingSessionAffinityTTL:
           typeof routing?.['session-affinity-ttl'] === 'string'
@@ -804,6 +816,53 @@ export function useVisualConfig() {
             ['redis-usage-queue-retention-seconds'],
             values.redisUsageQueueRetentionSeconds
           );
+        }
+
+        const pluginStoreSources = values.pluginStoreSourcesText
+          .split('\n')
+          .map((source) => source.trim())
+          .filter(Boolean);
+        const shouldWritePluginsEnabled = shouldWriteManagedField(
+          doc,
+          ['plugins', 'enabled'],
+          dirtyFields,
+          'pluginsEnabled'
+        );
+        const shouldWritePluginsDir =
+          Boolean(values.pluginsDir.trim()) ||
+          shouldWriteManagedField(doc, ['plugins', 'dir'], dirtyFields, 'pluginsDir');
+        const shouldWritePluginStoreSources =
+          pluginStoreSources.length > 0 ||
+          shouldWriteManagedField(
+            doc,
+            ['plugins', 'store-sources'],
+            dirtyFields,
+            'pluginStoreSourcesText'
+          );
+        if (
+          docHas(doc, ['plugins']) ||
+          values.pluginsEnabled ||
+          shouldWritePluginsEnabled ||
+          shouldWritePluginsDir ||
+          shouldWritePluginStoreSources
+        ) {
+          ensureMapInDoc(doc, ['plugins']);
+          setBooleanInDoc(doc, ['plugins', 'enabled'], values.pluginsEnabled);
+          if (shouldWritePluginsDir) {
+            if (values.pluginsDir.trim()) {
+              doc.setIn(['plugins', 'dir'], values.pluginsDir);
+            } else if (docHas(doc, ['plugins', 'dir'])) {
+              doc.deleteIn(['plugins', 'dir']);
+            }
+          }
+          if (shouldWritePluginStoreSources) {
+            if (pluginStoreSources.length > 0) {
+              doc.setIn(['plugins', 'store-sources'], pluginStoreSources);
+            } else if (docHas(doc, ['plugins', 'store-sources'])) {
+              doc.deleteIn(['plugins', 'store-sources']);
+            }
+          }
+          deleteIfMapEmpty(doc, ['plugins']);
         }
 
         setStringInDoc(doc, ['proxy-url'], values.proxyUrl);
@@ -932,10 +991,7 @@ export function useVisualConfig() {
           doc.setIn(['quota-exceeded', 'switch-project'], values.quotaSwitchProject);
           doc.setIn(['quota-exceeded', 'switch-preview-model'], values.quotaSwitchPreviewModel);
           if (writeQuotaAntigravityCredits) {
-            doc.setIn(
-              ['quota-exceeded', 'antigravity-credits'],
-              values.quotaAntigravityCredits
-            );
+            doc.setIn(['quota-exceeded', 'antigravity-credits'], values.quotaAntigravityCredits);
           }
           deleteIfMapEmpty(doc, ['quota-exceeded']);
         }
