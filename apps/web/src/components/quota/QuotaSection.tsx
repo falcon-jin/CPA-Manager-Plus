@@ -110,6 +110,7 @@ interface QuotaSectionProps<TState extends QuotaStatusState, TData> {
   sortMode?: QuotaSortMode;
   viewMode?: QuotaSectionViewMode;
   onViewModeChange?: (viewMode: QuotaSectionViewMode) => void;
+  onReauthAccount?: (item: AuthFileItem) => void;
 }
 
 export function QuotaSection<TState extends QuotaStatusState, TData>({
@@ -121,6 +122,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
   sortMode = 'default',
   viewMode,
   onViewModeChange,
+  onReauthAccount,
 }: QuotaSectionProps<TState, TData>) {
   const { t } = useTranslation();
   const resolvedTheme: ResolvedTheme = useThemeStore((state) => state.resolvedTheme);
@@ -466,6 +468,13 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
                 !item.disabled &&
                 (config.canResetQuota?.(item, itemQuota) ??
                   Boolean(itemQuota && itemQuota.status === 'success'));
+              const canReauth =
+                config.type === 'codex' &&
+                itemQuota?.status === 'error' &&
+                itemQuota.errorStatus === 401 &&
+                !disabled &&
+                !item.disabled &&
+                Boolean(onReauthAccount);
 
               return (
                 <QuotaCard
@@ -486,6 +495,8 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
                       : undefined
                   }
                   onReset={canReset ? () => resetQuotaForFile(item) : undefined}
+                  canReauth={canReauth}
+                  onReauth={canReauth ? () => onReauthAccount?.(item) : undefined}
                   renderQuotaItems={config.renderQuotaItems}
                 />
               );

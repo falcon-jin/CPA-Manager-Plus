@@ -1,5 +1,6 @@
 import type {
   CodexInspectionLastRunState,
+  CodexInspectionQuotaWindow,
   CodexInspectionResultItem,
   CodexInspectionRunResult,
   CodexInspectionSettings,
@@ -85,6 +86,51 @@ const normalizeStoredSettings = (value: unknown): CodexInspectionSettings => {
 
 type StoredCodexInspectionResultItem = Omit<CodexInspectionResultItem, 'raw'>;
 
+const normalizeQuotaWindowLabelParams = (
+  value: unknown
+): Record<string, string | number> | undefined => {
+  if (!isRecord(value)) return undefined;
+  const params: Record<string, string | number> = {};
+  Object.entries(value).forEach(([key, raw]) => {
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      params[key] = raw;
+      return;
+    }
+    const text = readString(raw);
+    if (text) {
+      params[key] = text;
+    }
+  });
+  return Object.keys(params).length > 0 ? params : undefined;
+};
+
+const serializeQuotaWindow = (
+  window: CodexInspectionQuotaWindow
+): CodexInspectionQuotaWindow => ({
+  id: readString(window.id),
+  labelKey: readString(window.labelKey),
+  labelParams: normalizeQuotaWindowLabelParams(window.labelParams),
+  usedPercent: readNullableNumber(window.usedPercent),
+  resetLabel: readString(window.resetLabel),
+  limitWindowSeconds: readNullableNumber(window.limitWindowSeconds),
+});
+
+const hydrateQuotaWindow = (value: unknown): CodexInspectionQuotaWindow | null => {
+  if (!isRecord(value)) return null;
+  const id = readString(value.id);
+  const labelKey = readString(value.labelKey);
+  if (!id || !labelKey) return null;
+
+  return {
+    id,
+    labelKey,
+    labelParams: normalizeQuotaWindowLabelParams(value.labelParams),
+    usedPercent: readNullableNumber(value.usedPercent),
+    resetLabel: readString(value.resetLabel),
+    limitWindowSeconds: readNullableNumber(value.limitWindowSeconds),
+  };
+};
+
 const serializeResultItemForStorage = (
   item: CodexInspectionResultItem
 ): StoredCodexInspectionResultItem => ({
@@ -103,6 +149,10 @@ const serializeResultItemForStorage = (
   usedPercent: item.usedPercent,
   isQuota: item.isQuota,
   error: item.error,
+  planType: readNullableString(item.planType),
+  quotaWindows: (item.quotaWindows ?? []).map(serializeQuotaWindow),
+  errorKind: readString(item.errorKind),
+  errorDetail: readString(item.errorDetail),
 });
 
 const hydrateStoredResultItem = (
@@ -140,6 +190,14 @@ const hydrateStoredResultItem = (
     usedPercent: readNullableNumber(value.usedPercent),
     isQuota: readBoolean(value.isQuota, false),
     error: readString(value.error),
+    planType: readNullableString(value.planType),
+    quotaWindows: Array.isArray(value.quotaWindows)
+      ? value.quotaWindows
+          .map(hydrateQuotaWindow)
+          .filter((item): item is CodexInspectionQuotaWindow => item !== null)
+      : [],
+    errorKind: readString(value.errorKind),
+    errorDetail: readString(value.errorDetail),
   };
 };
 

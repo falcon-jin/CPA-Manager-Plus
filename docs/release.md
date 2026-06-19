@@ -50,14 +50,16 @@ log fallback.
 ## Writing Template
 
 Chinese is the authored source. Other languages should preserve the same
-structure, links, and statistics.
+structure, links, and statistics. Language switch links must be tag-pinned
+GitHub blob URLs under `docs/release-notes/` because GitHub Releases render the
+curated note body outside that directory.
 
 ```markdown
 # CPA Manager Plus <version>
 
 > <n> commits · <files> files changed · +<added> / -<deleted>
 
-> [English ->](./<version>-en.md)
+> [English ->](https://github.com/seakee/CPA-Manager-Plus/blob/<version>/docs/release-notes/<version>-en.md)
 
 ## Overview
 

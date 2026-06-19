@@ -20,6 +20,33 @@ describe('source resolver', () => {
     expect(resolved.identityKey).toBe('codex:0');
   });
 
+  it('keeps shared upstream names when one key is registered under Codex and Claude', () => {
+    const sharedKey = 'sk-shared1234567890abcdef';
+    const sourceInfoMap = buildSourceInfoMap({
+      codexApiKeys: [
+        {
+          apiKey: sharedKey,
+          prefix: 'Shared Relay',
+          baseUrl: 'https://api.shared.example/v1',
+        },
+      ],
+      claudeApiKeys: [
+        {
+          apiKey: sharedKey,
+          prefix: 'Shared Relay',
+          baseUrl: 'https://api.shared.example/v1',
+        },
+      ],
+    });
+
+    const resolved = resolveSourceDisplay('m:sk-s...cdef', '', sourceInfoMap, new Map());
+
+    expect(resolved.displayName).toBe('Shared Relay');
+    expect(resolved.type).toBe('');
+    expect(resolved.identityKey).toBe('shared:m:sk-s...cdef');
+    expect(resolved.displayName).not.toContain('sk-shared');
+  });
+
   it('distinguishes multiple keys from the same base URL without exposing raw keys', () => {
     const sourceInfoMap = buildSourceInfoMap({
       codexApiKeys: [

@@ -16,10 +16,12 @@ import {
   buildAccountOptions,
   buildApiKeyOptionsFromRows,
   buildChannelOptionsFromValues,
+  buildMonitoringInitialStateFromQuery,
   buildModelOptionsFromValues,
   buildProviderOptionsFromValues,
   requestAccountQuota,
 } from './monitoringCenterPageModel';
+import { getDefaultMonitoringCenterUiState } from '@/features/monitoring/monitoringCenterUiState';
 
 vi.mock('@/utils/quota', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/utils/quota')>();
@@ -143,6 +145,29 @@ const createApiKeyRow = (apiKeyHash: string, label: string): MonitoringApiKeyRow
 });
 
 describe('monitoringCenterPageModel filter options', () => {
+  it('maps usage analytics drilldown query into initial realtime filters', () => {
+    const initialState = {
+      ...getDefaultMonitoringCenterUiState(),
+      searchInput: 'retained search',
+    };
+    const state = buildMonitoringInitialStateFromQuery(
+      '?from_ms=1780000000000&to_ms=1780003600000&model=gpt-4o&api_key_hash=abcdef1234&status=failed&provider=OpenAI&auth_file=codex-auth.json&project_id=project-1&request_type=codex&search=req-42&min_latency_ms=10000&cache_status=hit',
+      initialState
+    );
+
+    expect(state).toMatchObject({
+      activeDataTab: 'realtime',
+      timeRange: 'custom',
+      selectedModel: 'gpt-4o',
+      selectedApiKeyHash: 'abcdef1234',
+      selectedStatus: 'failed',
+      selectedProvider: 'OpenAI',
+      searchInput: 'req-42',
+    });
+    expect(state.customStartInput).toBeTruthy();
+    expect(state.customEndInput).toBeTruthy();
+  });
+
   it('keeps alternate candidates when a dynamic filter already has a selected value', () => {
     expect(
       buildProviderOptionsFromValues(['codex', 'gemini'], 'codex', t).map((item) => item.value)

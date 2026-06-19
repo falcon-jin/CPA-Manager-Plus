@@ -39,6 +39,9 @@ type Config struct {
 	QuotaCooldownEnabled      bool
 	AccountActionsEnabled     bool
 	AccountActionsAutoDisable bool
+	QuotaCooldownEnvSet       bool
+	AccountActionsEnvSet      bool
+	AccountActionsAutoEnvSet  bool
 }
 
 type LoadOptions struct {
@@ -135,6 +138,9 @@ func LoadWithOptions(options LoadOptions) (Config, error) {
 		QuotaCooldownEnabled:      envBool("USAGE_QUOTA_COOLDOWN_ENABLED", cfgFile.QuotaCooldownEnabled),
 		AccountActionsEnabled:     envBool("USAGE_ACCOUNT_ACTIONS_ENABLED", cfgFile.AccountActionsEnabled),
 		AccountActionsAutoDisable: envBool("USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE", cfgFile.AccountActionsAutoDisable),
+		QuotaCooldownEnvSet:       hasEnv("USAGE_QUOTA_COOLDOWN_ENABLED"),
+		AccountActionsEnvSet:      hasEnv("USAGE_ACCOUNT_ACTIONS_ENABLED"),
+		AccountActionsAutoEnvSet:  hasEnv("USAGE_ACCOUNT_ACTIONS_AUTO_DISABLE"),
 	}, nil
 }
 

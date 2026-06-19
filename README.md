@@ -409,7 +409,7 @@ Failure bodies from CPA usage events are treated as sensitive diagnostics. Manag
 
 - **Dashboard**: connection state, backend version, quick health summary
 - **Configuration**: visual/source editing for CPA configuration, including Codex `identity-confuse`, and separate CPA Manager Plus configuration
-- **AI Providers**: Gemini, Codex, Claude, Vertex, OpenAI-compatible providers, and Ampcode
+- **AI Providers**: Gemini, Codex, Claude, Vertex, and OpenAI-compatible providers
 - **Auth Files**: upload, download, delete, status, OAuth exclusions, model aliases
 - **Quota**: quota views for supported providers
 - **Request Monitoring**: persisted usage KPIs, model/channel/account/API-key breakdowns, requested vs resolved model tracking, project snapshots, model pricing, estimated token cost, failure analysis, realtime tables with a readable source label and one prioritized supplemental detail

@@ -28,6 +28,8 @@ const (
 	codexFiveHourWindow = 18_000
 	codexWeekWindow     = 604_800
 	codexMonthWindow    = 2_592_000
+	codexMinMonthWindow = 28 * 24 * 60 * 60
+	codexMaxMonthWindow = 31 * 24 * 60 * 60
 	maxStoredBodyText   = 2048
 )
 
@@ -139,6 +141,8 @@ type codexRateLimit struct {
 type codexWindow struct {
 	UsedPercent        *float64
 	LimitWindowSeconds *float64
+	ResetAfterSeconds  *float64
+	ResetAt            *float64
 }
 
 type codexClassifiedWindows struct {
@@ -146,6 +150,11 @@ type codexClassifiedWindows struct {
 	Weekly      *codexWindow
 	Monthly     *codexWindow
 	GenericLong *codexWindow
+}
+
+type codexWindowMeta struct {
+	ID       string
+	LabelKey string
 }
 
 func (w codexClassifiedWindows) longWindow() *codexWindow {
@@ -578,6 +587,8 @@ func (s *Service) inspectSingleAccount(
 		base.Action = "keep"
 		base.ActionReason = "缺少 auth_index，保留账号"
 		base.Error = "缺少 auth_index"
+		base.ErrorKind = "missing_auth_index"
+		base.ErrorDetail = "缺少 auth_index"
 		logger.warning(ctx, "账号缺少 auth_index，跳过探测", map[string]any{
 			"fileName":       item.FileName,
 			"displayAccount": item.DisplayAccount,
@@ -596,7 +607,9 @@ func (s *Service) inspectSingleAccount(
 	if err != nil {
 		base.Action = "keep"
 		base.ActionReason = "探测异常，保留账号"
-		base.Error = err.Error()
+		base.Error = truncate(err.Error(), maxStoredBodyText)
+		base.ErrorKind = "request_error"
+		base.ErrorDetail = truncate(err.Error(), maxStoredBodyText)
 		logger.warning(ctx, "账号探测异常，保留账号", map[string]any{
 			"fileName":       item.FileName,
 			"displayAccount": item.DisplayAccount,
@@ -608,6 +621,8 @@ func (s *Service) inspectSingleAccount(
 		base.Action = "keep"
 		base.ActionReason = "探测响应缺少 status_code，保留账号"
 		base.Error = "响应缺少 status_code"
+		base.ErrorKind = "missing_status"
+		base.ErrorDetail = firstNonEmpty(truncate(response.BodyText, maxStoredBodyText), "响应缺少 status_code")
 		logger.warning(ctx, "账号探测未返回 status_code，保留账号", map[string]any{
 			"fileName":       item.FileName,
 			"displayAccount": item.DisplayAccount,
@@ -623,6 +638,9 @@ func (s *Service) inspectSingleAccount(
 		payload = parseRecord(response.BodyText)
 	}
 	planType := normalizeCodexPlanType(readString(payload, "plan_type", "planType"))
+	if planType == "" {
+		planType = resolveCodexPlanType(item.File)
+	}
 	rateLimit := parseRateLimit(readMap(payload, "rate_limit", "rateLimit"))
 	usedPercent := deriveRateLimitUsedPercent(rateLimit)
 	bodyLower := strings.ToLower(response.BodyText)
@@ -638,7 +656,13 @@ func (s *Service) inspectSingleAccount(
 	base.ActionReason = decision.ActionReason
 	base.UsedPercent = decision.UsedPercent
 	base.IsQuota = decision.IsQuota
+	base.PlanType = planType
+	base.QuotaWindows = buildCodexInspectionQuotaWindows(payload, planType)
 	base.Error = ""
+	if statusCode < 200 || statusCode >= 300 {
+		base.ErrorKind = "http_status"
+		base.ErrorDetail = firstNonEmpty(truncate(response.BodyText, maxStoredBodyText), fmt.Sprintf("HTTP %d", statusCode))
+	}
 
 	level := "info"
 	switch decision.Action {
@@ -1113,15 +1137,15 @@ func resolveUnauthorizedProbeAction(bodyText string, usedPercent *float64) inspe
 		}
 	case unauthorizedReasonInvalidated:
 		return inspectionDecision{
-			Action:       "delete",
-			ActionReason: "接口返回 401，认证令牌已失效，建议删除账号",
+			Action:       "reauth",
+			ActionReason: "接口返回 401，认证令牌已失效，建议重新登录账号",
 			UsedPercent:  usedPercent,
 			IsQuota:      false,
 		}
 	default:
 		return inspectionDecision{
-			Action:       "delete",
-			ActionReason: "接口返回 401，建议删除失效账号",
+			Action:       "reauth",
+			ActionReason: "接口返回 401，认证失败，建议重新登录账号",
 			UsedPercent:  usedPercent,
 			IsQuota:      false,
 		}
@@ -1517,6 +1541,7 @@ func resultFromAccount(item account) model.CodexInspectionResult {
 		Disabled:       item.Disabled,
 		Status:         item.Status,
 		State:          item.State,
+		PlanType:       resolveCodexPlanType(item.File),
 		Action:         "keep",
 		ActionReason:   "无需处理",
 		IsQuota:        false,
@@ -1628,6 +1653,52 @@ func extractCodexAccountIDFromToken(value any) string {
 	return readAccountIDCandidate(payload)
 }
 
+func resolveCodexPlanType(file authFile) string {
+	metadata := readMap(file, "metadata")
+	attributes := readMap(file, "attributes")
+	candidates := []any{
+		file["plan_type"],
+		file["planType"],
+		extractCodexPlanTypeFromToken(file["id_token"]),
+		readMap(file, "id_token"),
+		metadata["plan_type"],
+		metadata["planType"],
+		extractCodexPlanTypeFromToken(metadata["id_token"]),
+		readMap(metadata, "id_token"),
+		attributes["plan_type"],
+		attributes["planType"],
+		extractCodexPlanTypeFromToken(attributes["id_token"]),
+	}
+	for _, candidate := range candidates {
+		if planType := readCodexPlanTypeCandidate(candidate); planType != "" {
+			return planType
+		}
+	}
+	return ""
+}
+
+func extractCodexPlanTypeFromToken(value any) string {
+	payload := parseIDTokenPayload(value)
+	if payload == nil {
+		return ""
+	}
+	return readCodexPlanTypeCandidate(payload)
+}
+
+func readCodexPlanTypeCandidate(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return normalizeCodexPlanType(typed)
+	case map[string]any:
+		return normalizeCodexPlanType(readString(typed, "plan_type", "planType"))
+	default:
+		return normalizeCodexPlanType(fmt.Sprint(value))
+	}
+}
+
 func readPlainString(value any) string {
 	text, ok := value.(string)
 	if !ok {
@@ -1706,6 +1777,12 @@ func parseWindow(raw map[string]any) *codexWindow {
 	if value, ok := readNumberPtr(raw, "limit_window_seconds", "limitWindowSeconds"); ok {
 		window.LimitWindowSeconds = value
 	}
+	if value, ok := readNumberPtr(raw, "reset_after_seconds", "resetAfterSeconds"); ok {
+		window.ResetAfterSeconds = value
+	}
+	if value, ok := readNumberPtr(raw, "reset_at", "resetAt"); ok {
+		window.ResetAt = value
+	}
 	return window
 }
 
@@ -1728,7 +1805,7 @@ func classifyWindows(limit *codexRateLimit, planType string) codexClassifiedWind
 			fiveHour = window
 		} else if seconds == codexWeekWindow && weekly == nil {
 			weekly = window
-		} else if seconds == codexMonthWindow && monthly == nil {
+		} else if (seconds == codexMonthWindow || isCodexMonthlyWindowSeconds(seconds)) && monthly == nil {
 			monthly = window
 		} else if seconds > codexFiveHourWindow && genericLong == nil {
 			genericLong = window
@@ -1745,6 +1822,262 @@ func classifyWindows(limit *codexRateLimit, planType string) codexClassifiedWind
 		weekly = limit.SecondaryWindow
 	}
 	return codexClassifiedWindows{FiveHour: fiveHour, Weekly: weekly, Monthly: monthly, GenericLong: genericLong}
+}
+
+func isCodexMonthlyWindowSeconds(seconds int) bool {
+	return seconds >= codexMinMonthWindow && seconds <= codexMaxMonthWindow
+}
+
+func buildCodexInspectionQuotaWindows(payload map[string]any, planType string) []model.CodexInspectionQuotaWindow {
+	if payload == nil {
+		return nil
+	}
+	teamPlan := normalizeCodexPlanType(firstNonEmpty(planType, readString(payload, "plan_type", "planType"))) == "team"
+	windows := make([]model.CodexInspectionQuotaWindow, 0)
+	addCodexRateLimitWindows(
+		&windows,
+		parseRateLimit(readMap(payload, "rate_limit", "rateLimit")),
+		codexWindowMeta{ID: "five-hour", LabelKey: "codex_quota.primary_window"},
+		codexWindowMeta{ID: "weekly", LabelKey: "codex_quota.secondary_window"},
+		codexWindowMeta{ID: "monthly", LabelKey: "codex_quota.monthly_window"},
+		"codex_quota.generic_window",
+		nil,
+		teamPlan,
+	)
+	addCodexRateLimitWindows(
+		&windows,
+		parseRateLimit(readMap(payload, "code_review_rate_limit", "codeReviewRateLimit")),
+		codexWindowMeta{ID: "code-review-five-hour", LabelKey: "codex_quota.code_review_primary_window"},
+		codexWindowMeta{ID: "code-review-weekly", LabelKey: "codex_quota.code_review_secondary_window"},
+		codexWindowMeta{ID: "code-review-monthly", LabelKey: "codex_quota.code_review_monthly_window"},
+		"codex_quota.code_review_generic_window",
+		nil,
+		teamPlan,
+	)
+	addAdditionalRateLimitWindows(&windows, readMapSlice(payload, "additional_rate_limits", "additionalRateLimits"), teamPlan)
+	return windows
+}
+
+func addCodexRateLimitWindows(
+	windows *[]model.CodexInspectionQuotaWindow,
+	limit *codexRateLimit,
+	fiveHourMeta codexWindowMeta,
+	weeklyMeta codexWindowMeta,
+	monthlyMeta codexWindowMeta,
+	genericLabelKey string,
+	genericLabelParams map[string]any,
+	teamPlan bool,
+) {
+	if limit == nil {
+		return
+	}
+	classified := classifyWindows(limit, codexPlanTypeForTeam(teamPlan))
+	added := make(map[*codexWindow]bool)
+	addCodexWindowInfo(windows, fiveHourMeta.ID, fiveHourMeta.LabelKey, genericLabelParams, classified.FiveHour, limit.LimitReached, limit.Allowed)
+	if classified.FiveHour != nil {
+		added[classified.FiveHour] = true
+	}
+	addCodexWindowInfo(windows, weeklyMeta.ID, weeklyMeta.LabelKey, genericLabelParams, classified.Weekly, limit.LimitReached, limit.Allowed)
+	if classified.Weekly != nil {
+		added[classified.Weekly] = true
+	}
+	addCodexWindowInfo(windows, monthlyMeta.ID, monthlyMeta.LabelKey, genericLabelParams, classified.Monthly, limit.LimitReached, limit.Allowed)
+	if classified.Monthly != nil {
+		added[classified.Monthly] = true
+	}
+	for index, window := range codexRateLimitWindows(limit) {
+		if window == nil || added[window] {
+			continue
+		}
+		duration := formatCodexWindowDuration(window.LimitWindowSeconds)
+		prefix := ""
+		if name, ok := genericLabelParams["name"]; ok {
+			if normalizedName := normalizeCodexWindowID(fmt.Sprint(name)); normalizedName != "" {
+				prefix = normalizedName + "-"
+			}
+		}
+		addCodexWindowInfo(
+			windows,
+			fmt.Sprintf("%swindow-%s-%d", prefix, duration, index),
+			genericLabelKey,
+			withCodexWindowDurationParam(genericLabelParams, duration),
+			window,
+			limit.LimitReached,
+			limit.Allowed,
+		)
+	}
+}
+
+func codexPlanTypeForTeam(teamPlan bool) string {
+	if teamPlan {
+		return "team"
+	}
+	return ""
+}
+
+func codexRateLimitWindows(limit *codexRateLimit) []*codexWindow {
+	if limit == nil {
+		return nil
+	}
+	return []*codexWindow{limit.PrimaryWindow, limit.SecondaryWindow}
+}
+
+func addCodexWindowInfo(
+	windows *[]model.CodexInspectionQuotaWindow,
+	id string,
+	labelKey string,
+	labelParams map[string]any,
+	window *codexWindow,
+	limitReached bool,
+	allowed *bool,
+) {
+	if window == nil {
+		return
+	}
+	resetLabel := formatCodexResetLabel(window)
+	usedPercent := window.UsedPercent
+	if usedPercent == nil && (limitReached || (allowed != nil && !*allowed)) && resetLabel != "-" {
+		usedPercent = ptrFloat(100)
+	}
+	*windows = append(*windows, model.CodexInspectionQuotaWindow{
+		ID:                 id,
+		LabelKey:           labelKey,
+		LabelParams:        copyCodexLabelParams(labelParams),
+		UsedPercent:        usedPercent,
+		ResetLabel:         resetLabel,
+		LimitWindowSeconds: window.LimitWindowSeconds,
+	})
+}
+
+func addAdditionalRateLimitWindows(windows *[]model.CodexInspectionQuotaWindow, additionalRateLimits []map[string]any, teamPlan bool) {
+	for index, limitItem := range additionalRateLimits {
+		rateInfo := parseRateLimit(readMap(limitItem, "rate_limit", "rateLimit"))
+		if rateInfo == nil {
+			continue
+		}
+		limitName := firstNonEmpty(
+			readString(limitItem, "limit_name", "limitName"),
+			readString(limitItem, "metered_feature", "meteredFeature"),
+			fmt.Sprintf("additional-%d", index+1),
+		)
+		idPrefix := normalizeCodexWindowID(limitName)
+		if idPrefix == "" {
+			idPrefix = fmt.Sprintf("additional-%d", index+1)
+		}
+		addCodexRateLimitWindows(
+			windows,
+			rateInfo,
+			codexWindowMeta{ID: fmt.Sprintf("%s-five-hour-%d", idPrefix, index), LabelKey: "codex_quota.additional_primary_window"},
+			codexWindowMeta{ID: fmt.Sprintf("%s-weekly-%d", idPrefix, index), LabelKey: "codex_quota.additional_secondary_window"},
+			codexWindowMeta{ID: fmt.Sprintf("%s-monthly-%d", idPrefix, index), LabelKey: "codex_quota.additional_monthly_window"},
+			"codex_quota.additional_generic_window",
+			map[string]any{"name": limitName},
+			teamPlan,
+		)
+	}
+}
+
+func readMapSlice(record map[string]any, keys ...string) []map[string]any {
+	value, ok := firstValue(record, keys...)
+	if !ok || value == nil {
+		return nil
+	}
+	switch typed := value.(type) {
+	case []map[string]any:
+		return typed
+	case []any:
+		items := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			if record, ok := item.(map[string]any); ok {
+				items = append(items, record)
+			}
+		}
+		return items
+	}
+	return nil
+}
+
+func formatCodexResetLabel(window *codexWindow) string {
+	if window == nil {
+		return "-"
+	}
+	if window.ResetAt != nil && *window.ResetAt > 0 {
+		return formatUnixSeconds(*window.ResetAt)
+	}
+	if window.ResetAfterSeconds != nil && *window.ResetAfterSeconds > 0 {
+		targetSeconds := float64(time.Now().Unix()) + math.Floor(*window.ResetAfterSeconds)
+		return formatUnixSeconds(targetSeconds)
+	}
+	return "-"
+}
+
+func formatUnixSeconds(seconds float64) string {
+	if seconds <= 0 {
+		return "-"
+	}
+	unixSeconds := int64(math.Floor(seconds))
+	if unixSeconds <= 0 {
+		return "-"
+	}
+	return time.Unix(unixSeconds, 0).Local().Format("01/02 15:04")
+}
+
+func formatCodexWindowDuration(seconds *float64) string {
+	if seconds == nil || *seconds <= 0 {
+		return "unknown"
+	}
+	rounded := int(math.Round(*seconds))
+	const daySeconds = 86_400
+	const hourSeconds = 3_600
+	if rounded%daySeconds == 0 {
+		return fmt.Sprintf("%dd", rounded/daySeconds)
+	}
+	if rounded%hourSeconds == 0 {
+		return fmt.Sprintf("%dh", rounded/hourSeconds)
+	}
+	return fmt.Sprintf("%ds", rounded)
+}
+
+func normalizeCodexWindowID(raw string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	if trimmed == "" {
+		return ""
+	}
+	var builder strings.Builder
+	lastDash := false
+	for _, char := range trimmed {
+		isAlphaNumeric := (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9')
+		if isAlphaNumeric {
+			builder.WriteRune(char)
+			lastDash = false
+			continue
+		}
+		if !lastDash && builder.Len() > 0 {
+			builder.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(builder.String(), "-")
+}
+
+func copyCodexLabelParams(params map[string]any) map[string]any {
+	if len(params) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(params))
+	for key, value := range params {
+		out[key] = value
+	}
+	return out
+}
+
+func withCodexWindowDurationParam(params map[string]any, duration string) map[string]any {
+	out := copyCodexLabelParams(params)
+	if out == nil {
+		out = map[string]any{}
+	}
+	out["duration"] = duration
+	return out
 }
 
 func normalizeCodexPlanType(value string) string {

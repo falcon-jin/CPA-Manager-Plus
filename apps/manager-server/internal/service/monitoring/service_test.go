@@ -68,6 +68,21 @@ func TestAnalyticsBuildsIncludedSections(t *testing.T) {
 	if len(resp.Timeline) == 0 || len(resp.HourlyDistribution) == 0 {
 		t.Fatalf("timeline = %#v hourly = %#v", resp.Timeline, resp.HourlyDistribution)
 	}
+	if len(resp.Timeline) != 1 {
+		t.Fatalf("timeline buckets = %#v", resp.Timeline)
+	}
+	timelinePoint := resp.Timeline[0]
+	if timelinePoint.Calls != 2 || timelinePoint.Success != 1 || timelinePoint.Failure != 1 ||
+		timelinePoint.InputTokens != 1_000_010 || timelinePoint.OutputTokens != 500_020 ||
+		timelinePoint.CachedTokens != 100 || timelinePoint.TotalTokens != 1_500_130 {
+		t.Fatalf("timeline metrics = %#v", timelinePoint)
+	}
+	if timelinePoint.AvgLatencyMS == nil || math.Abs(*timelinePoint.AvgLatencyMS-250) > 0.000001 {
+		t.Fatalf("timeline latency = %#v", timelinePoint.AvgLatencyMS)
+	}
+	if math.Abs(timelinePoint.Cost-1.99995) > 0.000001 {
+		t.Fatalf("timeline cost = %v", timelinePoint.Cost)
+	}
 	if len(resp.ModelStats) != 2 || len(resp.ModelShare) != 2 {
 		t.Fatalf("model stats/share = %#v %#v", resp.ModelStats, resp.ModelShare)
 	}
@@ -85,6 +100,216 @@ func TestAnalyticsBuildsIncludedSections(t *testing.T) {
 	}
 	if resp.Events == nil || len(resp.Events.Items) != 1 || !resp.Events.HasMore {
 		t.Fatalf("events page = %#v", resp.Events)
+	}
+}
+
+func TestAnalyticsHeatmapIncludesTopContributors(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC).UnixMilli()
+	toMS := fromMS + 60*60*1000
+
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"gpt-a": {Prompt: 1},
+		"gpt-b": {Prompt: 2},
+	}); err != nil {
+		t.Fatalf("save model prices: %v", err)
+	}
+
+	first := monitoringEvent("heatmap-contrib-a1", fromMS+1_000, "gpt-a", "auth-1", "source-a", false, 1_000_000, 0, 0, 0, 1_000_000, nil)
+	first.AuthProviderSnapshot = "openai"
+	second := monitoringEvent("heatmap-contrib-a2", fromMS+2_000, "gpt-a", "auth-1", "source-a", true, 1_000_000, 0, 0, 0, 1_000_000, nil)
+	second.AuthProviderSnapshot = "openai"
+	third := monitoringEvent("heatmap-contrib-b1", fromMS+3_000, "gpt-b", "auth-2", "source-b", false, 1_000_000, 0, 0, 0, 1_000_000, nil)
+	third.Provider = "anthropic"
+	if _, err := db.InsertEvents(ctx, []usage.Event{first, second, third}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS:  fromMS,
+		ToMS:    toMS,
+		Include: Include{Heatmap: true},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+	if len(resp.Heatmap) != 1 {
+		t.Fatalf("heatmap = %#v", resp.Heatmap)
+	}
+	point := resp.Heatmap[0]
+	if point.Calls != 3 || point.Success != 2 || point.Failure != 1 || point.Tokens != 3_000_000 {
+		t.Fatalf("heatmap totals = %#v", point)
+	}
+	if math.Abs(point.Cost-4) > 0.000001 {
+		t.Fatalf("heatmap cost = %v", point.Cost)
+	}
+	if len(point.ModelContributors) != 2 || point.ModelContributors[0].Key != "gpt-a" {
+		t.Fatalf("model contributors = %#v", point.ModelContributors)
+	}
+	topModel := point.ModelContributors[0]
+	if topModel.Calls != 2 || topModel.Success != 1 || topModel.Failure != 1 ||
+		math.Abs(topModel.FailureRate-0.5) > 0.000001 || math.Abs(topModel.Share-2.0/3.0) > 0.000001 ||
+		math.Abs(topModel.Cost-2) > 0.000001 {
+		t.Fatalf("top model contributor = %#v", topModel)
+	}
+	if len(point.APIKeyContributors) != 2 || point.APIKeyContributors[0].Key != "api-key-auth-1" ||
+		point.APIKeyContributors[0].Calls != 2 {
+		t.Fatalf("api key contributors = %#v", point.APIKeyContributors)
+	}
+	if len(point.ProviderContributors) != 2 || point.ProviderContributors[0].Key != "openai" ||
+		point.ProviderContributors[0].Calls != 2 {
+		t.Fatalf("provider contributors = %#v", point.ProviderContributors)
+	}
+}
+
+func TestAnalyticsCredentialTimelineBuildsPerCredentialBuckets(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_000_000_000)
+	toMS := fromMS + 3*60*60*1000
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"gpt-a": {Prompt: 1},
+	}); err != nil {
+		t.Fatalf("save model prices: %v", err)
+	}
+
+	first := monitoringEvent("credential-timeline-a1", fromMS+1_000, "gpt-a", "auth-1", "source-a", false, 1_000_000, 0, 0, 0, 1_000_000, nil)
+	first.AuthFileSnapshot = "prod.json"
+	first.AuthLabelSnapshot = "prod-auth"
+	second := monitoringEvent("credential-timeline-a2", fromMS+60*60*1000+1_000, "gpt-a", "auth-1", "source-a", true, 2_000_000, 0, 0, 0, 2_000_000, nil)
+	second.AuthFileSnapshot = "prod.json"
+	second.AuthLabelSnapshot = "prod-auth"
+	third := monitoringEvent("credential-timeline-b1", fromMS+60*60*1000+2_000, "gpt-a", "auth-2", "source-b", false, 3_000_000, 0, 0, 0, 3_000_000, nil)
+	third.AuthFileSnapshot = "dev.json"
+	third.AuthLabelSnapshot = "dev-auth"
+	if _, err := db.InsertEvents(ctx, []usage.Event{first, second, third}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Include: Include{
+			CredentialTimeline: true,
+			Granularity:        "hour",
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+	if len(resp.CredentialTimeline) != 3 {
+		t.Fatalf("credential timeline = %#v", resp.CredentialTimeline)
+	}
+	if resp.CredentialTimeline[0].ID != "prod.json" || resp.CredentialTimeline[0].Calls != 1 || resp.CredentialTimeline[0].Failure != 0 {
+		t.Fatalf("first credential bucket = %#v", resp.CredentialTimeline[0])
+	}
+	if resp.CredentialTimeline[1].ID != "prod.json" || resp.CredentialTimeline[1].Calls != 1 || resp.CredentialTimeline[1].Failure != 1 {
+		t.Fatalf("second credential bucket = %#v", resp.CredentialTimeline[1])
+	}
+	if resp.CredentialTimeline[2].ID != "dev.json" || resp.CredentialTimeline[2].Calls != 1 || resp.CredentialTimeline[2].Success != 1 {
+		t.Fatalf("third credential bucket = %#v", resp.CredentialTimeline[2])
+	}
+	if resp.CredentialTimeline[1].Cost <= resp.CredentialTimeline[0].Cost {
+		t.Fatalf("credential timeline cost = %#v", resp.CredentialTimeline)
+	}
+}
+
+func TestAnalyticsSummaryComparisonReturnsPreviousPeriod(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"gpt-a": {Prompt: 1, Completion: 2, Cache: 0.5},
+	}); err != nil {
+		t.Fatalf("save model prices: %v", err)
+	}
+	fromMS := int64(1_778_000_000_000)
+	toMS := fromMS + 2*60*60*1000
+	windowMS := toMS - fromMS
+	prevFrom := fromMS - windowMS
+
+	// Current window: 2 calls. Previous window: 3 calls (2 success, 1 failure).
+	if _, err := db.InsertEvents(ctx, []usage.Event{
+		monitoringEvent("cur-1", fromMS+1_000, "gpt-a", "auth-1", "src-a", false, 100, 50, 0, 0, 150, nil),
+		monitoringEvent("cur-2", fromMS+2_000, "gpt-a", "auth-1", "src-a", false, 100, 50, 0, 0, 150, nil),
+		monitoringEvent("prev-1", prevFrom+1_000, "gpt-a", "auth-1", "src-a", false, 1_000, 500, 0, 0, 1_500, nil),
+		monitoringEvent("prev-2", prevFrom+2_000, "gpt-a", "auth-1", "src-a", false, 1_000, 500, 0, 0, 1_500, nil),
+		monitoringEvent("prev-3", prevFrom+3_000, "gpt-a", "auth-1", "src-a", true, 1_000, 500, 0, 0, 1_500, nil),
+	}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS:  fromMS,
+		ToMS:    toMS,
+		NowMS:   toMS,
+		Include: Include{Summary: true, SummaryComparison: true},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+	if resp.Summary == nil || resp.Summary.TotalCalls != 2 {
+		t.Fatalf("current summary = %#v", resp.Summary)
+	}
+	cmp := resp.SummaryComparison
+	if cmp == nil {
+		t.Fatalf("summary_comparison is nil")
+	}
+	if cmp.FromMS != prevFrom || cmp.ToMS != fromMS {
+		t.Fatalf("comparison window = [%d,%d), want [%d,%d)", cmp.FromMS, cmp.ToMS, prevFrom, fromMS)
+	}
+	if cmp.TotalCalls != 3 || cmp.SuccessCalls != 2 || cmp.FailureCalls != 1 {
+		t.Fatalf("comparison calls = %#v", cmp)
+	}
+	if cmp.TotalTokens != 4_500 {
+		t.Fatalf("comparison tokens = %d", cmp.TotalTokens)
+	}
+	if cmp.TotalCost <= 0 {
+		t.Fatalf("comparison cost = %v", cmp.TotalCost)
+	}
+	if math.Abs(cmp.SuccessRate-2.0/3.0) > 0.000001 {
+		t.Fatalf("comparison success rate = %v", cmp.SuccessRate)
+	}
+
+	// Without the explicit flag, no comparison is computed.
+	respNoCmp, err := New(db).Analytics(ctx, Request{
+		FromMS:  fromMS,
+		ToMS:    toMS,
+		NowMS:   toMS,
+		Include: Include{Summary: true},
+	})
+	if err != nil {
+		t.Fatalf("analytics (no comparison): %v", err)
+	}
+	if respNoCmp.SummaryComparison != nil {
+		t.Fatalf("expected nil comparison, got %#v", respNoCmp.SummaryComparison)
+	}
+}
+
+func TestCacheHitRateMatchesWebClient(t *testing.T) {
+	// Anthropic-style: InputTokens excludes cache, so denominator = input + cacheRead + cacheCreation.
+	anthropic := cacheHitRate(TimelinePoint{
+		InputTokens:         100,
+		CacheReadTokens:     300,
+		CacheCreationTokens: 50,
+	})
+	if math.Abs(anthropic-300.0/450.0) > 1e-9 {
+		t.Fatalf("anthropic cache hit rate = %v, want %v", anthropic, 300.0/450.0)
+	}
+	// OpenAI-style: InputTokens already includes cache; cacheRead falls back to cachedTokens.
+	openai := cacheHitRate(TimelinePoint{
+		InputTokens:  1000,
+		CachedTokens: 400,
+	})
+	if math.Abs(openai-0.4) > 1e-9 {
+		t.Fatalf("openai cache hit rate = %v, want 0.4", openai)
+	}
+	// No input -> 0; malformed cached > input clamps to 1.
+	if r := cacheHitRate(TimelinePoint{}); r != 0 {
+		t.Fatalf("empty cache hit rate = %v, want 0", r)
+	}
+	if r := cacheHitRate(TimelinePoint{InputTokens: 10, CachedTokens: 1000}); r != 1 {
+		t.Fatalf("clamped cache hit rate = %v, want 1", r)
 	}
 }
 
@@ -267,6 +492,7 @@ func TestAnalyticsUsesResolvedModelPricingInAggregates(t *testing.T) {
 			ModelShare:   true,
 			ModelStats:   true,
 			ChannelShare: true,
+			Timeline:     true,
 		},
 	})
 	if err != nil {
@@ -287,6 +513,9 @@ func TestAnalyticsUsesResolvedModelPricingInAggregates(t *testing.T) {
 	if len(resp.ChannelShare) != 1 || resp.ChannelShare[0].AuthIndex != "auth-1" ||
 		math.Abs(resp.ChannelShare[0].Cost-3) > 0.000001 {
 		t.Fatalf("channel share = %#v", resp.ChannelShare)
+	}
+	if len(resp.Timeline) != 1 || math.Abs(resp.Timeline[0].Cost-3) > 0.000001 {
+		t.Fatalf("timeline = %#v", resp.Timeline)
 	}
 	if resp.ChannelShare[0].Source != "user@example.com" ||
 		resp.ChannelShare[0].AccountSnapshot != "user@example.com" {
@@ -445,11 +674,12 @@ func TestAnalyticsAccountAndAPIKeyStatsUseFullFilteredScope(t *testing.T) {
 	events := []usage.Event{
 		monitoringEvent("scope-a", fromMS+1_000, "gpt-a", "auth-1", "source-a", false, 10, 5, 0, 0, 15, nil),
 		monitoringEvent("scope-b", fromMS+2_000, "gpt-a", "auth-1", "source-a", false, 20, 6, 0, 0, 26, nil),
-		monitoringEvent("scope-c", fromMS+3_000, "gpt-b", "auth-1", "source-a", true, 1, 1, 0, 0, 2, nil),
+		monitoringEvent("scope-c", fromMS+3_000, "gpt-b", "auth-2", "source-b", true, 1, 1, 0, 0, 2, nil),
 	}
 	for index := range events {
 		events[index].AccountSnapshot = "team@example.com"
 		events[index].AuthLabelSnapshot = "Team Account"
+		events[index].AuthProviderSnapshot = "codex"
 		events[index].APIKeyHash = "client-key-hash"
 	}
 	if _, err := db.InsertEvents(ctx, events); err != nil {
@@ -487,6 +717,19 @@ func TestAnalyticsAccountAndAPIKeyStatsUseFullFilteredScope(t *testing.T) {
 		resp.APIKeyStats[0].TotalTokens != 43 {
 		t.Fatalf("api key stats = %#v", resp.APIKeyStats)
 	}
+	if len(resp.APIKeyStats[0].Contexts) != 2 {
+		t.Fatalf("api key contexts = %#v", resp.APIKeyStats[0].Contexts)
+	}
+	if resp.APIKeyStats[0].Contexts[0].AuthIndex != "auth-1" ||
+		resp.APIKeyStats[0].Contexts[0].Calls != 2 ||
+		resp.APIKeyStats[0].Contexts[0].FailureCalls != 0 {
+		t.Fatalf("top api key context = %#v", resp.APIKeyStats[0].Contexts[0])
+	}
+	if resp.APIKeyStats[0].Contexts[1].AuthIndex != "auth-2" ||
+		resp.APIKeyStats[0].Contexts[1].Calls != 1 ||
+		resp.APIKeyStats[0].Contexts[1].FailureRate != 1 {
+		t.Fatalf("second api key context = %#v", resp.APIKeyStats[0].Contexts[1])
+	}
 }
 
 func TestAnalyticsSearchMatchesResolvedModelAndProjectID(t *testing.T) {
@@ -496,13 +739,14 @@ func TestAnalyticsSearchMatchesResolvedModelAndProjectID(t *testing.T) {
 	toMS := fromMS + 60*60*1000
 
 	event := monitoringEvent("search-new-fields", fromMS+1_000, "alias-search", "auth-1", "source-a", false, 1, 1, 0, 0, 2, nil)
+	event.RequestID = "req-search-42"
 	event.ResolvedModel = "gpt-resolved-search"
 	event.AuthProjectIDSnapshot = "vertex-project-42"
 	if _, err := db.InsertEvents(ctx, []usage.Event{event}); err != nil {
 		t.Fatalf("insert events: %v", err)
 	}
 
-	for _, query := range []string{"gpt-resolved-search", "vertex-project-42"} {
+	for _, query := range []string{"req-search-42", "search-new-fields", "gpt-resolved-search", "vertex-project-42"} {
 		resp, err := New(db).Analytics(ctx, Request{
 			FromMS:      fromMS,
 			ToMS:        toMS,
@@ -583,18 +827,91 @@ func TestAnalyticsReportsZeroTokenModels(t *testing.T) {
 	if resp.Summary == nil || len(resp.Summary.ZeroTokenModels) != 1 || resp.Summary.ZeroTokenModels[0] != "gpt-zero" {
 		t.Fatalf("zero token models = %#v", resp.Summary)
 	}
+}
 
-	resp, err = New(db).Analytics(ctx, Request{
-		FromMS:  fromMS,
-		ToMS:    toMS,
-		Filters: Filters{ExcludeZeroTokens: true},
-		Include: Include{Summary: true},
+func TestAnalyticsAppliesMinLatencyFilter(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_080_000_000)
+	toMS := fromMS + 60*60*1000
+	fastLatency := int64(2_000)
+	slowLatency := int64(12_000)
+
+	_, err := db.InsertEvents(ctx, []usage.Event{
+		monitoringEvent("latency-fast", fromMS+1_000, "gpt-fast", "auth-1", "source-a", false, 1, 1, 0, 0, 2, &fastLatency),
+		monitoringEvent("latency-slow", fromMS+2_000, "gpt-slow", "auth-1", "source-a", false, 1, 1, 0, 0, 2, &slowLatency),
+		monitoringEvent("latency-unknown", fromMS+3_000, "gpt-unknown", "auth-1", "source-a", false, 1, 1, 0, 0, 2, nil),
 	})
 	if err != nil {
-		t.Fatalf("analytics with zero-token filter: %v", err)
+		t.Fatalf("insert events: %v", err)
 	}
-	if resp.Summary == nil || resp.Summary.ZeroTokenCalls != 0 || len(resp.Summary.ZeroTokenModels) != 0 {
-		t.Fatalf("filtered zero token summary = %#v", resp.Summary)
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS:  fromMS,
+		ToMS:    toMS,
+		Filters: Filters{MinLatencyMS: 10_000},
+		Include: Include{Summary: true, EventsPage: &EventsPage{Limit: 10}},
+	})
+	if err != nil {
+		t.Fatalf("analytics with min latency filter: %v", err)
+	}
+	if resp.Summary == nil || resp.Summary.TotalCalls != 1 {
+		t.Fatalf("filtered latency summary = %#v", resp.Summary)
+	}
+	if resp.Events == nil || len(resp.Events.Items) != 1 || resp.Events.Items[0].EventHash != "latency-slow" {
+		t.Fatalf("filtered latency events = %#v", resp.Events)
+	}
+}
+
+func TestAnalyticsAppliesCacheStatusFilter(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_090_000_000)
+	toMS := fromMS + 60*60*1000
+
+	cacheRead := monitoringEvent("cache-read", fromMS+1_000, "gpt-a", "auth-1", "source-a", false, 10, 5, 0, 0, 15, nil)
+	cacheRead.CacheReadTokens = 4
+	cacheCreation := monitoringEvent("cache-creation", fromMS+2_000, "gpt-b", "auth-1", "source-a", false, 10, 5, 0, 0, 15, nil)
+	cacheCreation.CacheCreationTokens = 3
+	legacyCached := monitoringEvent("cache-legacy", fromMS+3_000, "gpt-c", "auth-1", "source-a", false, 10, 5, 0, 2, 17, nil)
+	cacheMiss := monitoringEvent("cache-miss", fromMS+4_000, "gpt-d", "auth-1", "source-a", false, 10, 5, 0, 0, 15, nil)
+	if _, err := db.InsertEvents(ctx, []usage.Event{cacheRead, cacheCreation, legacyCached, cacheMiss}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		status     string
+		wantHashes []string
+	}{
+		{name: "hit", status: "hit", wantHashes: []string{"cache-legacy", "cache-creation", "cache-read"}},
+		{name: "miss", status: "miss", wantHashes: []string{"cache-miss"}},
+		{name: "read", status: "read", wantHashes: []string{"cache-read"}},
+		{name: "creation", status: "creation", wantHashes: []string{"cache-creation"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := New(db).Analytics(ctx, Request{
+				FromMS:  fromMS,
+				ToMS:    toMS,
+				Filters: Filters{CacheStatus: tt.status},
+				Include: Include{Summary: true, EventsPage: &EventsPage{Limit: 10}},
+			})
+			if err != nil {
+				t.Fatalf("analytics with cache status filter: %v", err)
+			}
+			if resp.Summary == nil || int(resp.Summary.TotalCalls) != len(tt.wantHashes) {
+				t.Fatalf("filtered cache summary = %#v", resp.Summary)
+			}
+			if resp.Events == nil || len(resp.Events.Items) != len(tt.wantHashes) {
+				t.Fatalf("filtered cache events = %#v", resp.Events)
+			}
+			for index, want := range tt.wantHashes {
+				if resp.Events.Items[index].EventHash != want {
+					t.Fatalf("event %d hash = %q, want %q; events = %#v", index, resp.Events.Items[index].EventHash, want, resp.Events)
+				}
+			}
+		})
 	}
 }
 
@@ -907,6 +1224,98 @@ func TestAnalyticsEventsPageStableCursorAvoidsSkippingSameTimestamp(t *testing.T
 	}
 	if len(seen) != total {
 		t.Fatalf("collected %d unique events, want %d (same-timestamp rows were skipped)", len(seen), total)
+	}
+}
+
+func TestAnalyticsTimelineUsesRequestedTimeZoneForDayBuckets(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+	beforeLocalMidnightMS := time.Date(2026, 6, 3, 15, 30, 0, 0, time.UTC).UnixMilli()
+	afterLocalMidnightMS := time.Date(2026, 6, 3, 16, 30, 0, 0, time.UTC).UnixMilli()
+	fromMS := time.Date(2026, 6, 3, 14, 0, 0, 0, time.UTC).UnixMilli()
+	toMS := time.Date(2026, 6, 3, 18, 0, 0, 0, time.UTC).UnixMilli()
+
+	if _, err := db.InsertEvents(ctx, []usage.Event{
+		monitoringEvent("local-day-a", beforeLocalMidnightMS, "gpt-a", "auth-1", "source-a", false, 10, 5, 0, 0, 15, nil),
+		monitoringEvent("local-day-b", afterLocalMidnightMS, "gpt-a", "auth-1", "source-a", false, 20, 10, 0, 0, 30, nil),
+	}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS:   fromMS,
+		ToMS:     toMS,
+		TimeZone: "Asia/Shanghai",
+		Include: Include{
+			Timeline:    true,
+			Granularity: "day",
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+
+	if len(resp.Timeline) != 2 {
+		t.Fatalf("timeline buckets = %#v", resp.Timeline)
+	}
+	expectedFirstBucket := time.Date(2026, 6, 3, 0, 0, 0, 0, location).UnixMilli()
+	expectedSecondBucket := time.Date(2026, 6, 4, 0, 0, 0, 0, location).UnixMilli()
+	if resp.Timeline[0].BucketMS != expectedFirstBucket || resp.Timeline[0].Label != "06/03" ||
+		resp.Timeline[0].Calls != 1 || resp.Timeline[0].TotalTokens != 15 {
+		t.Fatalf("first timeline bucket = %#v", resp.Timeline[0])
+	}
+	if resp.Timeline[1].BucketMS != expectedSecondBucket || resp.Timeline[1].Label != "06/04" ||
+		resp.Timeline[1].Calls != 1 || resp.Timeline[1].TotalTokens != 30 {
+		t.Fatalf("second timeline bucket = %#v", resp.Timeline[1])
+	}
+}
+
+func TestAnalyticsSummaryAndHourlyDistributionUseRequestedTimeZone(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	firstMS := time.Date(2026, 6, 3, 23, 30, 0, 0, time.UTC).UnixMilli()
+	secondMS := time.Date(2026, 6, 4, 0, 30, 0, 0, time.UTC).UnixMilli()
+	fromMS := time.Date(2026, 6, 3, 22, 0, 0, 0, time.UTC).UnixMilli()
+	toMS := time.Date(2026, 6, 4, 2, 0, 0, 0, time.UTC).UnixMilli()
+
+	if _, err := db.InsertEvents(ctx, []usage.Event{
+		monitoringEvent("local-summary-a", firstMS, "gpt-a", "auth-1", "source-a", false, 10, 5, 0, 0, 15, nil),
+		monitoringEvent("local-summary-b", secondMS, "gpt-a", "auth-1", "source-a", false, 20, 10, 0, 0, 30, nil),
+	}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS:   fromMS,
+		ToMS:     toMS,
+		TimeZone: "Asia/Shanghai",
+		Include: Include{
+			Summary:            true,
+			HourlyDistribution: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+
+	if resp.Summary == nil {
+		t.Fatal("summary is nil")
+	}
+	if resp.Summary.AvgDailyRequests != 2 || resp.Summary.AvgDailyTokens != 45 {
+		t.Fatalf("summary daily averages = requests %v tokens %v", resp.Summary.AvgDailyRequests, resp.Summary.AvgDailyTokens)
+	}
+	if len(resp.HourlyDistribution) != 2 {
+		t.Fatalf("hourly distribution = %#v", resp.HourlyDistribution)
+	}
+	if resp.HourlyDistribution[0].Hour != 7 || resp.HourlyDistribution[0].Calls != 1 || resp.HourlyDistribution[0].Tokens != 15 {
+		t.Fatalf("first hourly point = %#v", resp.HourlyDistribution[0])
+	}
+	if resp.HourlyDistribution[1].Hour != 8 || resp.HourlyDistribution[1].Calls != 1 || resp.HourlyDistribution[1].Tokens != 30 {
+		t.Fatalf("second hourly point = %#v", resp.HourlyDistribution[1])
 	}
 }
 

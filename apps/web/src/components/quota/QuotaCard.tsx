@@ -69,6 +69,8 @@ interface QuotaCardProps<TState extends QuotaStatusState> {
   canReset?: boolean;
   resetLabel?: string;
   onReset?: () => void;
+  canReauth?: boolean;
+  onReauth?: () => void;
   renderQuotaItems: (quota: TState, t: TFunction, helpers: QuotaRenderHelpers) => ReactNode;
 }
 
@@ -85,6 +87,8 @@ export function QuotaCard<TState extends QuotaStatusState>({
   canReset = false,
   resetLabel,
   onReset,
+  canReauth = false,
+  onReauth,
   renderQuotaItems,
 }: QuotaCardProps<TState>) {
   const { t } = useTranslation();
@@ -114,6 +118,48 @@ export function QuotaCard<TState extends QuotaStatusState>({
     if (type.toLowerCase() === 'iflow') return 'iFlow';
     return type.charAt(0).toUpperCase() + type.slice(1);
   };
+
+  const renderActions = (options?: { includeReauth?: boolean }) =>
+    onRefresh || (onReset && resetLabel) || (options?.includeReauth && onReauth) ? (
+      <div className={styles.quotaActions}>
+        {options?.includeReauth && onReauth ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className={styles.quotaActionButton}
+            onClick={onReauth}
+            disabled={!canReauth}
+          >
+            {t('codex_reauth.button')}
+          </Button>
+        ) : null}
+        {onReset && resetLabel ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className={styles.quotaActionButton}
+            onClick={onReset}
+            disabled={!canReset}
+          >
+            {resetLabel}
+          </Button>
+        ) : null}
+        {onRefresh ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className={styles.quotaActionButton}
+            onClick={onRefresh}
+            disabled={!canRefresh}
+          >
+            {t(`${i18nPrefix}.refresh_button`)}
+          </Button>
+        ) : null}
+      </div>
+    ) : null;
 
   return (
     <div className={`${styles.fileCard} ${cardClassName}`}>
@@ -148,42 +194,18 @@ export function QuotaCard<TState extends QuotaStatusState>({
             <div className={styles.quotaMessage}>{t(idleMessageKey)}</div>
           )
         ) : quotaStatus === 'error' ? (
-          <div className={styles.quotaError}>
-            {t(`${i18nPrefix}.load_failed`, {
-              message: quotaErrorMessage,
-            })}
-          </div>
+          <>
+            <div className={styles.quotaError}>
+              {t(`${i18nPrefix}.load_failed`, {
+                message: quotaErrorMessage,
+              })}
+            </div>
+            {renderActions({ includeReauth: canReauth })}
+          </>
         ) : quota ? (
           <>
             {renderQuotaItems(quota, t, { styles, QuotaProgressBar })}
-            {onRefresh || (onReset && resetLabel) ? (
-              <div className={styles.quotaActions}>
-                {onReset && resetLabel ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    className={styles.quotaActionButton}
-                    onClick={onReset}
-                    disabled={!canReset}
-                  >
-                    {resetLabel}
-                  </Button>
-                ) : null}
-                {onRefresh ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    className={styles.quotaActionButton}
-                    onClick={onRefresh}
-                    disabled={!canRefresh}
-                  >
-                    {t(`${i18nPrefix}.refresh_button`)}
-                  </Button>
-                ) : null}
-              </div>
-            ) : null}
+            {renderActions()}
           </>
         ) : (
           <div className={styles.quotaMessage}>{t(idleMessageKey)}</div>

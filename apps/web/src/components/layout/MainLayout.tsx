@@ -24,6 +24,7 @@ import {
   IconSidebarProviders,
   IconSidebarQuota,
   IconSidebarSystem,
+  IconSidebarUsage,
 } from '@/components/ui/icons';
 import { INLINE_LOGO_JPEG } from '@/assets/logoInline';
 import {
@@ -57,6 +58,7 @@ const sidebarIcons: Record<string, ReactNode> = {
   authFiles: <IconSidebarAuthFiles size={SIDEBAR_ICON_SIZE} />,
   oauth: <IconSidebarOauth size={SIDEBAR_ICON_SIZE} />,
   quota: <IconSidebarQuota size={SIDEBAR_ICON_SIZE} />,
+  usageAnalytics: <IconSidebarUsage size={SIDEBAR_ICON_SIZE} />,
   codexInspection: <IconSidebarInspection size={SIDEBAR_ICON_SIZE} />,
   monitoring: <IconSidebarMonitor size={SIDEBAR_ICON_SIZE} />,
   plugins: <IconSidebarPlugins size={SIDEBAR_ICON_SIZE} />,
@@ -419,18 +421,28 @@ export function MainLayout() {
     const label = t(shortKey, { defaultValue: fallback });
     return label === shortKey ? fallback : label;
   };
+  const dashboardNavItem: NavItem = {
+    path: '/', label: t('nav.dashboard'),
+    shortLabel: navShortLabel('nav.dashboard', t('nav.dashboard')),
+    icon: sidebarIcons.dashboard,
+  };
+  const usageAnalyticsNavItem = featureAvailability.requestMonitoringAvailable
+    ? {
+        path: '/usage-analytics',
+        label: t('nav.usage_analytics'),
+        shortLabel: navShortLabel('nav.usage_analytics', t('nav.usage_analytics')),
+        icon: sidebarIcons.usageAnalytics,
+      }
+    : null;
+  const monitoringNavItem = featureAvailability.requestMonitoringAvailable
+    ? {
+        path: '/monitoring',
+        label: t('nav.monitoring_center'),
+        shortLabel: navShortLabel('nav.monitoring_center', t('nav.monitoring_center')),
+        icon: sidebarIcons.monitoring,
+      }
+    : null;
   const operationNavItems: NavItem[] = [
-    ...(featureAvailability.requestMonitoringAvailable
-      ? [
-          {
-            path: '/monitoring',
-            label: t('nav.monitoring_center'),
-            shortLabel: navShortLabel('nav.monitoring_center', t('nav.monitoring_center')),
-            icon: sidebarIcons.monitoring,
-            exact: true,
-          },
-        ]
-      : []),
     ...(fileLogsAvailable
       ? [
           {
@@ -464,12 +476,9 @@ export function MainLayout() {
     : [];
   const navSections: NavItem[][] = [
     [
-      {
-        path: '/',
-        label: t('nav.dashboard'),
-        shortLabel: navShortLabel('nav.dashboard', t('nav.dashboard')),
-        icon: sidebarIcons.dashboard,
-      },
+      dashboardNavItem,
+      ...(usageAnalyticsNavItem ? [usageAnalyticsNavItem] : []),
+      ...(monitoringNavItem ? [monitoringNavItem] : []),
     ],
     [
       {
@@ -538,7 +547,6 @@ export function MainLayout() {
         if (normalizedPath.startsWith('/ai-providers/codex')) return aiProvidersIndex + 0.2;
         if (normalizedPath.startsWith('/ai-providers/claude')) return aiProvidersIndex + 0.3;
         if (normalizedPath.startsWith('/ai-providers/vertex')) return aiProvidersIndex + 0.4;
-        if (normalizedPath.startsWith('/ai-providers/ampcode')) return aiProvidersIndex + 0.5;
         if (normalizedPath.startsWith('/ai-providers/openai')) return aiProvidersIndex + 0.6;
         return aiProvidersIndex + 0.05;
       }

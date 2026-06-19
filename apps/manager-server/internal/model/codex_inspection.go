@@ -78,28 +78,42 @@ type CodexInspectionRun struct {
 	UpdatedAtMS   int64                        `json:"updatedAtMs"`
 }
 
+type CodexInspectionQuotaWindow struct {
+	ID                 string         `json:"id"`
+	LabelKey           string         `json:"labelKey"`
+	LabelParams        map[string]any `json:"labelParams,omitempty"`
+	UsedPercent        *float64       `json:"usedPercent,omitempty"`
+	ResetLabel         string         `json:"resetLabel"`
+	LimitWindowSeconds *float64       `json:"limitWindowSeconds,omitempty"`
+}
+
 type CodexInspectionResult struct {
-	ID             int64    `json:"id"`
-	RunID          int64    `json:"runId"`
-	AccountKey     string   `json:"accountKey"`
-	FileName       string   `json:"fileName"`
-	DisplayAccount string   `json:"displayAccount"`
-	AuthIndex      string   `json:"authIndex,omitempty"`
-	AccountID      string   `json:"accountId,omitempty"`
-	Provider       string   `json:"provider"`
-	Disabled       bool     `json:"disabled"`
-	Status         string   `json:"status,omitempty"`
-	State          string   `json:"state,omitempty"`
-	Action         string   `json:"action"`
-	ActionReason   string   `json:"actionReason"`
-	ActionStatus   string   `json:"actionStatus,omitempty"`
-	ExecutedAction string   `json:"executedAction,omitempty"`
-	ActionError    string   `json:"actionError,omitempty"`
-	StatusCode     *int     `json:"statusCode,omitempty"`
-	UsedPercent    *float64 `json:"usedPercent,omitempty"`
-	IsQuota        bool     `json:"isQuota"`
-	Error          string   `json:"error,omitempty"`
-	CreatedAtMS    int64    `json:"createdAtMs"`
+	ID               int64                        `json:"id"`
+	RunID            int64                        `json:"runId"`
+	AccountKey       string                       `json:"accountKey"`
+	FileName         string                       `json:"fileName"`
+	DisplayAccount   string                       `json:"displayAccount"`
+	AuthIndex        string                       `json:"authIndex,omitempty"`
+	AccountID        string                       `json:"accountId,omitempty"`
+	Provider         string                       `json:"provider"`
+	Disabled         bool                         `json:"disabled"`
+	Status           string                       `json:"status,omitempty"`
+	State            string                       `json:"state,omitempty"`
+	Action           string                       `json:"action"`
+	ActionReason     string                       `json:"actionReason"`
+	ActionStatus     string                       `json:"actionStatus,omitempty"`
+	ExecutedAction   string                       `json:"executedAction,omitempty"`
+	ActionError      string                       `json:"actionError,omitempty"`
+	StatusCode       *int                         `json:"statusCode,omitempty"`
+	UsedPercent      *float64                     `json:"usedPercent,omitempty"`
+	IsQuota          bool                         `json:"isQuota"`
+	Error            string                       `json:"error,omitempty"`
+	PlanType         string                       `json:"planType,omitempty"`
+	QuotaWindows     []CodexInspectionQuotaWindow `json:"quotaWindows,omitempty"`
+	QuotaWindowsJSON string                       `json:"-"`
+	ErrorKind        string                       `json:"errorKind,omitempty"`
+	ErrorDetail      string                       `json:"errorDetail,omitempty"`
+	CreatedAtMS      int64                        `json:"createdAtMs"`
 }
 
 type CodexInspectionLog struct {
@@ -344,6 +358,28 @@ func UnmarshalCodexInspectionSettings(raw string) ManagerCodexInspectionConfig {
 		return settings
 	}
 	return NormalizeCodexInspectionConfig(parsed, settings)
+}
+
+func MarshalCodexInspectionQuotaWindows(windows []CodexInspectionQuotaWindow) string {
+	if len(windows) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(windows)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func UnmarshalCodexInspectionQuotaWindows(raw string) []CodexInspectionQuotaWindow {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var windows []CodexInspectionQuotaWindow
+	if err := json.Unmarshal([]byte(raw), &windows); err != nil {
+		return nil
+	}
+	return windows
 }
 
 func CodexInspectionTriggerKey(now time.Time, cfg ManagerCodexInspectionConfig) string {

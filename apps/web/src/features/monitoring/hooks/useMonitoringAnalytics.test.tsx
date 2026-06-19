@@ -72,6 +72,11 @@ const createResponse = (generatedAtMS: number): MonitoringAnalyticsResponse => (
   granularity: 'hour',
 });
 
+const getExpectedTimeZonePayload = () => {
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  return timeZone ? { time_zone: timeZone } : {};
+};
+
 const installDeferredAnalyticsMock = () => {
   const requests: Array<Deferred<MonitoringAnalyticsResponse>> = [];
   getAnalyticsMock.mockImplementation(() => {
@@ -175,6 +180,7 @@ describe('useMonitoringAnalytics', () => {
     expect(getAnalyticsMock.mock.calls[1]?.[2]).toEqual({
       from_ms: 2,
       to_ms: 20_000,
+      ...getExpectedTimeZonePayload(),
       now_ms: 20_000,
       search_query: 'error',
       filters: { models: ['gpt-5'] },

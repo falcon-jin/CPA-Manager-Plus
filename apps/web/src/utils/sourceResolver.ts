@@ -33,6 +33,14 @@ const registerIdentity = (
   }
 
   if (existing === null || existing.identityKey === entry.identityKey) return;
+  if (existing.displayName === entry.displayName) {
+    map.set(key, {
+      displayName: existing.displayName,
+      type: existing.type === entry.type ? existing.type : '',
+      identityKey: `shared:${key}`,
+    });
+    return;
+  }
   map.set(key, null);
 };
 

@@ -162,9 +162,6 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         case 'api-keys':
           nextConfig.apiKeys = value as Config['apiKeys'];
           break;
-        case 'ampcode':
-          nextConfig.ampcode = value as Config['ampcode'];
-          break;
         case 'gemini-api-key':
           nextConfig.geminiApiKeys = value as Config['geminiApiKeys'];
           break;

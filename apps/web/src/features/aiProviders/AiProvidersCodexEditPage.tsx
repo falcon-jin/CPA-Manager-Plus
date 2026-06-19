@@ -12,10 +12,15 @@ import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { useEdgeSwipeBack } from '@/hooks/useEdgeSwipeBack';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { SecondaryScreenShell } from '@/components/common/SecondaryScreenShell';
-import { modelsApi, providersApi } from '@/services/api';
+import { modelsApi, providersApi, apiCallApi, getApiCallErrorMessage } from '@/services/api';
 import { useAuthStore, useConfigStore, useNotificationStore } from '@/stores';
 import type { ProviderKeyConfig } from '@/types';
-import { buildHeaderObject, headersToEntries, normalizeHeaderEntries } from '@/utils/headers';
+import {
+  buildHeaderObject,
+  hasHeader,
+  headersToEntries,
+  normalizeHeaderEntries,
+} from '@/utils/headers';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import {
   areKeyValueEntriesEqual,
@@ -23,7 +28,11 @@ import {
   areStringArraysEqual,
 } from '@/utils/compare';
 import { entriesToModels, modelsToEntries } from '@/components/ui/modelInputListUtils';
-import { excludedModelsToText, parseExcludedModels } from '@/components/providers/utils';
+import {
+  buildCodexResponsesEndpoint,
+  excludedModelsToText,
+  parseExcludedModels,
+} from '@/components/providers/utils';
 import type { ProviderFormState } from '@/components/providers';
 import type { ModelInfo } from '@/utils/models';
 import { parseProviderIndexParam } from '@/features/aiProviders/model/routeParams';
@@ -31,6 +40,9 @@ import layoutStyles from './AiProvidersEditLayout.module.scss';
 import styles from './AiProvidersPage.module.scss';
 
 type LocationState = { fromAiProviders?: boolean } | null;
+type TestStatus = 'idle' | 'loading' | 'success' | 'error';
+
+const CODEX_TEST_TIMEOUT_MS = 20_000;
 
 const buildEmptyForm = (): ProviderFormState => ({
   apiKey: '',
@@ -121,6 +133,10 @@ export function AiProvidersCodexEditPage() {
   const [modelDiscoveryError, setModelDiscoveryError] = useState('');
   const [modelDiscoverySearch, setModelDiscoverySearch] = useState('');
   const [modelDiscoverySelected, setModelDiscoverySelected] = useState<Set<string>>(new Set());
+  const [testModel, setTestModel] = useState('');
+  const [testStatus, setTestStatus] = useState<TestStatus>('idle');
+  const [testMessage, setTestMessage] = useState('');
+  const [isTesting, setIsTesting] = useState(false);
   const autoFetchSignatureRef = useRef<string>('');
   const modelDiscoveryRequestIdRef = useRef(0);
 
@@ -215,6 +231,24 @@ export function AiProvidersCodexEditPage() {
     () => parseExcludedModels(form.excludedText ?? ''),
     [form.excludedText]
   );
+  const availableModels = useMemo(
+    () => normalizedModels.map((entry) => entry.name).filter(Boolean),
+    [normalizedModels]
+  );
+  const modelSelectOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return normalizedModels.reduce<Array<{ value: string; label: string }>>((acc, entry) => {
+      const name = entry.name.trim();
+      if (!name || seen.has(name)) return acc;
+      seen.add(name);
+      const alias = entry.alias.trim();
+      acc.push({
+        value: name,
+        label: alias && alias !== name ? `${name} (${alias})` : name,
+      });
+      return acc;
+    }, []);
+  }, [normalizedModels]);
   const normalizedPriority = useMemo(() => {
     return form.priority !== undefined && Number.isFinite(form.priority)
       ? Math.trunc(form.priority)
@@ -258,7 +292,8 @@ export function AiProvidersCodexEditPage() {
     },
   });
 
-  const canSave = !disableControls && !saving && !loading && !invalidIndexParam && !invalidIndex;
+  const canSave =
+    !disableControls && !saving && !loading && !invalidIndexParam && !invalidIndex && !isTesting;
 
   const discoveredModelsFiltered = useMemo(() => {
     const filter = modelDiscoverySearch.trim().toLowerCase();
@@ -280,6 +315,121 @@ export function AiProvidersCodexEditPage() {
       visibleDiscoveredModelNames.every((name) => modelDiscoverySelected.has(name)),
     [modelDiscoverySelected, visibleDiscoveredModelNames]
   );
+  const connectivityConfigSignature = useMemo(() => {
+    const headersSignature = form.headers
+      .map((entry) => `${entry.key.trim()}:${entry.value.trim()}`)
+      .join('|');
+    const modelsSignature = normalizedModels
+      .map((entry) => `${entry.name.trim()}:${entry.alias.trim()}`)
+      .join('|');
+    return [
+      form.apiKey.trim(),
+      normalizeAuthIndex(form.authIndex) ?? '',
+      String(form.baseUrl ?? '').trim(),
+      testModel.trim(),
+      headersSignature,
+      modelsSignature,
+    ].join('||');
+  }, [form.apiKey, form.authIndex, form.baseUrl, form.headers, normalizedModels, testModel]);
+  const previousConnectivityConfigRef = useRef(connectivityConfigSignature);
+
+  useEffect(() => {
+    if (previousConnectivityConfigRef.current === connectivityConfigSignature) {
+      return;
+    }
+    previousConnectivityConfigRef.current = connectivityConfigSignature;
+    setTestStatus('idle');
+    setTestMessage('');
+  }, [connectivityConfigSignature]);
+
+  const runCodexConnectivityTest = useCallback(async () => {
+    if (isTesting) return;
+
+    const endpoint = buildCodexResponsesEndpoint(form.baseUrl ?? '');
+    if (!endpoint) {
+      const message = t('ai_providers.codex_test_endpoint_invalid');
+      setTestStatus('error');
+      setTestMessage(message);
+      showNotification(message, 'error');
+      return;
+    }
+
+    const modelName = testModel.trim() || availableModels[0] || '';
+    if (!modelName) {
+      const message = t('ai_providers.codex_test_model_required');
+      setTestStatus('error');
+      setTestMessage(message);
+      showNotification(message, 'error');
+      return;
+    }
+
+    const customHeaders = buildHeaderObject(form.headers);
+    const apiKey = form.apiKey.trim();
+    const keyAuthIndex = normalizeAuthIndex(form.authIndex) ?? undefined;
+    const hasAuthorization = hasHeader(customHeaders, 'authorization');
+
+    if (!apiKey && !hasAuthorization && !keyAuthIndex) {
+      const message = t('ai_providers.codex_test_key_required');
+      setTestStatus('error');
+      setTestMessage(message);
+      showNotification(message, 'error');
+      return;
+    }
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...customHeaders,
+    };
+    if (!hasHeader(headers, 'authorization')) {
+      headers.Authorization = keyAuthIndex ? 'Bearer $TOKEN$' : `Bearer ${apiKey}`;
+    }
+
+    setIsTesting(true);
+    setTestStatus('loading');
+    setTestMessage(t('ai_providers.codex_test_running'));
+
+    try {
+      const result = await apiCallApi.request(
+        {
+          authIndex: keyAuthIndex,
+          method: 'POST',
+          url: endpoint,
+          header: headers,
+          data: JSON.stringify({
+            model: modelName,
+            input: 'Hi',
+            stream: false,
+          }),
+        },
+        { timeout: CODEX_TEST_TIMEOUT_MS }
+      );
+
+      if (result.statusCode < 200 || result.statusCode >= 300) {
+        throw new Error(getApiCallErrorMessage(result));
+      }
+
+      setTestStatus('success');
+      setTestMessage(t('ai_providers.codex_test_success'));
+      showNotification(t('ai_providers.codex_test_success'), 'success');
+    } catch (err: unknown) {
+      const message = getErrorMessage(err) || t('ai_providers.codex_test_failed');
+      setTestStatus('error');
+      setTestMessage(message);
+      showNotification(`${t('ai_providers.codex_test_failed')}: ${message}`, 'error');
+    } finally {
+      setIsTesting(false);
+    }
+  }, [
+    availableModels,
+    form.apiKey,
+    form.authIndex,
+    form.baseUrl,
+    form.headers,
+    isTesting,
+    showNotification,
+    t,
+    testModel,
+  ]);
 
   const mergeDiscoveredModels = useCallback(
     (selectedModels: ModelInfo[]) => {
@@ -669,6 +819,45 @@ export function AiProvidersCodexEditPage() {
                 removeButtonTitle={t('common.delete')}
                 removeButtonAriaLabel={t('common.delete')}
               />
+              <div className={styles.connectivityTestPanel}>
+                <div className="form-group">
+                  <label htmlFor="codex-connectivity-test-model">
+                    {t('ai_providers.codex_test_model_label')}
+                  </label>
+                  <input
+                    id="codex-connectivity-test-model"
+                    className="input"
+                    list="codex-connectivity-test-models"
+                    value={testModel}
+                    onChange={(event) => setTestModel(event.target.value)}
+                    placeholder={availableModels[0] || t('common.model_name_placeholder')}
+                    disabled={disableControls || saving || isTesting}
+                  />
+                  <datalist id="codex-connectivity-test-models">
+                    {modelSelectOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </datalist>
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void runCodexConnectivityTest()}
+                  disabled={disableControls || saving || loading || isTesting}
+                  loading={isTesting}
+                >
+                  {t('ai_providers.codex_test_button')}
+                </Button>
+              </div>
+              {testStatus === 'success' ? (
+                <div className={styles.connectivitySuccess}>{testMessage}</div>
+              ) : testStatus === 'error' ? (
+                <div className={styles.connectivityError}>{testMessage}</div>
+              ) : testStatus === 'loading' ? (
+                <div className={styles.sectionHint}>{testMessage}</div>
+              ) : null}
             </div>
             <div className="form-group">
               <label>{t('ai_providers.excluded_models_label')}</label>

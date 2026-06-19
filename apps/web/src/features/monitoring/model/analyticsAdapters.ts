@@ -263,10 +263,25 @@ export const buildAnalyticsFilters = (
   if (isActiveFilterValue(scopeFilters.apiKeyHash)) {
     filters.api_key_hashes = [scopeFilters.apiKeyHash!.trim().toLowerCase()];
   }
+  if (isActiveFilterValue(scopeFilters.authFile)) {
+    filters.auth_files = [scopeFilters.authFile!.trim()];
+  }
+  if (isActiveFilterValue(scopeFilters.projectId)) {
+    filters.project_ids = [scopeFilters.projectId!.trim()];
+  }
+  if (isActiveFilterValue(scopeFilters.requestType)) {
+    filters.request_types = [scopeFilters.requestType!.trim()];
+  }
   if (scopeFilters.status === 'success') {
     filters.include_failed = false;
   } else if (scopeFilters.status === 'failed') {
     filters.failed_only = true;
+  }
+  if (typeof scopeFilters.minLatencyMs === 'number' && scopeFilters.minLatencyMs > 0) {
+    filters.min_latency_ms = scopeFilters.minLatencyMs;
+  }
+  if (isActiveFilterValue(scopeFilters.cacheStatus)) {
+    filters.cache_status = scopeFilters.cacheStatus!.trim();
   }
 
   let authIndices: Set<string> | null = null;
@@ -836,6 +851,7 @@ export const buildUsageDetailsFromAnalyticsEvents = (
     api_key_hash: readString(item.api_key_hash),
     account_snapshot: readString(item.account_snapshot),
     auth_label_snapshot: readString(item.auth_label_snapshot),
+    auth_file_snapshot: readString(item.auth_file_snapshot),
     auth_provider_snapshot: readString(item.auth_provider_snapshot),
     auth_project_id_snapshot: readString(item.auth_project_id_snapshot),
     reasoning_effort: readString(item.reasoning_effort),

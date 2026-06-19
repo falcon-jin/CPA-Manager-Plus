@@ -66,7 +66,7 @@ export type CodexInspectionStoredActionFilter =
   | 'disable'
   | 'enable'
   | 'reauth'
-  | 'http_401';
+  | 'keep';
 
 export interface CodexInspectionSettings {
   baseUrl: string;
@@ -106,6 +106,15 @@ export interface CodexInspectionAccount {
   raw: AuthFileItem;
 }
 
+export interface CodexInspectionQuotaWindow {
+  id: string;
+  labelKey: string;
+  labelParams?: Record<string, string | number>;
+  usedPercent: number | null;
+  resetLabel: string;
+  limitWindowSeconds: number | null;
+}
+
 export interface CodexInspectionResultItem extends CodexInspectionAccount {
   action: CodexInspectionAction;
   actionReason: string;
@@ -113,6 +122,10 @@ export interface CodexInspectionResultItem extends CodexInspectionAccount {
   usedPercent: number | null;
   isQuota: boolean;
   error: string;
+  planType?: string | null;
+  quotaWindows?: CodexInspectionQuotaWindow[];
+  errorKind?: string;
+  errorDetail?: string;
 }
 
 export interface CodexInspectionSummary {

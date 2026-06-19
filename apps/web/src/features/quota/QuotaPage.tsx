@@ -19,6 +19,11 @@ import {
   KIMI_CONFIG,
   XAI_CONFIG
 } from '@/components/quota';
+import { CodexReauthDialog } from '@/features/oauth/CodexReauthDialog';
+import {
+  createCodexReauthTargetFromAuthFile,
+  type CodexReauthTarget,
+} from '@/features/oauth/codexReauthModel';
 import type { QuotaSortMode } from '@/components/quota/quotaConfigs';
 import type { AuthFileItem } from '@/types';
 import {
@@ -42,6 +47,7 @@ export function QuotaPage() {
   const [sectionViewModes, setSectionViewModes] = useState(() => ({
     ...initialUiState.current.sectionViewModes,
   }));
+  const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
 
   const disableControls = connectionStatus !== 'connected';
   const sortOptions = useMemo(
@@ -112,6 +118,10 @@ export function QuotaPage() {
     []
   );
 
+  const handleCodexReauthSuccess = useCallback(async () => {
+    await loadFiles();
+  }, [loadFiles]);
+
   return (
     <div className={styles.container}>
       {error && <div className={styles.errorBox}>{error}</div>}
@@ -151,6 +161,7 @@ export function QuotaPage() {
         sortMode={sortMode}
         viewMode={getSectionViewMode(CODEX_CONFIG.type)}
         onViewModeChange={(viewMode) => setSectionViewMode(CODEX_CONFIG.type, viewMode)}
+        onReauthAccount={(file) => setCodexReauthTarget(createCodexReauthTargetFromAuthFile(file))}
       />
       <QuotaSection
         config={CLAUDE_CONFIG}
@@ -201,6 +212,13 @@ export function QuotaPage() {
         sortMode={sortMode}
         viewMode={getSectionViewMode(XAI_CONFIG.type)}
         onViewModeChange={(viewMode) => setSectionViewMode(XAI_CONFIG.type, viewMode)}
+      />
+
+      <CodexReauthDialog
+        open={Boolean(codexReauthTarget)}
+        target={codexReauthTarget}
+        onClose={() => setCodexReauthTarget(null)}
+        onSuccess={handleCodexReauthSuccess}
       />
     </div>
   );

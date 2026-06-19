@@ -44,3 +44,6 @@ TODO.md
 /data/usage.sqlite*
 /run/*.pid
 /run/*.log
+
+# Local temp scratch files
+.tmp-*

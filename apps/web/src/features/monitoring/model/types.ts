@@ -333,10 +333,15 @@ export type MonitoringMetadata = {
 export interface MonitoringScopeFilters {
   account?: string;
   provider?: string;
+  authFile?: string;
+  projectId?: string;
+  requestType?: string;
   model?: string;
   channel?: string;
   apiKeyHash?: string;
   status?: 'all' | 'success' | 'failed';
+  minLatencyMs?: number;
+  cacheStatus?: string;
 }
 
 export interface UseMonitoringDataParams {

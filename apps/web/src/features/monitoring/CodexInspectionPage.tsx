@@ -32,22 +32,28 @@ import { CodexInspectionResultsPanel } from '@/features/monitoring/components/Co
 import { CodexInspectionStatusPanel } from '@/features/monitoring/components/CodexInspectionStatusPanel';
 import { InspectionConfigDrawer } from '@/features/monitoring/components/InspectionConfigDrawer';
 import { InspectionConfigFields } from '@/features/monitoring/components/InspectionConfigFields';
+import { CodexReauthDialog } from '@/features/oauth/CodexReauthDialog';
+import type { CodexReauthTarget } from '@/features/oauth/codexReauthModel';
 import {
   CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS,
   buildCodexInspectionPaginationState,
   countActions,
+  countHandlingStates,
   createCompletedProgressSnapshot,
   createIdleProgressSnapshot,
   buildConfigOverviewItems,
-  filterByAction,
+  filterInspectionResults,
   formatActionLabel,
   formatAutoActionModeLabel,
   formatTime,
+  getActionFilterCounts,
+  normalizeActionFilter,
   toSettingsDraft,
   validateInspectionConfigDraft,
   validateInspectionConfigFields,
   type ActionFilter,
   type ExecutionTriggerSource,
+  type HandlingFilter,
   type InspectionLogEntry,
   type InspectionSettingsDraft,
   type InspectionSettingsDraftField,
@@ -106,12 +112,14 @@ export function CodexInspectionPage() {
   );
   const [executing, setExecuting] = useState(false);
   const [actionFilter, setActionFilter] = useState<ActionFilter>(
-    () => initialLastRun?.actionFilter ?? 'all'
+    () => normalizeActionFilter(initialLastRun?.actionFilter ?? 'all')
   );
+  const [handlingFilter, setHandlingFilter] = useState<HandlingFilter>('all');
   const [resultPage, setResultPage] = useState(1);
   const [resultPageSize, setResultPageSize] = useState<number>(
     CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS[0]
   );
+  const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
   const logCounterRef = useRef(initialLastRun?.logs.length ?? 0);
   const sessionRef = useRef<CodexInspectionSession | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
@@ -151,7 +159,8 @@ export function CodexInspectionPage() {
     );
     setResult(restored?.result ?? null);
     setResultConnectionFingerprint(restored?.connectionFingerprint ?? null);
-    setActionFilter(restored?.actionFilter ?? 'all');
+    setActionFilter(normalizeActionFilter(restored?.actionFilter ?? 'all'));
+    setHandlingFilter('all');
     logCounterRef.current = restored?.logs.length ?? 0;
   }, [connectionFingerprint]);
 
@@ -326,6 +335,7 @@ export function CodexInspectionPage() {
       setRunStatus('running');
       setLogsCollapsed(false);
       setActionFilter('all');
+      setHandlingFilter('all');
 
       const session = createCodexInspectionSession({
         config,
@@ -489,14 +499,16 @@ export function CodexInspectionPage() {
     [result]
   );
 
+  const displayResults = useMemo(() => (result ? result.results : []), [result]);
+
   const executableResults = useMemo(
     () => (result ? result.results.filter(isExecutableAction) : []),
     [result]
   );
 
   const filteredResults = useMemo(
-    () => filterByAction(suggestedResults, actionFilter),
-    [suggestedResults, actionFilter]
+    () => filterInspectionResults(displayResults, handlingFilter, actionFilter),
+    [displayResults, handlingFilter, actionFilter]
   );
 
   const resultPagination = useMemo(
@@ -506,7 +518,7 @@ export function CodexInspectionPage() {
 
   useEffect(() => {
     setResultPage(1);
-  }, [actionFilter, result?.startedAt, result?.finishedAt]);
+  }, [actionFilter, handlingFilter, result?.startedAt, result?.finishedAt]);
 
   useEffect(() => {
     if (resultPage === resultPagination.currentPage) return;
@@ -555,6 +567,19 @@ export function CodexInspectionPage() {
     },
     [executeItems, showConfirmation, t]
   );
+
+  const handleOpenCodexReauth = useCallback((item: CodexInspectionResultItem) => {
+    setCodexReauthTarget({
+      account: item.displayAccount || item.accountId || item.fileName,
+      fileName: item.fileName,
+      authIndex: item.authIndex,
+      accountId: item.accountId,
+    });
+  }, []);
+
+  const handleCodexReauthSuccess = useCallback(() => {
+    showNotification(t('codex_reauth.rerun_hint'), 'success');
+  }, [showNotification, t]);
 
   const summaryCards = useMemo<SummaryCard[]>(() => {
     const summarySource =
@@ -798,16 +823,13 @@ export function CodexInspectionPage() {
   }, [logsCollapsed, scrollLogsToBottom]);
 
   const filterCounts = useMemo(() => {
-    const counts = countActions(suggestedResults);
-    return {
-      all: suggestedResults.length,
-      delete: counts.delete,
-      disable: counts.disable,
-      enable: counts.enable,
-      reauth: counts.reauth,
-      http_401: counts.http401,
-    };
-  }, [suggestedResults]);
+    return getActionFilterCounts(displayResults);
+  }, [displayResults]);
+
+  const handlingFilterCounts = useMemo(
+    () => countHandlingStates(displayResults),
+    [displayResults]
+  );
 
   const filterLabel = (filter: ActionFilter) => {
     switch (filter) {
@@ -819,11 +841,23 @@ export function CodexInspectionPage() {
         return t('monitoring.codex_inspection_filter_enable');
       case 'reauth':
         return t('monitoring.codex_inspection_filter_reauth');
-      case 'http_401':
-        return t('monitoring.codex_inspection_filter_401');
+      case 'keep':
+        return t('monitoring.codex_inspection_action_keep');
       case 'all':
       default:
         return t('monitoring.codex_inspection_filter_all');
+    }
+  };
+
+  const handlingFilterLabel = (filter: HandlingFilter) => {
+    switch (filter) {
+      case 'pending':
+        return t('monitoring.codex_inspection_handling_filter_pending');
+      case 'no_action':
+        return t('monitoring.codex_inspection_handling_filter_no_action');
+      case 'all':
+      default:
+        return t('monitoring.codex_inspection_handling_filter_all');
     }
   };
 
@@ -872,7 +906,10 @@ export function CodexInspectionPage() {
         filteredResults={resultPagination.pageItems}
         suggestedResults={suggestedResults}
         pendingActionCount={pendingActionCount}
+        manualActionCount={filterCounts.reauth}
+        handlingFilterCounts={handlingFilterCounts}
         filterCounts={filterCounts}
+        handlingFilter={handlingFilter}
         actionFilter={actionFilter}
         pagination={resultPagination}
         pageSize={resultPageSize}
@@ -881,11 +918,14 @@ export function CodexInspectionPage() {
         isInspectionInFlight={isInspectionInFlight}
         t={t}
         onActionFilterChange={setActionFilter}
+        onHandlingFilterChange={setHandlingFilter}
         onPageChange={setResultPage}
         onPageSizeChange={handleResultPageSizeChange}
         onExecutePlanned={handleExecutePlanned}
         onExecuteSingle={handleExecuteSingle}
+        onReauthAccount={handleOpenCodexReauth}
         filterLabel={filterLabel}
+        handlingFilterLabel={handlingFilterLabel}
       />
 
       <CodexInspectionLogsPanel
@@ -941,6 +981,13 @@ export function CodexInspectionPage() {
           onAutoActionModeChange={handleAutoActionModeChange}
         />
       </InspectionConfigDrawer>
+
+      <CodexReauthDialog
+        open={Boolean(codexReauthTarget)}
+        target={codexReauthTarget}
+        onClose={() => setCodexReauthTarget(null)}
+        onSuccess={handleCodexReauthSuccess}
+      />
     </div>
   );
 }

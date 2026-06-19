@@ -135,6 +135,9 @@ func (r *repository) InsertResult(ctx context.Context, result model.CodexInspect
 	if result.CreatedAtMS <= 0 {
 		result.CreatedAtMS = time.Now().UnixMilli()
 	}
+	if result.QuotaWindowsJSON == "" && len(result.QuotaWindows) > 0 {
+		result.QuotaWindowsJSON = model.MarshalCodexInspectionQuotaWindows(result.QuotaWindows)
+	}
 	result.ActionStatus = model.NormalizeCodexInspectionActionStatus(result.ActionStatus, result.Action)
 	disabled := 0
 	if result.Disabled {
@@ -150,8 +153,8 @@ func (r *repository) InsertResult(ctx context.Context, result model.CodexInspect
 			run_id, account_key, file_name, display_account, auth_index, account_id,
 			provider, disabled, status, state, action, action_reason, status_code,
 			used_percent, is_quota, error, action_status, executed_action, action_error,
-			created_at_ms
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			plan_type, quota_windows_json, error_kind, error_detail, created_at_ms
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		on conflict(run_id, account_key) do update set
 			file_name = excluded.file_name,
 			display_account = excluded.display_account,
@@ -170,6 +173,10 @@ func (r *repository) InsertResult(ctx context.Context, result model.CodexInspect
 			action_status = excluded.action_status,
 			executed_action = excluded.executed_action,
 			action_error = excluded.action_error,
+			plan_type = excluded.plan_type,
+			quota_windows_json = excluded.quota_windows_json,
+			error_kind = excluded.error_kind,
+			error_detail = excluded.error_detail,
 			created_at_ms = excluded.created_at_ms`,
 		result.RunID,
 		result.AccountKey,
@@ -190,6 +197,10 @@ func (r *repository) InsertResult(ctx context.Context, result model.CodexInspect
 		nullString(result.ActionStatus),
 		nullString(result.ExecutedAction),
 		nullString(result.ActionError),
+		nullString(result.PlanType),
+		nullString(result.QuotaWindowsJSON),
+		nullString(result.ErrorKind),
+		nullString(result.ErrorDetail),
 		result.CreatedAtMS,
 	)
 	if err != nil {
@@ -313,7 +324,7 @@ func (r *repository) ListResults(ctx context.Context, runID int64) ([]model.Code
 			id, run_id, account_key, file_name, display_account, auth_index, account_id,
 			provider, disabled, status, state, action, action_reason, status_code,
 			used_percent, is_quota, error, action_status, executed_action, action_error,
-			created_at_ms
+			plan_type, quota_windows_json, error_kind, error_detail, created_at_ms
 		from codex_inspection_results
 		where run_id = ?
 		order by file_name asc, display_account asc, id asc`,
@@ -405,6 +416,7 @@ func scanResult(row scanner) (model.CodexInspectionResult, error) {
 	var result model.CodexInspectionResult
 	var authIndex, accountID, provider, status, state, actionReason, errorText sql.NullString
 	var actionStatus, executedAction, actionError sql.NullString
+	var planType, quotaWindowsJSON, errorKind, errorDetail sql.NullString
 	var statusCode sql.NullInt64
 	var usedPercent sql.NullFloat64
 	var disabled, isQuota int
@@ -429,6 +441,10 @@ func scanResult(row scanner) (model.CodexInspectionResult, error) {
 		&actionStatus,
 		&executedAction,
 		&actionError,
+		&planType,
+		&quotaWindowsJSON,
+		&errorKind,
+		&errorDetail,
 		&result.CreatedAtMS,
 	); err != nil {
 		return model.CodexInspectionResult{}, err
@@ -445,6 +461,11 @@ func scanResult(row scanner) (model.CodexInspectionResult, error) {
 	result.ActionStatus = model.NormalizeCodexInspectionActionStatus(actionStatus.String, result.Action)
 	result.ExecutedAction = executedAction.String
 	result.ActionError = actionError.String
+	result.PlanType = planType.String
+	result.QuotaWindowsJSON = quotaWindowsJSON.String
+	result.QuotaWindows = model.UnmarshalCodexInspectionQuotaWindows(result.QuotaWindowsJSON)
+	result.ErrorKind = errorKind.String
+	result.ErrorDetail = errorDetail.String
 	if statusCode.Valid {
 		value := int(statusCode.Int64)
 		result.StatusCode = &value

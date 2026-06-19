@@ -229,6 +229,67 @@ func TestServerCompatInfoIgnoresStaleUninitializedBootstrapState(t *testing.T) {
 	}
 }
 
+func TestServerCompatAccountProcessingPolicyPatchReloadsRuntime(t *testing.T) {
+	cfg := testutil.NewConfig(t)
+	db := testutil.NewStore(t, cfg)
+	manager := collector.NewManager(cfg, db)
+	runtime := &recordingAutomationRuntimeService{}
+	server := New(cfg, db, manager, runtime)
+	handler := server.Handler()
+
+	body := `{"codexQuotaCooldownEnabled":true,"authIssueQueueEnabled":true,"authIssueAutoDisableEnabled":true}`
+	rr := testutil.Request(t, handler, http.MethodPatch, "/usage-service/account-processing-policy", body, testutil.AdminKey)
+	testutil.RequireStatus(t, rr, http.StatusOK)
+	if runtime.reloadCount != 1 {
+		t.Fatalf("reloadCount = %d, want 1", runtime.reloadCount)
+	}
+	var response struct {
+		QuotaCooldown struct {
+			Enabled bool   `json:"enabled"`
+			Source  string `json:"source"`
+		} `json:"codexQuotaCooldown"`
+		AccountActionsAutoDisable struct {
+			Enabled    bool   `json:"enabled"`
+			Configured bool   `json:"configured"`
+			Source     string `json:"source"`
+		} `json:"authIssueAutoDisable"`
+	}
+	testutil.DecodeJSON(t, rr, &response)
+	if !response.QuotaCooldown.Enabled || response.QuotaCooldown.Source != "database" {
+		t.Fatalf("quotaCooldown response = %#v", response.QuotaCooldown)
+	}
+	if !response.AccountActionsAutoDisable.Enabled || !response.AccountActionsAutoDisable.Configured || response.AccountActionsAutoDisable.Source != "database" {
+		t.Fatalf("auto-disable response = %#v", response.AccountActionsAutoDisable)
+	}
+
+	getRR := testutil.Request(t, handler, http.MethodGet, "/usage-service/account-processing-policy", "", testutil.AdminKey)
+	testutil.RequireStatus(t, getRR, http.StatusOK)
+	if !strings.Contains(getRR.Body.String(), `"source":"database"`) {
+		t.Fatalf("expected persisted database source, body = %s", getRR.Body.String())
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	runtimeSettings := server.AppContext().AccountProcessingPolicyService.RuntimeSettings(context.Background())
+	if !runtimeSettings.QuotaCooldownEnabled || !runtimeSettings.AccountActionsEnabled || !runtimeSettings.AccountActionsAutoDisable {
+		t.Fatalf("runtime settings should use the PATCH-updated cache after load failure, got %#v", runtimeSettings)
+	}
+}
+
+func TestServerCompatAccountProcessingPolicyPatchRejectsEnvLockedField(t *testing.T) {
+	cfg := testutil.NewConfig(t)
+	cfg.QuotaCooldownEnvSet = true
+	db := testutil.NewStore(t, cfg)
+	handler := New(cfg, db, collector.NewManager(cfg, db)).Handler()
+
+	rr := testutil.Request(t, handler, http.MethodPatch, "/usage-service/account-processing-policy", `{"codexQuotaCooldownEnabled":true}`, testutil.AdminKey)
+	testutil.RequireStatus(t, rr, http.StatusConflict)
+	if !strings.Contains(rr.Body.String(), `"code":"account_processing_policy_env_locked"`) {
+		t.Fatalf("expected env locked error code, body = %s", rr.Body.String())
+	}
+}
+
 func TestServerCompatCPAPanelKeyCannotUseManagerOnlyRoutes(t *testing.T) {
 	cpa := testutil.NewCPAMock(t)
 	cfg := testutil.NewConfig(t)
@@ -520,22 +581,26 @@ func TestServerCompatProxyRoutes(t *testing.T) {
 
 func TestServerCompatPluginProxyRoutes(t *testing.T) {
 	type observedRequest struct {
-		method        string
-		path          string
-		query         string
-		authorization string
-		body          string
+		method            string
+		path              string
+		query             string
+		authorization     string
+		codexInviteOrigin string
+		origin            string
+		body              string
 	}
 
-	observed := make(chan observedRequest, 4)
+	observed := make(chan observedRequest, 9)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		observed <- observedRequest{
-			method:        r.Method,
-			path:          r.URL.Path,
-			query:         r.URL.RawQuery,
-			authorization: r.Header.Get("Authorization"),
-			body:          string(body),
+			method:            r.Method,
+			path:              r.URL.Path,
+			query:             r.URL.RawQuery,
+			authorization:     r.Header.Get("Authorization"),
+			codexInviteOrigin: r.Header.Get("X-Codex-Invite-Origin"),
+			origin:            r.Header.Get("Origin"),
+			body:              string(body),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true}`))
@@ -560,6 +625,21 @@ func TestServerCompatPluginProxyRoutes(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatalf("CPA upstream did not receive %s", path)
 		}
+	}
+	requestWithHeaders := func(method, target, body, managementKey string, headers map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, target, strings.NewReader(body))
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if managementKey != "" {
+			req.Header.Set("Authorization", "Bearer "+managementKey)
+		}
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
 	}
 
 	managementInstallRR := testutil.Request(
@@ -595,30 +675,144 @@ func TestServerCompatPluginProxyRoutes(t *testing.T) {
 		body:          `{"refresh":true}`,
 	})
 
+	pluginDynamicManagementRR := requestWithHeaders(
+		http.MethodGet,
+		"/v0/management/codex-invite/accounts",
+		"",
+		"plugin-management-key",
+		map[string]string{
+			"Origin":                "http://localhost:18317",
+			"X-Codex-Invite-Origin": "http://localhost:18317",
+		},
+	)
+	testutil.RequireStatus(t, pluginDynamicManagementRR, http.StatusOK)
+	assertObserved("/v0/management/codex-invite/accounts", observedRequest{
+		method:            http.MethodGet,
+		path:              "/v0/management/codex-invite/accounts",
+		authorization:     "Bearer plugin-management-key",
+		codexInviteOrigin: upstream.URL,
+		origin:            "http://localhost:18317",
+	})
+
+	pluginDynamicInviteRR := requestWithHeaders(
+		http.MethodPost,
+		"/v0/management/codex-invite/invite",
+		`{"management_origin":"http://localhost:18317","refresh":true}`,
+		"plugin-management-key",
+		map[string]string{
+			"Content-Type":          "application/json",
+			"X-Codex-Invite-Origin": "http://localhost:18317",
+		},
+	)
+	testutil.RequireStatus(t, pluginDynamicInviteRR, http.StatusOK)
+	assertObserved("/v0/management/codex-invite/invite", observedRequest{
+		method:            http.MethodPost,
+		path:              "/v0/management/codex-invite/invite",
+		authorization:     "Bearer plugin-management-key",
+		codexInviteOrigin: upstream.URL,
+		body:              `{"management_origin":"` + upstream.URL + `","refresh":true}`,
+	})
+
+	resourcePostNoAuthRR := testutil.Request(
+		t,
+		handler,
+		http.MethodPost,
+		"/v0/resource/plugins/codex-invite/invite",
+		`{"managementKey":"plugin-key"}`,
+		"",
+	)
+	testutil.RequireStatus(t, resourcePostNoAuthRR, http.StatusOK)
+	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
+		method: http.MethodPost,
+		path:   "/v0/resource/plugins/codex-invite/invite",
+		body:   `{"managementKey":"plugin-key"}`,
+	})
+
+	resourcePostCallerAuthRR := requestWithHeaders(
+		http.MethodPost,
+		"/v0/resource/plugins/codex-invite/invite",
+		`{"refresh":true}`,
+		"plugin-management-key",
+		map[string]string{
+			"X-Codex-Invite-Origin": "http://localhost:18317",
+		},
+	)
+	testutil.RequireStatus(t, resourcePostCallerAuthRR, http.StatusOK)
+	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
+		method:            http.MethodPost,
+		path:              "/v0/resource/plugins/codex-invite/invite",
+		authorization:     "Bearer plugin-management-key",
+		codexInviteOrigin: upstream.URL,
+		body:              `{"refresh":true}`,
+	})
+
 	resourcePostRR := testutil.Request(
 		t,
 		handler,
 		http.MethodPost,
 		"/v0/resource/plugins/codex-invite/invite",
-		"",
-		"",
+		`{"refresh":true}`,
+		testutil.AdminKey,
 	)
-	testutil.RequireStatus(t, resourcePostRR, http.StatusMethodNotAllowed)
+	testutil.RequireStatus(t, resourcePostRR, http.StatusOK)
+	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
+		method:        http.MethodPost,
+		path:          "/v0/resource/plugins/codex-invite/invite",
+		authorization: "Bearer management-key",
+		body:          `{"refresh":true}`,
+	})
 
-	resourceRR := testutil.Request(
+	resourcePutRR := testutil.Request(
 		t,
 		handler,
-		http.MethodGet,
+		http.MethodPut,
+		"/v0/resource/plugins/codex-invite/invite",
+		`{"key":"value"}`,
+		testutil.AdminKey,
+	)
+	testutil.RequireStatus(t, resourcePutRR, http.StatusOK)
+	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
+		method:        http.MethodPut,
+		path:          "/v0/resource/plugins/codex-invite/invite",
+		authorization: "Bearer management-key",
+		body:          `{"key":"value"}`,
+	})
+
+	resourceTraceRR := testutil.Request(
+		t,
+		handler,
+		http.MethodTrace,
 		"/v0/resource/plugins/codex-invite/invite",
 		"",
 		"",
 	)
+	testutil.RequireStatus(t, resourceTraceRR, http.StatusMethodNotAllowed)
+
+	resourceRR := requestWithHeaders(
+		http.MethodGet,
+		"/v0/resource/plugins/codex-invite/invite",
+		"",
+		"",
+		map[string]string{
+			"X-Codex-Invite-Origin": "http://localhost:18317",
+		},
+	)
 	testutil.RequireStatus(t, resourceRR, http.StatusOK)
 	assertObserved("/v0/resource/plugins/codex-invite/invite", observedRequest{
-		method:        http.MethodGet,
-		path:          "/v0/resource/plugins/codex-invite/invite",
-		authorization: "Bearer management-key",
+		method:            http.MethodGet,
+		path:              "/v0/resource/plugins/codex-invite/invite",
+		authorization:     "Bearer management-key",
+		codexInviteOrigin: upstream.URL,
 	})
+}
+
+type recordingAutomationRuntimeService struct {
+	reloadCount int
+}
+
+func (s *recordingAutomationRuntimeService) Reload(context.Context) error {
+	s.reloadCount++
+	return nil
 }
 
 func compatEvent(hash string, offset int64) usage.Event {

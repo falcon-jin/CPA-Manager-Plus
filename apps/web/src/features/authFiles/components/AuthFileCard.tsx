@@ -7,6 +7,7 @@ import {
   IconDownload,
   IconInfo,
   IconModelCluster,
+  IconRefreshCw,
   IconSettings,
   IconTrash2,
 } from '@/components/ui/icons';
@@ -49,7 +50,9 @@ export type AuthFileCardProps = {
   statusUpdating: Record<string, boolean>;
   statusBarCache: Map<string, AuthFileStatusBarData>;
   codexStatusBadges?: AuthFileCodexStatusBadge[];
+  codexNeedsReauth?: boolean;
   onShowModels: (file: AuthFileItem) => void;
+  onReauth?: (file: AuthFileItem) => void;
   onDownload: (name: string) => void;
   onOpenPrefixProxyEditor: (file: AuthFileItem) => void;
   onDelete: (name: string) => void;
@@ -81,7 +84,9 @@ export function AuthFileCard(props: AuthFileCardProps) {
     statusUpdating,
     statusBarCache,
     codexStatusBadges = [],
+    codexNeedsReauth = false,
     onShowModels,
+    onReauth,
     onDownload,
     onOpenPrefixProxyEditor,
     onDelete,
@@ -310,6 +315,19 @@ export function AuthFileCard(props: AuthFileCardProps) {
                       >
                         <IconDownload className={styles.actionIcon} size={16} />
                       </Button>
+                      {codexNeedsReauth && onReauth ? (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => onReauth(file)}
+                          className={styles.iconButton}
+                          title={t('codex_reauth.button')}
+                          aria-label={t('codex_reauth.button')}
+                          disabled={disableControls}
+                        >
+                          <IconRefreshCw className={styles.actionIcon} size={16} />
+                        </Button>
+                      ) : null}
                       <Button
                         variant="secondary"
                         size="sm"

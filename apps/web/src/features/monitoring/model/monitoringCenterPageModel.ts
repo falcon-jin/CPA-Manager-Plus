@@ -19,6 +19,7 @@ import {
   type AccountDisplayMode,
   type AccountSortKey,
 } from '@/features/monitoring/accountOverviewState';
+import type { MonitoringCenterUiState } from '@/features/monitoring/monitoringCenterUiState';
 import type {
   AccountQuotaEntry,
   AccountQuotaWindow,
@@ -127,6 +128,55 @@ export const parseDateTimeLocalValue = (value: string) => {
   if (!value) return null;
   const timestamp = new Date(value).getTime();
   return Number.isFinite(timestamp) ? timestamp : null;
+};
+
+const parseQueryTimestamp = (params: URLSearchParams, key: string) => {
+  const value = Number(params.get(key));
+  return Number.isFinite(value) && value > 0 ? value : null;
+};
+
+export const buildMonitoringInitialStateFromQuery = (
+  search: string,
+  state: MonitoringCenterUiState
+): MonitoringCenterUiState => {
+  const params = new URLSearchParams(search);
+  const fromMs = parseQueryTimestamp(params, 'from_ms');
+  const toMs = parseQueryTimestamp(params, 'to_ms');
+  const model = params.get('model')?.trim();
+  const apiKeyHash = params.get('api_key_hash')?.trim();
+  const status = params.get('status')?.trim();
+  const provider = params.get('provider')?.trim();
+  const authFile = params.get('auth_file')?.trim();
+  const projectId = params.get('project_id')?.trim();
+  const requestType = params.get('request_type')?.trim();
+  const searchQuery = params.get('search')?.trim();
+  const minLatencyMs = params.get('min_latency_ms')?.trim();
+  const cacheStatus = params.get('cache_status')?.trim();
+  const hasRange = fromMs !== null && toMs !== null && fromMs < toMs;
+  const hasStructuredScopeFilter = Boolean(
+    authFile || projectId || requestType || minLatencyMs || cacheStatus
+  );
+
+  return {
+    ...state,
+    timeRange: hasRange ? 'custom' : state.timeRange,
+    customStartInput: hasRange
+      ? formatDateTimeLocalValue(new Date(fromMs))
+      : state.customStartInput,
+    customEndInput: hasRange ? formatDateTimeLocalValue(new Date(toMs)) : state.customEndInput,
+    selectedModel: model || state.selectedModel,
+    selectedProvider: provider || state.selectedProvider,
+    selectedApiKeyHash: apiKeyHash || state.selectedApiKeyHash,
+    selectedStatus:
+      status === 'success' || status === 'failed' || status === 'all'
+        ? status
+        : state.selectedStatus,
+    searchInput: searchQuery || state.searchInput,
+    activeDataTab:
+      hasRange || model || apiKeyHash || status || provider || searchQuery || hasStructuredScopeFilter
+        ? 'realtime'
+        : state.activeDataTab,
+  };
 };
 
 export const ensureSelectedOption = <T extends { value: string; label: string }>(
@@ -562,32 +612,12 @@ export const buildSecondarySummaryCards = (
 ): SummaryCardProps[] => {
   const totalCacheTokens =
     summary.cachedTokens + summary.cacheCreationTokens + summary.cacheReadTokens;
-  const hasFineGrainedCache = summary.cacheCreationTokens > 0 || summary.cacheReadTokens > 0;
-  const tokenMixTotal =
-    summary.inputTokens + summary.outputTokens + summary.reasoningTokens + totalCacheTokens;
-  const cachedTokenMetaParts = [
-    hasFineGrainedCache
-      ? `${t('monitoring.of_token_mix')} ${formatPercent(tokenMixTotal > 0 ? totalCacheTokens / tokenMixTotal : 0)}`
-      : `${t('monitoring.of_input_tokens')} ${formatPercent(summary.inputTokens > 0 ? totalCacheTokens / summary.inputTokens : 0)}`,
-  ];
-
-  if (hasFineGrainedCache) {
-    if (summary.cachedTokens > 0) {
-      cachedTokenMetaParts.push(
-        `${shortLabel(t, 'monitoring.cached_tokens_short', 'monitoring.cached_tokens')} ${formatCompactNumber(summary.cachedTokens)}`
-      );
-    }
-    if (summary.cacheCreationTokens > 0) {
-      cachedTokenMetaParts.push(
-        `${t('monitoring.cache_creation_tokens_short')} ${formatCompactNumber(summary.cacheCreationTokens)}`
-      );
-    }
-    if (summary.cacheReadTokens > 0) {
-      cachedTokenMetaParts.push(
-        `${t('monitoring.cache_read_tokens_short')} ${formatCompactNumber(summary.cacheReadTokens)}`
-      );
-    }
-  }
+  const cacheHitTokens = summary.cachedTokens + summary.cacheReadTokens;
+  const inputSideTokens =
+    Math.max(summary.inputTokens, summary.cachedTokens) +
+    summary.cacheReadTokens +
+    summary.cacheCreationTokens;
+  const cacheHitRate = inputSideTokens > 0 ? cacheHitTokens / inputSideTokens : 0;
 
   return [
     {
@@ -625,7 +655,7 @@ export const buildSecondarySummaryCards = (
       fullLabel: t('monitoring.cached_tokens'),
       value: formatCompactNumber(totalCacheTokens),
       valueTitle: formatFullNumber(totalCacheTokens, locale),
-      meta: cachedTokenMetaParts.join(' · '),
+      meta: `${t('monitoring.cache_hit_rate')} ${formatPercent(cacheHitRate)}`,
       variant: 'secondary',
       icon: 'cache',
       accent: 'teal',

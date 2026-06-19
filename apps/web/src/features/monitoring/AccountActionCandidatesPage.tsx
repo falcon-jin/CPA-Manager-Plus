@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { IconCheck, IconEye, IconRefreshCw, IconTrash2 } from '@/components/ui/icons';
@@ -166,6 +167,11 @@ export function AccountActionCandidatesPage() {
     <div className={styles.page}>
       <section className={styles.hero}>
         <div className={styles.heroMain}>
+          {featureAvailability.requestMonitoringAvailable ? (
+            <Link to="/monitoring" className={styles.backLink}>
+              {t('account_actions.back_to_monitoring')}
+            </Link>
+          ) : null}
           <p className={styles.kicker}>{t('account_actions.eyebrow')}</p>
           <h1 className={styles.title}>{t('account_actions.title')}</h1>
           <p className={styles.description}>{t('account_actions.description')}</p>

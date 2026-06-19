@@ -3,6 +3,7 @@ package monitoring
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -12,9 +13,11 @@ import (
 )
 
 const (
-	defaultEventsLimit = 100
-	maxEventsLimit     = 50000
-	recentWindowMS     = 30 * 60 * 1000
+	defaultEventsLimit    = 100
+	defaultDrilldownLimit = 20
+	maxEventsLimit        = 50000
+	maxDrilldownLimit     = 100
+	recentWindowMS        = 30 * 60 * 1000
 )
 
 type Service struct {
@@ -29,6 +32,7 @@ type Request struct {
 	FromMS           int64   `json:"from_ms"`
 	ToMS             int64   `json:"to_ms"`
 	NowMS            int64   `json:"now_ms"`
+	TimeZone         string  `json:"time_zone"`
 	SearchQuery      string  `json:"search_query"`
 	SearchAPIKeyHash string  `json:"search_api_key_hash"`
 	Filters          Filters `json:"filters"`
@@ -36,32 +40,42 @@ type Request struct {
 }
 
 type Filters struct {
-	Models            []string `json:"models"`
-	Providers         []string `json:"providers"`
-	Accounts          []string `json:"accounts"`
-	AuthIndices       []string `json:"auth_indices"`
-	APIKeyHashes      []string `json:"api_key_hashes"`
-	SourceHashes      []string `json:"source_hashes"`
-	IncludeFailed     *bool    `json:"include_failed"`
-	FailedOnly        bool     `json:"failed_only"`
-	ExcludeZeroTokens bool     `json:"exclude_zero_token"`
+	Models        []string `json:"models"`
+	Providers     []string `json:"providers"`
+	Accounts      []string `json:"accounts"`
+	AuthFiles     []string `json:"auth_files"`
+	AuthIndices   []string `json:"auth_indices"`
+	APIKeyHashes  []string `json:"api_key_hashes"`
+	SourceHashes  []string `json:"source_hashes"`
+	ProjectIDs    []string `json:"project_ids"`
+	RequestTypes  []string `json:"request_types"`
+	IncludeFailed *bool    `json:"include_failed"`
+	FailedOnly    bool     `json:"failed_only"`
+	MinLatencyMS  int64    `json:"min_latency_ms"`
+	CacheStatus   string   `json:"cache_status"`
 }
 
 type Include struct {
-	Summary            bool        `json:"summary"`
-	Timeline           bool        `json:"timeline"`
-	HourlyDistribution bool        `json:"hourly_distribution"`
-	ModelShare         bool        `json:"model_share"`
-	ChannelShare       bool        `json:"channel_share"`
-	ModelStats         bool        `json:"model_stats"`
-	FailureSources     bool        `json:"failure_sources"`
-	AccountStats       bool        `json:"account_stats"`
-	APIKeyStats        bool        `json:"api_key_stats"`
-	FilterOptions      bool        `json:"filter_options"`
-	TaskBuckets        bool        `json:"task_buckets"`
-	RecentFailures     int         `json:"recent_failures"`
-	EventsPage         *EventsPage `json:"events_page"`
-	Granularity        string      `json:"granularity"`
+	Summary            bool              `json:"summary"`
+	SummaryComparison  bool              `json:"summary_comparison"`
+	Timeline           bool              `json:"timeline"`
+	HourlyDistribution bool              `json:"hourly_distribution"`
+	ModelShare         bool              `json:"model_share"`
+	ChannelShare       bool              `json:"channel_share"`
+	ModelStats         bool              `json:"model_stats"`
+	FailureSources     bool              `json:"failure_sources"`
+	AccountStats       bool              `json:"account_stats"`
+	CredentialStats    bool              `json:"credential_stats"`
+	CredentialTimeline bool              `json:"credential_timeline"`
+	APIKeyStats        bool              `json:"api_key_stats"`
+	FilterOptions      bool              `json:"filter_options"`
+	Heatmap            bool              `json:"heatmap"`
+	AnomalyPoints      bool              `json:"anomaly_points"`
+	TaskBuckets        bool              `json:"task_buckets"`
+	RecentFailures     int               `json:"recent_failures"`
+	EventsPage         *EventsPage       `json:"events_page"`
+	DrilldownPreview   *DrilldownPreview `json:"drilldown_preview"`
+	Granularity        string            `json:"granularity"`
 }
 
 type EventsPage struct {
@@ -70,22 +84,34 @@ type EventsPage struct {
 	BeforeID *int64 `json:"before_id"`
 }
 
+type DrilldownPreview struct {
+	FromMS int64 `json:"from_ms"`
+	ToMS   int64 `json:"to_ms"`
+	Limit  int   `json:"limit"`
+}
+
 type Response struct {
-	GeneratedAtMS      int64              `json:"generated_at_ms"`
-	Granularity        string             `json:"granularity"`
-	Summary            *Summary           `json:"summary,omitempty"`
-	Timeline           []TimelinePoint    `json:"timeline,omitempty"`
-	HourlyDistribution []HourlyPoint      `json:"hourly_distribution,omitempty"`
-	ModelShare         []ModelShareRow    `json:"model_share,omitempty"`
-	ModelStats         []ModelStat        `json:"model_stats,omitempty"`
-	ChannelShare       []ChannelShareRow  `json:"channel_share,omitempty"`
-	FailureSources     []FailureSourceRow `json:"failure_sources,omitempty"`
-	AccountStats       []AccountStatRow   `json:"account_stats,omitempty"`
-	APIKeyStats        []APIKeyStatRow    `json:"api_key_stats,omitempty"`
-	FilterOptions      *FilterOptions     `json:"filter_options,omitempty"`
-	TaskBuckets        []TaskBucketRow    `json:"task_buckets,omitempty"`
-	RecentFailures     []RecentFailure    `json:"recent_failures,omitempty"`
-	Events             *EventsResponse    `json:"events,omitempty"`
+	GeneratedAtMS      int64                     `json:"generated_at_ms"`
+	Granularity        string                    `json:"granularity"`
+	Summary            *Summary                  `json:"summary,omitempty"`
+	SummaryComparison  *SummaryComparison        `json:"summary_comparison,omitempty"`
+	Timeline           []TimelinePoint           `json:"timeline,omitempty"`
+	HourlyDistribution []HourlyPoint             `json:"hourly_distribution,omitempty"`
+	Heatmap            []HeatmapPoint            `json:"heatmap,omitempty"`
+	AnomalyPoints      []AnomalyPoint            `json:"anomaly_points,omitempty"`
+	ModelShare         []ModelShareRow           `json:"model_share,omitempty"`
+	ModelStats         []ModelStat               `json:"model_stats,omitempty"`
+	ChannelShare       []ChannelShareRow         `json:"channel_share,omitempty"`
+	FailureSources     []FailureSourceRow        `json:"failure_sources,omitempty"`
+	AccountStats       []AccountStatRow          `json:"account_stats,omitempty"`
+	CredentialStats    []CredentialStatRow       `json:"credential_stats,omitempty"`
+	CredentialTimeline []CredentialTimelinePoint `json:"credential_timeline,omitempty"`
+	APIKeyStats        []APIKeyStatRow           `json:"api_key_stats,omitempty"`
+	FilterOptions      *FilterOptions            `json:"filter_options,omitempty"`
+	TaskBuckets        []TaskBucketRow           `json:"task_buckets,omitempty"`
+	RecentFailures     []RecentFailure           `json:"recent_failures,omitempty"`
+	Events             *EventsResponse           `json:"events,omitempty"`
+	DrilldownPreview   *EventsResponse           `json:"drilldown_preview,omitempty"`
 }
 
 type Summary struct {
@@ -101,7 +127,10 @@ type Summary struct {
 	ReasoningTokens       int64    `json:"reasoning_tokens"`
 	TotalTokens           int64    `json:"total_tokens"`
 	TotalCost             float64  `json:"total_cost"`
+	AverageCostPerCall    float64  `json:"average_cost_per_call"`
 	AverageLatencyMS      *float64 `json:"average_latency_ms"`
+	P95LatencyMS          *float64 `json:"p95_latency_ms"`
+	P95TTFTMS             *float64 `json:"p95_ttft_ms"`
 	ZeroTokenCalls        int64    `json:"zero_token_calls"`
 	RPM30M                float64  `json:"rpm_30m"`
 	TPM30M                float64  `json:"tpm_30m"`
@@ -113,19 +142,91 @@ type Summary struct {
 	ZeroTokenModels       []string `json:"zero_token_models"`
 }
 
+// SummaryComparison holds previous-period aggregates computed with the same
+// filter as the current summary, letting the client derive period-over-period
+// deltas. It is only populated when Include.SummaryComparison is set, keeping
+// the extra queries off other consumers (dashboard/monitoring) that don't need it.
+type SummaryComparison struct {
+	FromMS       int64   `json:"from_ms"`
+	ToMS         int64   `json:"to_ms"`
+	TotalCalls   int64   `json:"total_calls"`
+	SuccessCalls int64   `json:"success_calls"`
+	FailureCalls int64   `json:"failure_calls"`
+	SuccessRate  float64 `json:"success_rate"`
+	TotalTokens  int64   `json:"total_tokens"`
+	TotalCost    float64 `json:"total_cost"`
+}
+
 type TimelinePoint struct {
-	BucketMS int64  `json:"bucket_ms"`
-	Label    string `json:"label"`
-	Calls    int64  `json:"calls"`
-	Tokens   int64  `json:"tokens"`
-	Success  int64  `json:"success"`
-	Failure  int64  `json:"failure"`
+	BucketMS            int64    `json:"bucket_ms"`
+	Label               string   `json:"label"`
+	Calls               int64    `json:"calls"`
+	Tokens              int64    `json:"tokens"`
+	Success             int64    `json:"success"`
+	Failure             int64    `json:"failure"`
+	InputTokens         int64    `json:"input_tokens"`
+	OutputTokens        int64    `json:"output_tokens"`
+	CachedTokens        int64    `json:"cached_tokens"`
+	CacheReadTokens     int64    `json:"cache_read_tokens"`
+	CacheCreationTokens int64    `json:"cache_creation_tokens"`
+	ReasoningTokens     int64    `json:"reasoning_tokens"`
+	TotalTokens         int64    `json:"total_tokens"`
+	Cost                float64  `json:"cost"`
+	AvgLatencyMS        *float64 `json:"average_latency_ms"`
+	P95LatencyMS        *float64 `json:"p95_latency_ms"`
+	P95TTFTMS           *float64 `json:"p95_ttft_ms"`
+	SuccessRate         float64  `json:"success_rate"`
+	FailureRate         float64  `json:"failure_rate"`
 }
 
 type HourlyPoint struct {
 	Hour   int   `json:"hour"`
 	Calls  int64 `json:"calls"`
 	Tokens int64 `json:"tokens"`
+}
+
+type HeatmapPoint struct {
+	Weekday              int                  `json:"weekday"`
+	Hour                 int                  `json:"hour"`
+	Calls                int64                `json:"calls"`
+	Success              int64                `json:"success"`
+	Failure              int64                `json:"failure"`
+	Tokens               int64                `json:"tokens"`
+	Cost                 float64              `json:"cost"`
+	FailureRate          float64              `json:"failure_rate"`
+	ModelContributors    []HeatmapContributor `json:"model_contributors,omitempty"`
+	APIKeyContributors   []HeatmapContributor `json:"api_key_contributors,omitempty"`
+	ProviderContributors []HeatmapContributor `json:"provider_contributors,omitempty"`
+}
+
+type HeatmapContributor struct {
+	Key         string  `json:"key"`
+	Label       string  `json:"label,omitempty"`
+	Calls       int64   `json:"calls"`
+	Success     int64   `json:"success"`
+	Failure     int64   `json:"failure"`
+	Tokens      int64   `json:"tokens"`
+	Cost        float64 `json:"cost"`
+	FailureRate float64 `json:"failure_rate"`
+	Share       float64 `json:"share"`
+}
+
+type AnomalyPoint struct {
+	BucketMS               int64    `json:"bucket_ms"`
+	BucketEndMS            int64    `json:"bucket_end_ms"`
+	Label                  string   `json:"label"`
+	Severity               string   `json:"severity"`
+	MetricKeys             []string `json:"metric_keys"`
+	Calls                  int64    `json:"calls"`
+	TotalTokens            int64    `json:"total_tokens"`
+	Cost                   float64  `json:"cost"`
+	FailureRate            float64  `json:"failure_rate"`
+	RequestChange          float64  `json:"request_change"`
+	CostChange             float64  `json:"cost_change"`
+	TokensPerRequestChange float64  `json:"tokens_per_request_change"`
+	CacheHitRateChange     float64  `json:"cache_hit_rate_change"`
+	FailureRateChange      float64  `json:"failure_rate_change"`
+	LatencyP95Change       float64  `json:"latency_p95_change"`
 }
 
 type ModelShareRow struct {
@@ -201,6 +302,62 @@ type AccountStatRow struct {
 	Models               []AccountModelStatRow `json:"models,omitempty"`
 }
 
+type CredentialStatRow struct {
+	ID                    string                `json:"id"`
+	AuthFileSnapshot      string                `json:"auth_file_snapshot,omitempty"`
+	AuthIndex             string                `json:"auth_index,omitempty"`
+	Source                string                `json:"source,omitempty"`
+	SourceHash            string                `json:"source_hash,omitempty"`
+	AccountSnapshot       string                `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot     string                `json:"auth_label_snapshot,omitempty"`
+	AuthProviderSnapshot  string                `json:"auth_provider_snapshot,omitempty"`
+	AuthProjectIDSnapshot string                `json:"auth_project_id_snapshot,omitempty"`
+	Calls                 int64                 `json:"calls"`
+	SuccessCalls          int64                 `json:"success_calls"`
+	FailureCalls          int64                 `json:"failure_calls"`
+	SuccessRate           float64               `json:"success_rate"`
+	InputTokens           int64                 `json:"input_tokens"`
+	OutputTokens          int64                 `json:"output_tokens"`
+	CachedTokens          int64                 `json:"cached_tokens"`
+	CacheReadTokens       int64                 `json:"cache_read_tokens"`
+	CacheCreationTokens   int64                 `json:"cache_creation_tokens"`
+	TotalTokens           int64                 `json:"total_tokens"`
+	Cost                  float64               `json:"cost"`
+	AvgLatencyMS          *float64              `json:"average_latency_ms"`
+	LastSeenMS            int64                 `json:"last_seen_ms"`
+	Models                []AccountModelStatRow `json:"models,omitempty"`
+}
+
+type CredentialTimelinePoint struct {
+	ID                    string   `json:"id"`
+	Label                 string   `json:"label"`
+	AuthFileSnapshot      string   `json:"auth_file_snapshot,omitempty"`
+	AuthIndex             string   `json:"auth_index,omitempty"`
+	Source                string   `json:"source,omitempty"`
+	SourceHash            string   `json:"source_hash,omitempty"`
+	AccountSnapshot       string   `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot     string   `json:"auth_label_snapshot,omitempty"`
+	AuthProviderSnapshot  string   `json:"auth_provider_snapshot,omitempty"`
+	AuthProjectIDSnapshot string   `json:"auth_project_id_snapshot,omitempty"`
+	BucketMS              int64    `json:"bucket_ms"`
+	BucketLabel           string   `json:"bucket_label"`
+	Calls                 int64    `json:"calls"`
+	Tokens                int64    `json:"tokens"`
+	Success               int64    `json:"success"`
+	Failure               int64    `json:"failure"`
+	InputTokens           int64    `json:"input_tokens"`
+	OutputTokens          int64    `json:"output_tokens"`
+	CachedTokens          int64    `json:"cached_tokens"`
+	CacheReadTokens       int64    `json:"cache_read_tokens"`
+	CacheCreationTokens   int64    `json:"cache_creation_tokens"`
+	ReasoningTokens       int64    `json:"reasoning_tokens"`
+	TotalTokens           int64    `json:"total_tokens"`
+	Cost                  float64  `json:"cost"`
+	AvgLatencyMS          *float64 `json:"average_latency_ms"`
+	SuccessRate           float64  `json:"success_rate"`
+	FailureRate           float64  `json:"failure_rate"`
+}
+
 type AccountModelStatRow struct {
 	Model               string  `json:"model"`
 	Calls               int64   `json:"calls"`
@@ -240,6 +397,26 @@ type APIKeyStatRow struct {
 	AvgLatencyMS         *float64              `json:"average_latency_ms"`
 	LastSeenMS           int64                 `json:"last_seen_ms"`
 	Models               []AccountModelStatRow `json:"models,omitempty"`
+	Contexts             []APIKeyContextRow    `json:"contexts,omitempty"`
+}
+
+type APIKeyContextRow struct {
+	ID                   string   `json:"id"`
+	AccountSnapshot      string   `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot    string   `json:"auth_label_snapshot,omitempty"`
+	AuthProviderSnapshot string   `json:"auth_provider_snapshot,omitempty"`
+	AuthIndex            string   `json:"auth_index,omitempty"`
+	Source               string   `json:"source,omitempty"`
+	SourceHash           string   `json:"source_hash,omitempty"`
+	Calls                int64    `json:"calls"`
+	SuccessCalls         int64    `json:"success_calls"`
+	FailureCalls         int64    `json:"failure_calls"`
+	SuccessRate          float64  `json:"success_rate"`
+	FailureRate          float64  `json:"failure_rate"`
+	TotalTokens          int64    `json:"total_tokens"`
+	Cost                 float64  `json:"cost"`
+	AvgLatencyMS         *float64 `json:"average_latency_ms"`
+	LastSeenMS           int64    `json:"last_seen_ms"`
 }
 
 type FilterOptions struct {
@@ -247,6 +424,10 @@ type FilterOptions struct {
 	APIKeyStats  []APIKeyStatRow   `json:"api_key_stats,omitempty"`
 	ChannelShare []ChannelShareRow `json:"channel_share,omitempty"`
 	ModelStats   []ModelStat       `json:"model_stats,omitempty"`
+	Providers    []string          `json:"providers,omitempty"`
+	AuthFiles    []string          `json:"auth_files,omitempty"`
+	ProjectIDs   []string          `json:"project_ids,omitempty"`
+	RequestTypes []string          `json:"request_types,omitempty"`
 }
 
 type TaskBucketRow struct {
@@ -297,6 +478,7 @@ type EventsResponse struct {
 }
 
 type EventRow struct {
+	RequestID             string `json:"request_id,omitempty"`
 	EventHash             string `json:"event_hash"`
 	TimestampMS           int64  `json:"timestamp_ms"`
 	Model                 string `json:"model"`
@@ -310,6 +492,7 @@ type EventRow struct {
 	APIKeyHash            string `json:"api_key_hash"`
 	AccountSnapshot       string `json:"account_snapshot"`
 	AuthLabelSnapshot     string `json:"auth_label_snapshot"`
+	AuthFileSnapshot      string `json:"auth_file_snapshot,omitempty"`
 	AuthProviderSnapshot  string `json:"auth_provider_snapshot"`
 	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
 	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
@@ -338,6 +521,10 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 		nowMS = time.Now().UnixMilli()
 	}
 	granularity := normalizeGranularity(req.Include.Granularity, req.FromMS, req.ToMS)
+	location, err := resolveAnalyticsLocation(req.TimeZone)
+	if err != nil {
+		return Response{}, err
+	}
 	filter := buildFilter(req)
 	prices, err := s.store.LoadModelPrices(ctx)
 	if err != nil {
@@ -377,6 +564,10 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 		if err != nil {
 			return Response{}, err
 		}
+		latencySummary, err := s.store.LatencySummaryWithFilter(ctx, filter)
+		if err != nil {
+			return Response{}, err
+		}
 		rollingFilter := filter
 		rollingFilter.FromMS = nowMS - recentWindowMS
 		rollingFilter.ToMS = nowMS
@@ -384,7 +575,7 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 		if err != nil {
 			return Response{}, err
 		}
-		activeDays, err := s.store.ActiveDaysWithFilter(ctx, filter)
+		activeDays, err := s.store.ActiveDaysWithFilter(ctx, filter, location)
 		if err != nil {
 			return Response{}, err
 		}
@@ -392,23 +583,71 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 		if err != nil {
 			return Response{}, err
 		}
-		response.Summary = buildSummary(agg, rollingAgg, activeDays, modelStats, taskBuckets, prices, zeroTokenModels)
+		response.Summary = buildSummary(agg, latencySummary, rollingAgg, activeDays, modelStats, taskBuckets, prices, zeroTokenModels)
 		summaryTotalCalls = agg.TotalCalls
 		summaryComputed = true
+
+		// Period-over-period comparison reuses the same filter over the
+		// immediately preceding window [FromMS-window, FromMS). Gated behind an
+		// explicit flag so other analytics consumers avoid the extra queries.
+		if req.Include.SummaryComparison {
+			windowMS := req.ToMS - req.FromMS
+			if prevFrom := req.FromMS - windowMS; prevFrom > 0 {
+				prevFilter := filter
+				prevFilter.FromMS = prevFrom
+				prevFilter.ToMS = req.FromMS
+				prevAgg, err := s.store.AggregateWithFilter(ctx, prevFilter)
+				if err != nil {
+					return Response{}, err
+				}
+				prevModelStats, err := s.store.ModelStatsWithFilter(ctx, prevFilter, 0)
+				if err != nil {
+					return Response{}, err
+				}
+				response.SummaryComparison = &SummaryComparison{
+					FromMS:       prevFrom,
+					ToMS:         req.FromMS,
+					TotalCalls:   prevAgg.TotalCalls,
+					SuccessCalls: prevAgg.SuccessCalls,
+					FailureCalls: prevAgg.FailureCalls,
+					SuccessRate:  ratio(prevAgg.SuccessCalls, prevAgg.TotalCalls),
+					TotalTokens:  prevAgg.TotalTokens,
+					TotalCost:    sumCost(prevModelStats, prices),
+				}
+			}
+		}
 	}
-	if req.Include.Timeline {
-		points, err := s.store.TimelineWithFilter(ctx, filter, granularity)
+	var timeline []TimelinePoint
+	if req.Include.Timeline || req.Include.AnomalyPoints {
+		points, err := s.store.TimelineWithFilter(ctx, filter, granularity, location)
 		if err != nil {
 			return Response{}, err
 		}
-		response.Timeline = buildTimeline(points, granularity)
+		percentiles, err := s.store.LatencyPercentilesWithFilter(ctx, filter, granularity, location)
+		if err != nil {
+			return Response{}, err
+		}
+		timeline = buildTimeline(points, percentiles, granularity, location, prices)
+		if req.Include.Timeline {
+			response.Timeline = timeline
+		}
+		if req.Include.AnomalyPoints {
+			response.AnomalyPoints = buildAnomalyPoints(timeline, granularity)
+		}
 	}
 	if req.Include.HourlyDistribution {
-		points, err := s.store.HourlyDistributionWithFilter(ctx, filter)
+		points, err := s.store.HourlyDistributionWithFilter(ctx, filter, location)
 		if err != nil {
 			return Response{}, err
 		}
 		response.HourlyDistribution = buildHourly(points)
+	}
+	if req.Include.Heatmap {
+		points, err := s.store.HeatmapWithFilter(ctx, filter, location)
+		if err != nil {
+			return Response{}, err
+		}
+		response.Heatmap = buildHeatmap(points, prices)
 	}
 	if req.Include.ModelShare {
 		response.ModelShare = buildModelShare(modelStats, prices)
@@ -436,6 +675,20 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 			return Response{}, err
 		}
 		response.AccountStats = buildAccountStats(stats, prices)
+	}
+	if req.Include.CredentialStats {
+		stats, err := s.store.CredentialModelStatsWithFilter(ctx, filter)
+		if err != nil {
+			return Response{}, err
+		}
+		response.CredentialStats = buildCredentialStats(stats, prices)
+	}
+	if req.Include.CredentialTimeline {
+		points, err := s.store.CredentialTimelineWithFilter(ctx, filter, granularity, location)
+		if err != nil {
+			return Response{}, err
+		}
+		response.CredentialTimeline = buildCredentialTimeline(points, granularity, location, prices)
 	}
 	if req.Include.APIKeyStats {
 		stats, err := s.store.APIKeyModelStatsWithFilter(ctx, filter)
@@ -495,6 +748,26 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 		}
 		response.Events = buildEvents(page, total)
 	}
+	if req.Include.DrilldownPreview != nil {
+		preview := req.Include.DrilldownPreview
+		if preview.FromMS > 0 && preview.ToMS > preview.FromMS {
+			previewFilter := filter
+			previewFilter.FromMS = preview.FromMS
+			previewFilter.ToMS = preview.ToMS
+			limit := preview.Limit
+			if limit <= 0 {
+				limit = defaultDrilldownLimit
+			}
+			if limit > maxDrilldownLimit {
+				limit = maxDrilldownLimit
+			}
+			page, err := s.store.EventsPageWithFilter(ctx, previewFilter, 0, 0, limit)
+			if err != nil {
+				return Response{}, err
+			}
+			response.DrilldownPreview = buildEvents(page, int64(len(page.Items)))
+		}
+	}
 
 	return response, nil
 }
@@ -505,19 +778,23 @@ func buildFilter(req Request) store.AnalyticsFilter {
 		includeFailed = *req.Filters.IncludeFailed
 	}
 	return store.AnalyticsFilter{
-		FromMS:            req.FromMS,
-		ToMS:              req.ToMS,
-		SearchQuery:       req.SearchQuery,
-		SearchAPIKeyHash:  req.SearchAPIKeyHash,
-		Models:            req.Filters.Models,
-		Providers:         req.Filters.Providers,
-		Accounts:          req.Filters.Accounts,
-		AuthIndices:       req.Filters.AuthIndices,
-		APIKeyHashes:      req.Filters.APIKeyHashes,
-		SourceHashes:      req.Filters.SourceHashes,
-		IncludeFailed:     includeFailed,
-		FailedOnly:        req.Filters.FailedOnly,
-		ExcludeZeroTokens: req.Filters.ExcludeZeroTokens,
+		FromMS:           req.FromMS,
+		ToMS:             req.ToMS,
+		SearchQuery:      req.SearchQuery,
+		SearchAPIKeyHash: req.SearchAPIKeyHash,
+		Models:           req.Filters.Models,
+		Providers:        req.Filters.Providers,
+		Accounts:         req.Filters.Accounts,
+		AuthFiles:        req.Filters.AuthFiles,
+		AuthIndices:      req.Filters.AuthIndices,
+		APIKeyHashes:     req.Filters.APIKeyHashes,
+		SourceHashes:     req.Filters.SourceHashes,
+		ProjectIDs:       req.Filters.ProjectIDs,
+		RequestTypes:     req.Filters.RequestTypes,
+		IncludeFailed:    includeFailed,
+		FailedOnly:       req.Filters.FailedOnly,
+		MinLatencyMS:     req.Filters.MinLatencyMS,
+		CacheStatus:      req.Filters.CacheStatus,
 	}
 }
 
@@ -526,12 +803,16 @@ func (s *Service) filterOptions(ctx context.Context, filter store.AnalyticsFilte
 	optionFilter.Models = nil
 	optionFilter.Providers = nil
 	optionFilter.Accounts = nil
+	optionFilter.AuthFiles = nil
 	optionFilter.AuthIndices = nil
 	optionFilter.APIKeyHashes = nil
 	optionFilter.SourceHashes = nil
+	optionFilter.ProjectIDs = nil
+	optionFilter.RequestTypes = nil
 	optionFilter.IncludeFailed = true
 	optionFilter.FailedOnly = false
-	optionFilter.ExcludeZeroTokens = false
+	optionFilter.MinLatencyMS = 0
+	optionFilter.CacheStatus = ""
 
 	accountStats, err := s.store.AccountModelStatsWithFilter(ctx, optionFilter)
 	if err != nil {
@@ -549,12 +830,20 @@ func (s *Service) filterOptions(ctx context.Context, filter store.AnalyticsFilte
 	if err != nil {
 		return nil, err
 	}
+	optionValues, err := s.store.FilterOptionValuesWithFilter(ctx, optionFilter)
+	if err != nil {
+		return nil, err
+	}
 
 	return &FilterOptions{
 		AccountStats: buildAccountStats(accountStats, prices),
 		APIKeyStats:  buildAPIKeyStats(apiKeyStats, prices),
 		ChannelShare: buildChannelShare(channelStats, prices),
 		ModelStats:   buildModelStats(modelStats, prices),
+		Providers:    optionValues.Providers,
+		AuthFiles:    optionValues.AuthFiles,
+		ProjectIDs:   optionValues.ProjectIDs,
+		RequestTypes: optionValues.RequestTypes,
 	}, nil
 }
 
@@ -568,7 +857,19 @@ func normalizeGranularity(input string, fromMS int64, toMS int64) string {
 	return "day"
 }
 
-func buildSummary(agg store.Aggregate, rolling store.Aggregate, activeDays int64, modelStats []store.ModelStat, taskBuckets []store.TaskBucket, prices map[string]store.ModelPrice, zeroTokenModels []string) *Summary {
+func resolveAnalyticsLocation(timeZone string) (*time.Location, error) {
+	trimmed := strings.TrimSpace(timeZone)
+	if trimmed == "" {
+		return time.UTC, nil
+	}
+	location, err := time.LoadLocation(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("invalid time zone: %s", trimmed)
+	}
+	return location, nil
+}
+
+func buildSummary(agg store.Aggregate, latencySummary store.LatencySummary, rolling store.Aggregate, activeDays int64, modelStats []store.ModelStat, taskBuckets []store.TaskBucket, prices map[string]store.ModelPrice, zeroTokenModels []string) *Summary {
 	dayCount := activeDays
 	if dayCount <= 0 {
 		dayCount = 1
@@ -580,6 +881,7 @@ func buildSummary(agg store.Aggregate, rolling store.Aggregate, activeDays int64
 		}
 	}
 	approxTasks := int64(len(taskBuckets))
+	totalCost := sumCost(modelStats, prices)
 	return &Summary{
 		TotalCalls:            agg.TotalCalls,
 		SuccessCalls:          agg.SuccessCalls,
@@ -592,8 +894,11 @@ func buildSummary(agg store.Aggregate, rolling store.Aggregate, activeDays int64
 		CacheCreationTokens:   agg.CacheCreationTokens,
 		ReasoningTokens:       agg.ReasoningTokens,
 		TotalTokens:           agg.TotalTokens,
-		TotalCost:             sumCost(modelStats, prices),
+		TotalCost:             totalCost,
+		AverageCostPerCall:    ratioFloat(totalCost, agg.TotalCalls),
 		AverageLatencyMS:      nullableFloat(agg.AvgLatencyMS.Valid, agg.AvgLatencyMS.Float64),
+		P95LatencyMS:          nullableFloat(latencySummary.P95LatencyMS.Valid, latencySummary.P95LatencyMS.Float64),
+		P95TTFTMS:             nullableFloat(latencySummary.P95TTFTMS.Valid, latencySummary.P95TTFTMS.Float64),
 		ZeroTokenCalls:        agg.ZeroTokenCalls,
 		RPM30M:                float64(rolling.TotalCalls) / 30,
 		TPM30M:                float64(rolling.TotalTokens) / 30,
@@ -606,17 +911,63 @@ func buildSummary(agg store.Aggregate, rolling store.Aggregate, activeDays int64
 	}
 }
 
-func buildTimeline(points []store.TimelinePoint, granularity string) []TimelinePoint {
-	result := make([]TimelinePoint, 0, len(points))
+func buildTimeline(points []store.TimelinePoint, percentiles []store.LatencyPercentiles, granularity string, location *time.Location, prices map[string]store.ModelPrice) []TimelinePoint {
+	type bucketAccumulator struct {
+		point         TimelinePoint
+		latencyTotal  float64
+		latencySample int64
+	}
+	buckets := make(map[int64]*bucketAccumulator, len(points))
+	order := make([]int64, 0, len(points))
 	for _, point := range points {
-		result = append(result, TimelinePoint{
-			BucketMS: point.BucketMS,
-			Label:    timelineLabel(point.BucketMS, granularity),
-			Calls:    point.Calls,
-			Tokens:   point.Tokens,
-			Success:  point.Success,
-			Failure:  point.Failure,
-		})
+		bucket := buckets[point.BucketMS]
+		if bucket == nil {
+			bucket = &bucketAccumulator{
+				point: TimelinePoint{
+					BucketMS: point.BucketMS,
+					Label:    timelineLabel(point.BucketMS, granularity, location),
+				},
+			}
+			buckets[point.BucketMS] = bucket
+			order = append(order, point.BucketMS)
+		}
+		bucket.point.Calls += point.Calls
+		bucket.point.Tokens += point.Tokens
+		bucket.point.TotalTokens += point.Tokens
+		bucket.point.Success += point.Success
+		bucket.point.Failure += point.Failure
+		bucket.point.InputTokens += point.InputTokens
+		bucket.point.OutputTokens += point.OutputTokens
+		bucket.point.CachedTokens += point.CachedTokens
+		bucket.point.CacheReadTokens += point.CacheReadTokens
+		bucket.point.CacheCreationTokens += point.CacheCreationTokens
+		bucket.point.ReasoningTokens += point.ReasoningTokens
+		bucket.point.Cost += costForTimelinePoint(point, prices)
+		if point.AvgLatencyMS.Valid && point.LatencySamples > 0 {
+			bucket.latencyTotal += point.AvgLatencyMS.Float64 * float64(point.LatencySamples)
+			bucket.latencySample += point.LatencySamples
+		}
+	}
+	result := make([]TimelinePoint, 0, len(order))
+	for _, bucketMS := range order {
+		bucket := buckets[bucketMS]
+		if bucket.latencySample > 0 {
+			value := bucket.latencyTotal / float64(bucket.latencySample)
+			bucket.point.AvgLatencyMS = &value
+		}
+		bucket.point.SuccessRate = ratio(bucket.point.Success, bucket.point.Calls)
+		bucket.point.FailureRate = ratio(bucket.point.Failure, bucket.point.Calls)
+		result = append(result, bucket.point)
+	}
+	percentilesByBucket := make(map[int64]store.LatencyPercentiles, len(percentiles))
+	for _, point := range percentiles {
+		percentilesByBucket[point.BucketMS] = point
+	}
+	for index := range result {
+		if point, ok := percentilesByBucket[result[index].BucketMS]; ok {
+			result[index].P95LatencyMS = nullableFloat(point.P95LatencyMS.Valid, point.P95LatencyMS.Float64)
+			result[index].P95TTFTMS = nullableFloat(point.P95TTFTMS.Valid, point.P95TTFTMS.Float64)
+		}
 	}
 	return result
 }
@@ -625,6 +976,188 @@ func buildHourly(points []store.HourlyPoint) []HourlyPoint {
 	result := make([]HourlyPoint, 0, len(points))
 	for _, point := range points {
 		result = append(result, HourlyPoint(point))
+	}
+	return result
+}
+
+const heatmapContributorLimit = 5
+
+type heatmapAccumulator struct {
+	point     *HeatmapPoint
+	models    map[string]*HeatmapContributor
+	apiKeys   map[string]*HeatmapContributor
+	providers map[string]*HeatmapContributor
+}
+
+func newHeatmapAccumulator(point store.HeatmapPoint) *heatmapAccumulator {
+	return &heatmapAccumulator{
+		point: &HeatmapPoint{
+			Weekday: point.Weekday,
+			Hour:    point.Hour,
+		},
+		models:    map[string]*HeatmapContributor{},
+		apiKeys:   map[string]*HeatmapContributor{},
+		providers: map[string]*HeatmapContributor{},
+	}
+}
+
+func buildHeatmap(points []store.HeatmapPoint, prices map[string]store.ModelPrice) []HeatmapPoint {
+	type key struct {
+		weekday int
+		hour    int
+	}
+	grouped := map[key]*heatmapAccumulator{}
+	order := make([]key, 0)
+	for _, point := range points {
+		mapKey := key{weekday: point.Weekday, hour: point.Hour}
+		entry := grouped[mapKey]
+		if entry == nil {
+			entry = newHeatmapAccumulator(point)
+			grouped[mapKey] = entry
+			order = append(order, mapKey)
+		}
+		cost := costForHeatmapPoint(point, prices)
+		entry.point.Calls += point.Calls
+		entry.point.Success += point.SuccessCalls
+		entry.point.Failure += point.FailureCalls
+		entry.point.Tokens += point.TotalTokens
+		entry.point.Cost += cost
+		addHeatmapContributor(entry.models, heatmapContributorKey(point.Model), point.Model, point, cost)
+		addHeatmapContributor(entry.apiKeys, strings.TrimSpace(point.APIKeyHash), point.APIKeyHash, point, cost)
+		addHeatmapContributor(entry.providers, heatmapProviderKey(point.Provider), point.Provider, point, cost)
+	}
+	result := make([]HeatmapPoint, 0, len(order))
+	for _, mapKey := range order {
+		entry := grouped[mapKey]
+		entry.point.FailureRate = ratio(entry.point.Failure, entry.point.Calls)
+		entry.point.ModelContributors = topHeatmapContributors(entry.models, entry.point.Calls)
+		entry.point.APIKeyContributors = topHeatmapContributors(entry.apiKeys, entry.point.Calls)
+		entry.point.ProviderContributors = topHeatmapContributors(entry.providers, entry.point.Calls)
+		result = append(result, *entry.point)
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i].Weekday < result[j].Weekday ||
+			(result[i].Weekday == result[j].Weekday && result[i].Hour < result[j].Hour)
+	})
+	return result
+}
+
+func addHeatmapContributor(group map[string]*HeatmapContributor, key string, label string, point store.HeatmapPoint, cost float64) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return
+	}
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = key
+	}
+	entry := group[key]
+	if entry == nil {
+		entry = &HeatmapContributor{Key: key, Label: label}
+		group[key] = entry
+	}
+	entry.Calls += point.Calls
+	entry.Success += point.SuccessCalls
+	entry.Failure += point.FailureCalls
+	entry.Tokens += point.TotalTokens
+	entry.Cost += cost
+}
+
+func heatmapContributorKey(value string) string {
+	normalized := strings.TrimSpace(value)
+	if normalized == "" {
+		return "Unknown"
+	}
+	return normalized
+}
+
+func heatmapProviderKey(value string) string {
+	return heatmapContributorKey(value)
+}
+
+func topHeatmapContributors(group map[string]*HeatmapContributor, totalCalls int64) []HeatmapContributor {
+	if len(group) == 0 {
+		return nil
+	}
+	result := make([]HeatmapContributor, 0, len(group))
+	for _, contributor := range group {
+		next := *contributor
+		next.FailureRate = ratio(next.Failure, next.Calls)
+		next.Share = ratio(next.Calls, totalCalls)
+		result = append(result, next)
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i].Calls > result[j].Calls ||
+			(result[i].Calls == result[j].Calls && result[i].Cost > result[j].Cost) ||
+			(result[i].Calls == result[j].Calls && result[i].Cost == result[j].Cost && result[i].Key < result[j].Key)
+	})
+	if len(result) > heatmapContributorLimit {
+		result = result[:heatmapContributorLimit]
+	}
+	return result
+}
+
+func buildAnomalyPoints(timeline []TimelinePoint, granularity string) []AnomalyPoint {
+	if len(timeline) < 2 {
+		return nil
+	}
+	result := make([]AnomalyPoint, 0)
+	for index := 1; index < len(timeline); index++ {
+		previous := timeline[index-1]
+		current := timeline[index]
+		metricKeys := make([]string, 0, 6)
+		requestChange := percentChange(float64(current.Calls), float64(previous.Calls))
+		costChange := percentChange(current.Cost, previous.Cost)
+		tokensPerRequestChange := percentChange(averageTokensPerRequest(current), averageTokensPerRequest(previous))
+		cacheHitRateChange := cacheHitRate(current) - cacheHitRate(previous)
+		failureRateChange := current.FailureRate - previous.FailureRate
+		latencyP95Change := percentChange(floatValueOrZero(current.P95LatencyMS), floatValueOrZero(previous.P95LatencyMS))
+		if requestChange > 1 {
+			metricKeys = append(metricKeys, "request_spike")
+		}
+		if costChange > 1 {
+			metricKeys = append(metricKeys, "cost_spike")
+		}
+		if tokensPerRequestChange > 0.5 {
+			metricKeys = append(metricKeys, "tokens_per_request_spike")
+		}
+		if cacheHitRateChange < -0.2 {
+			metricKeys = append(metricKeys, "cache_hit_drop")
+		}
+		if failureRateChange > 0.2 {
+			metricKeys = append(metricKeys, "failure_rate_spike")
+		}
+		if latencyP95Change > 0.5 {
+			metricKeys = append(metricKeys, "latency_spike")
+		}
+		if len(metricKeys) == 0 {
+			continue
+		}
+		result = append(result, AnomalyPoint{
+			BucketMS:               current.BucketMS,
+			BucketEndMS:            current.BucketMS + bucketSizeMS(granularity),
+			Label:                  current.Label,
+			Severity:               anomalySeverity(len(metricKeys)),
+			MetricKeys:             metricKeys,
+			Calls:                  current.Calls,
+			TotalTokens:            current.TotalTokens,
+			Cost:                   current.Cost,
+			FailureRate:            current.FailureRate,
+			RequestChange:          requestChange,
+			CostChange:             costChange,
+			TokensPerRequestChange: tokensPerRequestChange,
+			CacheHitRateChange:     cacheHitRateChange,
+			FailureRateChange:      failureRateChange,
+			LatencyP95Change:       latencyP95Change,
+		})
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		iScore := anomalyScore(result[i])
+		jScore := anomalyScore(result[j])
+		return iScore > jScore || (iScore == jScore && result[i].BucketMS > result[j].BucketMS)
+	})
+	if len(result) > 50 {
+		result = result[:50]
 	}
 	return result
 }
@@ -788,6 +1321,20 @@ type apiKeyStatAccumulator struct {
 	sources        map[string]struct{}
 	sourceHashes   map[string]struct{}
 	models         map[string]*AccountModelStatRow
+	contexts       map[string]*apiKeyContextAccumulator
+	latencySum     float64
+	latencySamples int64
+}
+
+type apiKeyContextAccumulator struct {
+	row            APIKeyContextRow
+	latencySum     float64
+	latencySamples int64
+}
+
+type credentialStatAccumulator struct {
+	row            CredentialStatRow
+	models         map[string]*AccountModelStatRow
 	latencySum     float64
 	latencySamples int64
 }
@@ -870,6 +1417,150 @@ func buildAccountStats(stats []store.AccountModelStat, prices map[string]store.M
 	return result
 }
 
+func buildCredentialStats(stats []store.CredentialModelStat, prices map[string]store.ModelPrice) []CredentialStatRow {
+	grouped := map[string]*credentialStatAccumulator{}
+	for _, stat := range stats {
+		id := credentialGroupKey(stat)
+		entry := grouped[id]
+		if entry == nil {
+			entry = &credentialStatAccumulator{
+				row: CredentialStatRow{
+					ID:                    id,
+					AuthFileSnapshot:      stat.AuthFileSnapshot,
+					AuthIndex:             stat.AuthIndex,
+					Source:                stat.Source,
+					SourceHash:            stat.SourceHash,
+					AccountSnapshot:       stat.AccountSnapshot,
+					AuthLabelSnapshot:     stat.AuthLabelSnapshot,
+					AuthProviderSnapshot:  stat.AuthProviderSnapshot,
+					AuthProjectIDSnapshot: stat.AuthProjectIDSnapshot,
+				},
+				models: map[string]*AccountModelStatRow{},
+			}
+			grouped[id] = entry
+		}
+		fillCredentialStatSnapshots(&entry.row, stat)
+		cost := costForCredentialModelStat(stat, prices)
+		addAccountTotals(
+			&entry.row.Calls,
+			&entry.row.SuccessCalls,
+			&entry.row.FailureCalls,
+			&entry.row.InputTokens,
+			&entry.row.OutputTokens,
+			&entry.row.CachedTokens,
+			&entry.row.CacheReadTokens,
+			&entry.row.CacheCreationTokens,
+			&entry.row.TotalTokens,
+			&entry.row.Cost,
+			stat.Calls,
+			stat.SuccessCalls,
+			stat.FailureCalls,
+			stat.InputTokens,
+			stat.OutputTokens,
+			stat.CachedTokens,
+			stat.CacheReadTokens,
+			stat.CacheCreationTokens,
+			stat.TotalTokens,
+			cost,
+		)
+		if stat.LastSeenMS > entry.row.LastSeenMS {
+			entry.row.LastSeenMS = stat.LastSeenMS
+		}
+		if stat.AvgLatencyMS.Valid && stat.LatencySamples > 0 {
+			entry.latencySum += stat.AvgLatencyMS.Float64 * float64(stat.LatencySamples)
+			entry.latencySamples += stat.LatencySamples
+		}
+		addAccountModelStat(entry.models, stat.Model, stat.Calls, stat.SuccessCalls, stat.FailureCalls, stat.InputTokens, stat.OutputTokens, stat.CachedTokens, stat.CacheReadTokens, stat.CacheCreationTokens, stat.TotalTokens, cost, stat.LastSeenMS)
+	}
+
+	result := make([]CredentialStatRow, 0, len(grouped))
+	for _, entry := range grouped {
+		entry.row.SuccessRate = ratio(entry.row.SuccessCalls, entry.row.Calls)
+		entry.row.Models = sortedAccountModelStats(entry.models)
+		if entry.latencySamples > 0 {
+			value := entry.latencySum / float64(entry.latencySamples)
+			entry.row.AvgLatencyMS = &value
+		}
+		result = append(result, entry.row)
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i].Cost > result[j].Cost ||
+			(result[i].Cost == result[j].Cost && result[i].Calls > result[j].Calls) ||
+			(result[i].Cost == result[j].Cost && result[i].Calls == result[j].Calls && result[i].LastSeenMS > result[j].LastSeenMS)
+	})
+	return result
+}
+
+type credentialTimelineAccumulator struct {
+	point          CredentialTimelinePoint
+	latencySum     float64
+	latencySamples int64
+}
+
+func buildCredentialTimeline(points []store.CredentialTimelinePoint, granularity string, location *time.Location, prices map[string]store.ModelPrice) []CredentialTimelinePoint {
+	type key struct {
+		id       string
+		bucketMS int64
+	}
+	grouped := map[key]*credentialTimelineAccumulator{}
+	order := make([]key, 0, len(points))
+	for _, point := range points {
+		id := credentialTimelineGroupKey(point)
+		mapKey := key{id: id, bucketMS: point.BucketMS}
+		entry := grouped[mapKey]
+		if entry == nil {
+			entry = &credentialTimelineAccumulator{
+				point: CredentialTimelinePoint{
+					ID:                    id,
+					Label:                 credentialTimelineLabel(point),
+					AuthFileSnapshot:      point.AuthFileSnapshot,
+					AuthIndex:             point.AuthIndex,
+					Source:                point.Source,
+					SourceHash:            point.SourceHash,
+					AccountSnapshot:       point.AccountSnapshot,
+					AuthLabelSnapshot:     point.AuthLabelSnapshot,
+					AuthProviderSnapshot:  point.AuthProviderSnapshot,
+					AuthProjectIDSnapshot: point.AuthProjectIDSnapshot,
+					BucketMS:              point.BucketMS,
+					BucketLabel:           timelineLabel(point.BucketMS, granularity, location),
+				},
+			}
+			grouped[mapKey] = entry
+			order = append(order, mapKey)
+		}
+		fillCredentialTimelineSnapshots(&entry.point, point)
+		entry.point.Calls += point.Calls
+		entry.point.Tokens += point.Tokens
+		entry.point.TotalTokens += point.Tokens
+		entry.point.Success += point.Success
+		entry.point.Failure += point.Failure
+		entry.point.InputTokens += point.InputTokens
+		entry.point.OutputTokens += point.OutputTokens
+		entry.point.CachedTokens += point.CachedTokens
+		entry.point.CacheReadTokens += point.CacheReadTokens
+		entry.point.CacheCreationTokens += point.CacheCreationTokens
+		entry.point.ReasoningTokens += point.ReasoningTokens
+		entry.point.Cost += costForCredentialTimelinePoint(point, prices)
+		if point.AvgLatencyMS.Valid && point.LatencySamples > 0 {
+			entry.latencySum += point.AvgLatencyMS.Float64 * float64(point.LatencySamples)
+			entry.latencySamples += point.LatencySamples
+		}
+	}
+
+	result := make([]CredentialTimelinePoint, 0, len(order))
+	for _, mapKey := range order {
+		entry := grouped[mapKey]
+		if entry.latencySamples > 0 {
+			value := entry.latencySum / float64(entry.latencySamples)
+			entry.point.AvgLatencyMS = &value
+		}
+		entry.point.SuccessRate = ratio(entry.point.Success, entry.point.Calls)
+		entry.point.FailureRate = ratio(entry.point.Failure, entry.point.Calls)
+		result = append(result, entry.point)
+	}
+	return result
+}
+
 func buildAPIKeyStats(stats []store.APIKeyModelStat, prices map[string]store.ModelPrice) []APIKeyStatRow {
 	grouped := map[string]*apiKeyStatAccumulator{}
 	for _, stat := range stats {
@@ -888,6 +1579,7 @@ func buildAPIKeyStats(stats []store.APIKeyModelStat, prices map[string]store.Mod
 				sources:      map[string]struct{}{},
 				sourceHashes: map[string]struct{}{},
 				models:       map[string]*AccountModelStatRow{},
+				contexts:     map[string]*apiKeyContextAccumulator{},
 			}
 			grouped[id] = entry
 		}
@@ -925,6 +1617,7 @@ func buildAPIKeyStats(stats []store.APIKeyModelStat, prices map[string]store.Mod
 			entry.latencySum += stat.AvgLatencyMS.Float64 * float64(stat.LatencySamples)
 			entry.latencySamples += stat.LatencySamples
 		}
+		addAPIKeyContextStat(entry.contexts, stat, cost)
 		addAccountModelStat(entry.models, stat.Model, stat.Calls, stat.SuccessCalls, stat.FailureCalls, stat.InputTokens, stat.OutputTokens, stat.CachedTokens, stat.CacheReadTokens, stat.CacheCreationTokens, stat.TotalTokens, cost, stat.LastSeenMS)
 	}
 
@@ -935,6 +1628,7 @@ func buildAPIKeyStats(stats []store.APIKeyModelStat, prices map[string]store.Mod
 		entry.row.Sources = sortedSetValues(entry.sources)
 		entry.row.SourceHashes = sortedSetValues(entry.sourceHashes)
 		entry.row.Models = sortedAccountModelStats(entry.models)
+		entry.row.Contexts = sortedAPIKeyContextStats(entry.contexts)
 		if entry.latencySamples > 0 {
 			value := entry.latencySum / float64(entry.latencySamples)
 			entry.row.AvgLatencyMS = &value
@@ -1019,6 +1713,100 @@ func fillAPIKeyStatSnapshots(row *APIKeyStatRow, apiKeyHash, accountSnapshot, au
 	}
 	if row.AuthProviderSnapshot == "" {
 		row.AuthProviderSnapshot = authProviderSnapshot
+	}
+}
+
+func credentialGroupKey(stat store.CredentialModelStat) string {
+	for _, value := range []string{stat.ID, stat.AuthFileSnapshot, stat.AuthIndex, stat.SourceHash, stat.Source} {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return "-"
+}
+
+func credentialTimelineGroupKey(point store.CredentialTimelinePoint) string {
+	for _, value := range []string{point.ID, point.AuthFileSnapshot, point.AuthIndex, point.SourceHash, point.Source} {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return "-"
+}
+
+func credentialTimelineLabel(point store.CredentialTimelinePoint) string {
+	for _, value := range []string{
+		point.AuthLabelSnapshot,
+		point.AccountSnapshot,
+		point.AuthFileSnapshot,
+		point.Source,
+		point.AuthIndex,
+		point.ID,
+	} {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return "-"
+}
+
+func fillCredentialStatSnapshots(row *CredentialStatRow, stat store.CredentialModelStat) {
+	if row.AuthFileSnapshot == "" {
+		row.AuthFileSnapshot = stat.AuthFileSnapshot
+	}
+	if row.AuthIndex == "" {
+		row.AuthIndex = stat.AuthIndex
+	}
+	if row.Source == "" {
+		row.Source = stat.Source
+	}
+	if row.SourceHash == "" {
+		row.SourceHash = stat.SourceHash
+	}
+	if row.AccountSnapshot == "" {
+		row.AccountSnapshot = stat.AccountSnapshot
+	}
+	if row.AuthLabelSnapshot == "" {
+		row.AuthLabelSnapshot = stat.AuthLabelSnapshot
+	}
+	if row.AuthProviderSnapshot == "" {
+		row.AuthProviderSnapshot = stat.AuthProviderSnapshot
+	}
+	if row.AuthProjectIDSnapshot == "" {
+		row.AuthProjectIDSnapshot = stat.AuthProjectIDSnapshot
+	}
+}
+
+func fillCredentialTimelineSnapshots(row *CredentialTimelinePoint, point store.CredentialTimelinePoint) {
+	if row.Label == "" || row.Label == "-" {
+		row.Label = credentialTimelineLabel(point)
+	}
+	if row.AuthFileSnapshot == "" {
+		row.AuthFileSnapshot = point.AuthFileSnapshot
+	}
+	if row.AuthIndex == "" {
+		row.AuthIndex = point.AuthIndex
+	}
+	if row.Source == "" {
+		row.Source = point.Source
+	}
+	if row.SourceHash == "" {
+		row.SourceHash = point.SourceHash
+	}
+	if row.AccountSnapshot == "" {
+		row.AccountSnapshot = point.AccountSnapshot
+	}
+	if row.AuthLabelSnapshot == "" {
+		row.AuthLabelSnapshot = point.AuthLabelSnapshot
+	}
+	if row.AuthProviderSnapshot == "" {
+		row.AuthProviderSnapshot = point.AuthProviderSnapshot
+	}
+	if row.AuthProjectIDSnapshot == "" {
+		row.AuthProjectIDSnapshot = point.AuthProjectIDSnapshot
 	}
 }
 
@@ -1113,6 +1901,77 @@ func addAccountModelStat(
 	entry.SuccessRate = ratio(entry.SuccessCalls, entry.Calls)
 }
 
+func apiKeyContextKey(stat store.APIKeyModelStat) string {
+	parts := []string{
+		stat.AuthProviderSnapshot,
+		stat.AccountSnapshot,
+		stat.AuthLabelSnapshot,
+		stat.AuthIndex,
+		stat.SourceHash,
+		stat.Source,
+	}
+	normalized := make([]string, 0, len(parts))
+	for _, value := range parts {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			trimmed = "-"
+		}
+		normalized = append(normalized, trimmed)
+	}
+	return strings.Join(normalized, ":")
+}
+
+func addAPIKeyContextStat(contexts map[string]*apiKeyContextAccumulator, stat store.APIKeyModelStat, cost float64) {
+	key := apiKeyContextKey(stat)
+	entry := contexts[key]
+	if entry == nil {
+		entry = &apiKeyContextAccumulator{
+			row: APIKeyContextRow{
+				ID:                   key,
+				AccountSnapshot:      stat.AccountSnapshot,
+				AuthLabelSnapshot:    stat.AuthLabelSnapshot,
+				AuthProviderSnapshot: stat.AuthProviderSnapshot,
+				AuthIndex:            stat.AuthIndex,
+				Source:               stat.Source,
+				SourceHash:           stat.SourceHash,
+			},
+		}
+		contexts[key] = entry
+	}
+	entry.row.Calls += stat.Calls
+	entry.row.SuccessCalls += stat.SuccessCalls
+	entry.row.FailureCalls += stat.FailureCalls
+	entry.row.TotalTokens += stat.TotalTokens
+	entry.row.Cost += cost
+	if stat.LastSeenMS > entry.row.LastSeenMS {
+		entry.row.LastSeenMS = stat.LastSeenMS
+	}
+	if stat.AvgLatencyMS.Valid && stat.LatencySamples > 0 {
+		entry.latencySum += stat.AvgLatencyMS.Float64 * float64(stat.LatencySamples)
+		entry.latencySamples += stat.LatencySamples
+	}
+	entry.row.SuccessRate = ratio(entry.row.SuccessCalls, entry.row.Calls)
+	entry.row.FailureRate = ratio(entry.row.FailureCalls, entry.row.Calls)
+}
+
+func sortedAPIKeyContextStats(contexts map[string]*apiKeyContextAccumulator) []APIKeyContextRow {
+	result := make([]APIKeyContextRow, 0, len(contexts))
+	for _, context := range contexts {
+		if context.latencySamples > 0 {
+			value := context.latencySum / float64(context.latencySamples)
+			context.row.AvgLatencyMS = &value
+		}
+		result = append(result, context.row)
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i].Cost > result[j].Cost ||
+			(result[i].Cost == result[j].Cost && result[i].Calls > result[j].Calls) ||
+			(result[i].Cost == result[j].Cost && result[i].Calls == result[j].Calls && result[i].LastSeenMS > result[j].LastSeenMS) ||
+			(result[i].Cost == result[j].Cost && result[i].Calls == result[j].Calls && result[i].LastSeenMS == result[j].LastSeenMS && result[i].ID < result[j].ID)
+	})
+	return result
+}
+
 func sortedAccountModelStats(models map[string]*AccountModelStatRow) []AccountModelStatRow {
 	result := make([]AccountModelStatRow, 0, len(models))
 	for _, model := range models {
@@ -1181,6 +2040,7 @@ func buildEvents(page store.EventsPage, totalCount int64) *EventsResponse {
 	items := make([]EventRow, 0, len(page.Items))
 	for _, item := range page.Items {
 		items = append(items, EventRow{
+			RequestID:             item.RequestID,
 			EventHash:             item.EventHash,
 			TimestampMS:           item.TimestampMS,
 			Model:                 item.Model,
@@ -1194,6 +2054,7 @@ func buildEvents(page store.EventsPage, totalCount int64) *EventsResponse {
 			APIKeyHash:            item.APIKeyHash,
 			AccountSnapshot:       item.AccountSnapshot,
 			AuthLabelSnapshot:     item.AuthLabelSnapshot,
+			AuthFileSnapshot:      item.AuthFileSnapshot,
 			AuthProviderSnapshot:  item.AuthProviderSnapshot,
 			AuthProjectIDSnapshot: item.AuthProjectIDSnapshot,
 			ReasoningEffort:       item.ReasoningEffort,
@@ -1235,6 +2096,34 @@ func costForStat(stat store.ModelStat, prices map[string]store.ModelPrice) float
 		CachedTokens:        stat.CachedTokens,
 		CacheReadTokens:     stat.CacheReadTokens,
 		CacheCreationTokens: stat.CacheCreationTokens,
+	}, prices)
+}
+
+func costForTimelinePoint(point store.TimelinePoint, prices map[string]store.ModelPrice) float64 {
+	model := point.BillingModel
+	if model == "" {
+		model = point.Model
+	}
+	return pricing.CostForModelWithServiceTier(model, point.ServiceTier, pricing.ModelTokens{
+		InputTokens:         point.InputTokens,
+		OutputTokens:        point.OutputTokens,
+		CachedTokens:        point.CachedTokens,
+		CacheReadTokens:     point.CacheReadTokens,
+		CacheCreationTokens: point.CacheCreationTokens,
+	}, prices)
+}
+
+func costForHeatmapPoint(point store.HeatmapPoint, prices map[string]store.ModelPrice) float64 {
+	model := point.BillingModel
+	if model == "" {
+		model = point.Model
+	}
+	return pricing.CostForModelWithServiceTier(model, point.ServiceTier, pricing.ModelTokens{
+		InputTokens:         point.InputTokens,
+		OutputTokens:        point.OutputTokens,
+		CachedTokens:        point.CachedTokens,
+		CacheReadTokens:     point.CacheReadTokens,
+		CacheCreationTokens: point.CacheCreationTokens,
 	}, prices)
 }
 
@@ -1280,11 +2169,125 @@ func costForAPIKeyModelStat(stat store.APIKeyModelStat, prices map[string]store.
 	}, prices)
 }
 
+func costForCredentialModelStat(stat store.CredentialModelStat, prices map[string]store.ModelPrice) float64 {
+	model := stat.BillingModel
+	if model == "" {
+		model = stat.Model
+	}
+	return pricing.CostForModelWithServiceTier(model, stat.ServiceTier, pricing.ModelTokens{
+		InputTokens:         stat.InputTokens,
+		OutputTokens:        stat.OutputTokens,
+		CachedTokens:        stat.CachedTokens,
+		CacheReadTokens:     stat.CacheReadTokens,
+		CacheCreationTokens: stat.CacheCreationTokens,
+	}, prices)
+}
+
+func costForCredentialTimelinePoint(point store.CredentialTimelinePoint, prices map[string]store.ModelPrice) float64 {
+	model := point.BillingModel
+	if model == "" {
+		model = point.Model
+	}
+	return pricing.CostForModelWithServiceTier(model, point.ServiceTier, pricing.ModelTokens{
+		InputTokens:         point.InputTokens,
+		OutputTokens:        point.OutputTokens,
+		CachedTokens:        point.CachedTokens,
+		CacheReadTokens:     point.CacheReadTokens,
+		CacheCreationTokens: point.CacheCreationTokens,
+	}, prices)
+}
+
 func ratio(part int64, total int64) float64 {
 	if total <= 0 {
 		return 0
 	}
 	return float64(part) / float64(total)
+}
+
+func ratioFloat(part float64, total int64) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return part / float64(total)
+}
+
+func percentChange(current float64, previous float64) float64 {
+	if previous <= 0 {
+		if current > 0 {
+			return 1
+		}
+		return 0
+	}
+	return (current - previous) / previous
+}
+
+func averageTokensPerRequest(point TimelinePoint) float64 {
+	if point.Calls <= 0 {
+		return 0
+	}
+	return float64(point.TotalTokens) / float64(point.Calls)
+}
+
+func cacheHitRate(point TimelinePoint) float64 {
+	// Mirror computeCacheHitRate on the web client: cache-read tokens over total
+	// input. cacheRead falls back to cachedTokens for OpenAI-style usage (input
+	// already includes cache); totalInput adds cacheRead/cacheCreation back for
+	// Anthropic-style usage where InputTokens excludes them.
+	cacheRead := point.CacheReadTokens
+	if cacheRead == 0 {
+		cacheRead = point.CachedTokens
+	}
+	totalInput := point.InputTokens + point.CacheReadTokens + point.CacheCreationTokens
+	if totalInput <= 0 {
+		return 0
+	}
+	rate := float64(cacheRead) / float64(totalInput)
+	if rate > 1 {
+		return 1
+	}
+	return rate
+}
+
+func floatValueOrZero(value *float64) float64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func bucketSizeMS(granularity string) int64 {
+	if granularity == "day" {
+		return 24 * 60 * 60 * 1000
+	}
+	return 60 * 60 * 1000
+}
+
+func anomalySeverity(metricCount int) string {
+	if metricCount >= 3 {
+		return "high"
+	}
+	if metricCount >= 2 {
+		return "medium"
+	}
+	return "low"
+}
+
+func anomalyScore(point AnomalyPoint) float64 {
+	score := float64(len(point.MetricKeys)) * 10
+	score += positive(point.RequestChange)
+	score += positive(point.CostChange)
+	score += positive(point.TokensPerRequestChange)
+	score += positive(-point.CacheHitRateChange)
+	score += positive(point.FailureRateChange)
+	score += positive(point.LatencyP95Change)
+	return score
+}
+
+func positive(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func nullableFloat(valid bool, value float64) *float64 {
@@ -1313,8 +2316,11 @@ func splitCSV(value string) []string {
 	return result
 }
 
-func timelineLabel(bucketMS int64, granularity string) string {
-	tm := time.UnixMilli(bucketMS).UTC()
+func timelineLabel(bucketMS int64, granularity string, location *time.Location) string {
+	if location == nil {
+		location = time.UTC
+	}
+	tm := time.UnixMilli(bucketMS).In(location)
 	if granularity == "day" {
 		return tm.Format("01/02")
 	}

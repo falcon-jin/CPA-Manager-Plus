@@ -7,6 +7,7 @@ import {
   useState,
   type ChangeEvent,
 } from 'react';
+import { useLocation } from 'react-router-dom';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import {
@@ -76,6 +77,7 @@ import {
   buildAuthFilesByAuthIndex,
   buildAccountQuotaErrorEntry,
   buildChannelOptionsFromValues,
+  buildMonitoringInitialStateFromQuery,
   buildModelOptionsFromValues,
   buildPaginationState,
   buildPrimarySummaryCards,
@@ -130,6 +132,7 @@ const shortLabel = (t: TFunction, shortKey: string, fallbackKey: string) => {
 
 export function MonitoringCenterPage() {
   const { t, i18n } = useTranslation();
+  const location = useLocation();
   const config = useConfigStore((state) => state.config);
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
   const showNotification = useNotificationStore((state) => state.showNotification);
@@ -138,7 +141,22 @@ export function MonitoringCenterPage() {
   const pageTransitionLayer = usePageTransitionLayer();
   const isCurrentLayer = pageTransitionLayer ? pageTransitionLayer.status === 'current' : true;
   const initialAccountOverviewUiState = useRef(readAccountOverviewUiState());
-  const initialMonitoringCenterUiState = useRef(readMonitoringCenterUiState());
+  const initialMonitoringCenterUiState = useRef(
+    buildMonitoringInitialStateFromQuery(location.search, readMonitoringCenterUiState())
+  );
+  const initialMonitoringDrilldownFilters = useRef(
+    (() => {
+      const params = new URLSearchParams(location.search);
+      const minLatencyMs = Number(params.get('min_latency_ms'));
+      return {
+        authFile: params.get('auth_file')?.trim() || '',
+        projectId: params.get('project_id')?.trim() || '',
+        requestType: params.get('request_type')?.trim() || '',
+        minLatencyMs: Number.isFinite(minLatencyMs) && minLatencyMs > 0 ? minLatencyMs : undefined,
+        cacheStatus: params.get('cache_status')?.trim() || '',
+      };
+    })()
+  );
   const [timeRange, setTimeRange] = useState<MonitoringTimeRange>(
     initialMonitoringCenterUiState.current.timeRange
   );
@@ -177,6 +195,21 @@ export function MonitoringCenterPage() {
   );
   const [selectedStatus, setSelectedStatus] = useState<StatusFilter>(
     () => initialMonitoringCenterUiState.current.selectedStatus
+  );
+  const [drilldownAuthFile, setDrilldownAuthFile] = useState(
+    () => initialMonitoringDrilldownFilters.current.authFile
+  );
+  const [drilldownProjectId, setDrilldownProjectId] = useState(
+    () => initialMonitoringDrilldownFilters.current.projectId
+  );
+  const [drilldownRequestType, setDrilldownRequestType] = useState(
+    () => initialMonitoringDrilldownFilters.current.requestType
+  );
+  const [drilldownMinLatencyMs, setDrilldownMinLatencyMs] = useState(
+    () => initialMonitoringDrilldownFilters.current.minLatencyMs
+  );
+  const [drilldownCacheStatus, setDrilldownCacheStatus] = useState(
+    () => initialMonitoringDrilldownFilters.current.cacheStatus
   );
   const [expandedAccounts, setExpandedAccounts] = useState<Record<string, boolean>>({});
   const [expandedApiKeys, setExpandedApiKeys] = useState<Record<string, boolean>>({});
@@ -287,12 +320,22 @@ export function MonitoringCenterPage() {
     () => ({
       account: selectedAccount,
       provider: selectedProvider,
+      authFile: drilldownAuthFile || undefined,
+      projectId: drilldownProjectId || undefined,
+      requestType: drilldownRequestType || undefined,
+      minLatencyMs: drilldownMinLatencyMs,
+      cacheStatus: drilldownCacheStatus || undefined,
       model: selectedModel,
       channel: selectedChannel,
       apiKeyHash: selectedApiKeyHash,
       status: selectedStatus,
     }),
     [
+      drilldownAuthFile,
+      drilldownCacheStatus,
+      drilldownMinLatencyMs,
+      drilldownProjectId,
+      drilldownRequestType,
       selectedAccount,
       selectedApiKeyHash,
       selectedChannel,
@@ -596,7 +639,12 @@ export function MonitoringCenterPage() {
     selectedModel !== 'all' ||
     selectedChannel !== 'all' ||
     selectedApiKeyHash !== 'all' ||
-    selectedStatus !== 'all';
+    selectedStatus !== 'all' ||
+    Boolean(drilldownAuthFile) ||
+    Boolean(drilldownProjectId) ||
+    Boolean(drilldownRequestType) ||
+    Boolean(drilldownMinLatencyMs) ||
+    Boolean(drilldownCacheStatus);
   const hasActiveDataFilter = hasSearchFilter || hasScopeFilter;
   const failedGroupCount = groupedRealtimeRows.filter((row) => row.failureCalls > 0).length;
   const failedOnlyActive = selectedStatus === 'failed';
@@ -713,6 +761,11 @@ export function MonitoringCenterPage() {
     setSelectedChannel('all');
     setSelectedApiKeyHash('all');
     setSelectedStatus('all');
+    setDrilldownAuthFile('');
+    setDrilldownProjectId('');
+    setDrilldownRequestType('');
+    setDrilldownMinLatencyMs(undefined);
+    setDrilldownCacheStatus('');
   }, []);
 
   const renderMonitoringEmptyState = () => (

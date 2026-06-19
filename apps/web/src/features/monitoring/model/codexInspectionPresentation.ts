@@ -14,6 +14,7 @@ import type { CodexInspectionResult } from '@/services/api/usageService';
 export type RunStatus = 'idle' | 'running' | 'paused' | 'success' | 'error';
 
 export type ActionFilter = CodexInspectionStoredActionFilter;
+export type HandlingFilter = 'all' | 'pending' | 'no_action';
 
 export type StatusTone = 'idle' | 'info' | 'good' | 'warn' | 'bad';
 
@@ -88,12 +89,14 @@ export type InspectionSettingsDraftField = Exclude<
 
 export const ACTION_FILTERS: ActionFilter[] = [
   'all',
+  'reauth',
   'delete',
   'disable',
   'enable',
-  'reauth',
-  'http_401',
+  'keep',
 ];
+
+export const HANDLING_FILTERS: HandlingFilter[] = ['all', 'pending', 'no_action'];
 
 export const CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 
@@ -236,6 +239,7 @@ export const countActions = (items: CodexInspectionResultItem[]) => {
     enable: 0,
     reauth: 0,
     http401: 0,
+    keep: 0,
   };
 
   items.forEach((item) => {
@@ -243,10 +247,59 @@ export const countActions = (items: CodexInspectionResultItem[]) => {
     if (item.action === 'disable') summary.disable += 1;
     if (item.action === 'enable') summary.enable += 1;
     if (item.action === 'reauth') summary.reauth += 1;
+    if (item.action === 'keep') summary.keep += 1;
     if (item.statusCode === 401) summary.http401 += 1;
   });
 
   return summary;
+};
+
+export const normalizeActionFilter = (value: unknown): ActionFilter => {
+  if (value === 'http_401') return 'reauth';
+  if (
+    value === 'all' ||
+    value === 'delete' ||
+    value === 'disable' ||
+    value === 'enable' ||
+    value === 'reauth' ||
+    value === 'keep'
+  ) {
+    return value;
+  }
+  return 'all';
+};
+
+export const isNeedsHandling = (item: Pick<CodexInspectionResultItem, 'action' | 'statusCode'>) =>
+  item.action !== 'keep' || item.statusCode === 401;
+
+export const countHandlingStates = (items: CodexInspectionResultItem[]) => {
+  const pending = items.filter(isNeedsHandling).length;
+  return {
+    all: items.length,
+    pending,
+    no_action: items.length - pending,
+  } satisfies Record<HandlingFilter, number>;
+};
+
+export const getActionFilterCounts = (items: CodexInspectionResultItem[]) => {
+  const counts = countActions(items);
+  return {
+    all: items.length,
+    reauth: counts.reauth,
+    delete: counts.delete,
+    disable: counts.disable,
+    enable: counts.enable,
+    keep: counts.keep,
+  } satisfies Record<ActionFilter, number>;
+};
+
+export const filterByHandling = (
+  items: CodexInspectionResultItem[],
+  filter: HandlingFilter
+) => {
+  if (filter === 'pending') return items.filter(isNeedsHandling);
+  if (filter === 'no_action') return items.filter((item) => !isNeedsHandling(item));
+  return items;
 };
 
 export const createIdleProgressSnapshot = (): CodexInspectionProgressSnapshot => ({
@@ -298,8 +351,33 @@ export const createCompletedProgressSnapshot = (
 
 export const filterByAction = (items: CodexInspectionResultItem[], filter: ActionFilter) => {
   if (filter === 'all') return items;
-  if (filter === 'http_401') return items.filter((item) => item.statusCode === 401);
   return items.filter((item) => item.action === filter);
+};
+
+export const filterInspectionResults = (
+  items: CodexInspectionResultItem[],
+  handlingFilter: HandlingFilter,
+  actionFilter: ActionFilter
+) => filterByAction(filterByHandling(items, handlingFilter), actionFilter);
+
+export const summarizeInspectionError = (
+  item: Pick<CodexInspectionResultItem, 'action' | 'statusCode' | 'errorKind' | 'error' | 'errorDetail'>,
+  t: TFunction
+) => {
+  if (item.action === 'reauth' || item.statusCode === 401) {
+    return t('monitoring.codex_inspection_error_summary_reauth');
+  }
+  if (item.errorKind) {
+    return t('monitoring.codex_inspection_error_summary_kind', { kind: item.errorKind });
+  }
+  const raw = item.error || item.errorDetail;
+  if (!raw) return '';
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (trimmed.length <= 120 && !trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    return trimmed;
+  }
+  return t('monitoring.codex_inspection_error_summary_response');
 };
 
 export const buildCodexInspectionPaginationState = <T>(

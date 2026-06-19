@@ -16,21 +16,32 @@ import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { CodexInspectionConfigOverview } from '@/features/monitoring/components/CodexInspectionConfigOverview';
 import { CodexInspectionModeTabs } from '@/features/monitoring/components/CodexInspectionModeTabs';
 import { Panel } from '@/features/monitoring/components/CodexInspectionPanels';
+import { CodexInspectionResultsPanel } from '@/features/monitoring/components/CodexInspectionResultsPanel';
 import { InspectionConfigDrawer } from '@/features/monitoring/components/InspectionConfigDrawer';
 import { InspectionConfigFields } from '@/features/monitoring/components/InspectionConfigFields';
+import { CodexReauthDialog } from '@/features/oauth/CodexReauthDialog';
+import type { CodexReauthTarget } from '@/features/oauth/codexReauthModel';
+import {
+  type CodexInspectionAction,
+  type CodexInspectionResultItem,
+  type CodexInspectionRunResult,
+} from '@/features/monitoring/codexInspection';
 import {
   CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS,
   buildCodexInspectionPaginationState,
   buildConfigOverviewItems,
-  type CodexInspectionPaginationState,
   type CodexInspectionSummaryAccent,
+  countHandlingStates,
+  filterInspectionResults,
   formatActionLabel,
-  formatPercent,
   formatTimestamp,
+  getActionFilterCounts,
   getCanonicalServerCodexInspectionActionIds,
   getMixedServerCodexInspectionActionIds,
   isActionableServerCodexInspectionResult,
   normalizeServerCodexInspectionActionStatus,
+  type ActionFilter,
+  type HandlingFilter,
   type StatusTone,
   validateInspectionConfigDraft,
   validateInspectionConfigFields,
@@ -106,24 +117,6 @@ const DEFAULT_SERVER_CODEX_CONFIG: NormalizedServerCodexInspectionConfig = {
 };
 
 const RUNS_LIMIT = 30;
-
-type ServerCodexInspectionResultFilter =
-  | 'all'
-  | 'delete'
-  | 'disable'
-  | 'enable'
-  | 'reauth'
-  | 'http_401'
-  | 'keep';
-
-const filterServerCodexInspectionResults = (
-  results: CodexInspectionResult[],
-  filter: ServerCodexInspectionResultFilter
-) => {
-  if (filter === 'all') return results;
-  if (filter === 'http_401') return results.filter((item) => item.statusCode === 401);
-  return results.filter((item) => item.action === filter);
-};
 
 const COMMON_TIME_ZONES: ReadonlyArray<string> = [
   'UTC',
@@ -320,14 +313,6 @@ const statusToneClass: Record<StatusTone, string> = {
   bad: styles['tone-bad'],
 };
 
-const actionToneClass: Record<string, string> = {
-  keep: styles.actionKeep,
-  delete: styles.actionDelete,
-  disable: styles.actionDisable,
-  enable: styles.actionEnable,
-  reauth: styles.actionReauth,
-};
-
 const summaryAccentClassMap: Record<CodexInspectionSummaryAccent, string> = {
   blue: styles.summaryAccentBlue,
   cyan: styles.summaryAccentCyan,
@@ -487,6 +472,83 @@ function formatServerActionStatusLabel(
   return '';
 }
 
+function formatServerResultStateToken(
+  value: string | undefined,
+  t: ReturnType<typeof useTranslation>['t']
+) {
+  const normalized = (value ?? '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized === 'active') return t('monitoring.state_active');
+  if (normalized === 'disabled') return t('monitoring.state_disabled');
+  if (normalized === 'inactive') return t('monitoring.state_inactive');
+  if (normalized === 'enabled') return t('monitoring.codex_inspection_state_enabled');
+  return value?.trim() ?? '';
+}
+
+function formatServerResultStateDetail(
+  item: CodexInspectionResult,
+  t: ReturnType<typeof useTranslation>['t']
+) {
+  const errorText = item.actionError || item.errorDetail || item.error;
+  if (errorText) return errorText;
+
+  return (
+    formatServerResultStateToken(item.status, t) ||
+    formatServerResultStateToken(item.state, t) ||
+    '--'
+  );
+}
+
+function normalizeServerResultAction(action: string): CodexInspectionAction {
+  if (
+    action === 'delete' ||
+    action === 'disable' ||
+    action === 'enable' ||
+    action === 'reauth' ||
+    action === 'keep'
+  ) {
+    return action;
+  }
+  return 'keep';
+}
+
+function toServerResultItem(
+  item: CodexInspectionResult,
+  t: ReturnType<typeof useTranslation>['t']
+): CodexInspectionResultItem {
+  const actionStatusLabel = formatServerActionStatusLabel(item, t);
+  const reasonParts = [item.actionReason, actionStatusLabel].filter(Boolean);
+  return {
+    key: `server-${item.id || item.accountKey}`,
+    fileName: item.fileName,
+    displayAccount: item.displayAccount,
+    authIndex: item.authIndex ?? null,
+    accountId: item.accountId ?? null,
+    provider: item.provider,
+    disabled: item.disabled,
+    status: item.status ?? '',
+    state: item.state ?? '',
+    raw: item as unknown as CodexInspectionResultItem['raw'],
+    action: normalizeServerResultAction(item.action),
+    actionReason: reasonParts.join(' · '),
+    statusCode: item.statusCode ?? null,
+    usedPercent: item.usedPercent ?? null,
+    isQuota: item.isQuota,
+    error: item.error ?? '',
+    planType: item.planType ?? null,
+    quotaWindows: item.quotaWindows?.map((window) => ({
+      id: window.id,
+      labelKey: window.labelKey,
+      labelParams: window.labelParams,
+      usedPercent: window.usedPercent ?? null,
+      resetLabel: window.resetLabel ?? '',
+      limitWindowSeconds: window.limitWindowSeconds ?? null,
+    })),
+    errorKind: item.errorKind,
+    errorDetail: item.actionError || item.errorDetail || '',
+  };
+}
+
 function countServerResultActions(items: CodexInspectionResult[]) {
   const counts = {
     delete: 0,
@@ -546,7 +608,8 @@ export function ServerCodexInspectionPage() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const [logsCollapsed, setLogsCollapsed] = useState(false);
-  const [resultFilter, setResultFilter] = useState<ServerCodexInspectionResultFilter>('all');
+  const [actionFilter, setActionFilter] = useState<ActionFilter>('all');
+  const [handlingFilter, setHandlingFilter] = useState<HandlingFilter>('all');
   const [resultPage, setResultPage] = useState(1);
   const [resultPageSize, setResultPageSize] = useState<number>(
     CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS[0]
@@ -556,6 +619,7 @@ export function ServerCodexInspectionPage() {
   const [executingAllActions, setExecutingAllActions] = useState(false);
   const [configDrawerOpen, setConfigDrawerOpen] = useState(false);
   const [configFocusField, setConfigFocusField] = useState<string | null>(null);
+  const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
   const refreshInFlightRef = useRef(false);
   const actionInFlightRef = useRef(false);
 
@@ -661,9 +725,20 @@ export function ServerCodexInspectionPage() {
     : 0;
 
   const resultRows = useMemo(() => detail?.results ?? [], [detail?.results]);
+  const resultItems = useMemo(
+    () => resultRows.map((item) => toServerResultItem(item, t)),
+    [resultRows, t]
+  );
+  const resultByKey = useMemo(() => {
+    const map = new Map<string, CodexInspectionResult>();
+    resultRows.forEach((item) => {
+      map.set(`server-${item.id || item.accountKey}`, item);
+    });
+    return map;
+  }, [resultRows]);
   const filteredResultRows = useMemo(
-    () => filterServerCodexInspectionResults(resultRows, resultFilter),
-    [resultRows, resultFilter]
+    () => filterInspectionResults(resultItems, handlingFilter, actionFilter),
+    [actionFilter, handlingFilter, resultItems]
   );
   const resultPagination = useMemo(
     () => buildCodexInspectionPaginationState(filteredResultRows, resultPage, resultPageSize),
@@ -672,7 +747,7 @@ export function ServerCodexInspectionPage() {
 
   useEffect(() => {
     setResultPage(1);
-  }, [resultFilter, detail?.run.id]);
+  }, [actionFilter, handlingFilter, detail?.run.id]);
 
   useEffect(() => {
     if (resultPage === resultPagination.currentPage) return;
@@ -970,6 +1045,20 @@ export function ServerCodexInspectionPage() {
     },
     [executeServerActions, showConfirmation, t]
   );
+
+  const handleOpenCodexReauth = useCallback((item: CodexInspectionResult) => {
+    setCodexReauthTarget({
+      account: item.displayAccount || item.accountId || item.fileName,
+      fileName: item.fileName,
+      authIndex: item.authIndex ?? null,
+      accountId: item.accountId ?? null,
+    });
+  }, []);
+
+  const handleCodexReauthSuccess = useCallback(async () => {
+    await refreshRuns({ silent: true });
+    showNotification(t('codex_reauth.rerun_hint'), 'success');
+  }, [refreshRuns, showNotification, t]);
 
   const handleSelectRun = async (runID: number) => {
     if (!serviceBase || runID === selectedRunId) return;
@@ -1366,269 +1455,174 @@ export function ServerCodexInspectionPage() {
     </Panel>
   );
 
-  const renderResultsPanel = (
-    results: CodexInspectionResult[],
-    filtered: CodexInspectionResult[],
-    pagination: CodexInspectionPaginationState<CodexInspectionResult>
-  ) => {
-    const canonicalExecutableIds = getCanonicalServerCodexInspectionActionIds(results);
-    const mixedActionIds = getMixedServerCodexInspectionActionIds(results);
-    const executableResults = results.filter((item) => canonicalExecutableIds.has(item.id));
+  const renderResultsPanel = () => {
+    const canonicalExecutableIds = getCanonicalServerCodexInspectionActionIds(resultRows);
+    const mixedActionIds = getMixedServerCodexInspectionActionIds(resultRows);
+    const executableResults = resultRows.filter((item) => canonicalExecutableIds.has(item.id));
     const canExecuteActions = detail?.run.status === 'completed';
     const resultsRun = detail?.run ?? null;
-    const counts: Record<ServerCodexInspectionResultFilter, number> = {
-      all: results.length,
-      delete: 0,
-      disable: 0,
-      enable: 0,
-      reauth: 0,
-      http_401: 0,
-      keep: 0,
-    };
-    for (const item of results) {
-      if (
-        item.action === 'delete' ||
-        item.action === 'disable' ||
-        item.action === 'enable' ||
-        item.action === 'reauth' ||
-        item.action === 'keep'
-      ) {
-        counts[item.action] += 1;
+    const actionFilterCounts = getActionFilterCounts(resultItems);
+    const handlingFilterCounts = countHandlingStates(resultItems);
+    const panelResult: CodexInspectionRunResult | null = resultsRun
+      ? {
+          settings: {
+            baseUrl: serviceBase,
+            token: '',
+            targetType: selectedConfig.targetType,
+            workers: selectedConfig.workers,
+            deleteWorkers: selectedConfig.deleteWorkers,
+            timeout: selectedConfig.timeout,
+            retries: selectedConfig.retries,
+            userAgent: selectedConfig.userAgent,
+            usedPercentThreshold: selectedConfig.usedPercentThreshold,
+            sampleSize: selectedConfig.sampleSize,
+          },
+          files: [],
+          results: resultItems,
+          summary: {
+            totalFiles: resultsRun.totalFiles,
+            probeSetCount: resultsRun.probeSetCount,
+            sampledCount: resultsRun.sampledCount,
+            disabledCount: resultsRun.disabledCount,
+            enabledCount: resultsRun.enabledCount,
+            deleteCount: resultsRun.deleteCount,
+            disableCount: resultsRun.disableCount,
+            enableCount: resultsRun.enableCount,
+            reauthCount: resultsRun.reauthCount,
+            keepCount: resultsRun.keepCount,
+            usedPercentThreshold: selectedConfig.usedPercentThreshold,
+            sampled: selectedConfig.sampleSize > 0,
+            plannedActionPreview: [],
+          },
+          startedAt: resultsRun.startedAtMs,
+          finishedAt: resultsRun.finishedAtMs ?? resultsRun.updatedAtMs,
+        }
+      : null;
+
+    const filterLabel = (filter: ActionFilter) => {
+      switch (filter) {
+        case 'delete':
+          return t('monitoring.codex_inspection_filter_delete');
+        case 'disable':
+          return t('monitoring.codex_inspection_filter_disable');
+        case 'enable':
+          return t('monitoring.codex_inspection_filter_enable');
+        case 'reauth':
+          return t('monitoring.codex_inspection_filter_reauth');
+        case 'keep':
+          return t('monitoring.codex_inspection_action_keep');
+        case 'all':
+        default:
+          return t('monitoring.codex_inspection_filter_all');
       }
-      if (item.statusCode === 401) counts.http_401 += 1;
-    }
-    const filterOptions: ReadonlyArray<{ value: ServerCodexInspectionResultFilter; label: string }> = [
-      { value: 'all', label: t('monitoring.server_codex_inspection_filter_all') },
-      { value: 'delete', label: t('monitoring.codex_inspection_action_delete') },
-      { value: 'disable', label: t('monitoring.codex_inspection_action_disable') },
-      { value: 'enable', label: t('monitoring.codex_inspection_action_enable') },
-      { value: 'reauth', label: t('monitoring.codex_inspection_filter_reauth') },
-      { value: 'http_401', label: t('monitoring.codex_inspection_filter_401') },
-      { value: 'keep', label: t('monitoring.codex_inspection_action_keep') },
-    ];
+    };
+
+    const handlingFilterLabel = (filter: HandlingFilter) => {
+      switch (filter) {
+        case 'pending':
+          return t('monitoring.codex_inspection_handling_filter_pending');
+        case 'no_action':
+          return t('monitoring.codex_inspection_handling_filter_no_action');
+        case 'all':
+        default:
+          return t('monitoring.codex_inspection_handling_filter_all');
+      }
+    };
+
+    const renderOperation = (item: CodexInspectionResultItem) => {
+      const source = resultByKey.get(item.key);
+      if (!source) {
+        return <span className={styles.primaryReason}>{t('monitoring.codex_inspection_no_action')}</span>;
+      }
+
+      const actionStatus = normalizeServerCodexInspectionActionStatus(source);
+      const detailText = formatServerResultStateDetail(source, t);
+      const showDetail =
+        detailText &&
+        detailText !== '--' &&
+        !source.actionError &&
+        !source.errorDetail &&
+        !source.error;
+
+      return (
+        <div className={styles.serverResultOperation}>
+          {showDetail ? <span className={styles.primaryReason}>{detailText}</span> : null}
+          {canonicalExecutableIds.has(source.id) ? (
+            <Button
+              size="xs"
+              variant={source.action === 'delete' ? 'danger' : 'secondary'}
+              loading={executingResultIds.has(source.id)}
+              disabled={!canExecuteActions || executingResultIds.size > 0}
+              className={styles.serverResultActionButton}
+              onClick={() => handleExecuteServerActions([source], 'single')}
+            >
+              {(() => {
+                const ActionIcon = getServerActionIcon(source.action);
+                return <ActionIcon size={13} />;
+              })()}
+              {resolveActionLabel(source.action, t)}
+            </Button>
+          ) : actionStatus === 'needs_review' || mixedActionIds.has(source.id) ? (
+            <span className={styles.primaryReason}>
+              {t('monitoring.server_codex_inspection_action_needs_review_hint')}
+            </span>
+          ) : isActionableServerCodexInspectionResult(source) ? (
+            <span className={styles.primaryReason}>
+              {t('monitoring.server_codex_inspection_file_level_action_hint')}
+            </span>
+          ) : source.action === 'reauth' ? (
+            <Button
+              size="xs"
+              variant="secondary"
+              className={styles.serverResultActionButton}
+              onClick={() => handleOpenCodexReauth(source)}
+            >
+              <IconRefreshCw size={13} />
+              {t('codex_reauth.button')}
+            </Button>
+          ) : source.action === 'keep' ? (
+            <span className={styles.primaryReason}>
+              {t('monitoring.codex_inspection_no_action')}
+            </span>
+          ) : null}
+        </div>
+      );
+    };
+
     return (
-      <Panel
+      <CodexInspectionResultsPanel
+        result={panelResult}
+        filteredResults={resultPagination.pageItems}
+        suggestedResults={resultItems.filter((item) => item.action !== 'keep')}
+        pendingActionCount={executableResults.length}
+        manualActionCount={actionFilterCounts.reauth}
+        handlingFilterCounts={handlingFilterCounts}
+        filterCounts={actionFilterCounts}
+        handlingFilter={handlingFilter}
+        actionFilter={actionFilter}
+        pagination={resultPagination}
+        pageSize={resultPageSize}
+        pageSizeOptions={CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS}
+        executing={executingAllActions}
+        isInspectionInFlight={Boolean(hasRunningRun)}
+        t={t}
         title={t('monitoring.codex_inspection_results_title')}
         subtitle={formatResultsDescription(resultsRun, i18n.language, t)}
-        extra={
-          results.length > 0 ? (
-            <div className={styles.resultsHeaderActions}>
-              <div className={styles.segmentedControl} role="tablist" aria-label={t('monitoring.codex_inspection_results_title')}>
-                {filterOptions.map((opt) => {
-                  const active = resultFilter === opt.value;
-                  return (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      role="tab"
-                      aria-selected={active}
-                      className={`${styles.segmentButton} ${active ? styles.segmentButtonActive : ''}`}
-                      onClick={() => setResultFilter(opt.value)}
-                    >
-                      {opt.label}
-                      <span className={styles.segmentCount}>{counts[opt.value]}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <Button
-                size="sm"
-                variant={executableResults.some((item) => item.action === 'delete') ? 'danger' : 'primary'}
-                loading={executingAllActions}
-                disabled={
-                  !canExecuteActions ||
-                  executableResults.length === 0 ||
-                  executingResultIds.size > 0
-                }
-                onClick={() => handleExecuteServerActions(executableResults, 'bulk')}
-              >
-                <IconCheck size={14} />
-                {t('monitoring.server_codex_inspection_execute_all')}
-              </Button>
-            </div>
-          ) : undefined
-        }
-      >
-        {filtered.length > 0 ? (
-          <>
-            <div className={styles.tableWrap}>
-              <table className={styles.table}>
-                <colgroup>
-                  <col className={styles.accountColumn} />
-                  <col className={styles.stateColumn} />
-                  <col className={styles.httpColumn} />
-                  <col className={styles.usageColumn} />
-                  <col className={styles.actionColumn} />
-                  <col className={styles.operationColumn} />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>{t('monitoring.account_label')}</th>
-                    <th>{formatResultStateHeader(resultsRun, t)}</th>
-                    <th>{t('monitoring.codex_inspection_http_status')}</th>
-                    <th>{t('monitoring.codex_inspection_used_percent')}</th>
-                    <th>{t('monitoring.codex_inspection_next_action')}</th>
-                    <th>{t('monitoring.server_codex_inspection_results_state_detail')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagination.pageItems.map((item) => {
-                    const actionStatus = normalizeServerCodexInspectionActionStatus(item);
-                    return (
-                    <tr key={item.id || item.accountKey}>
-                      <td>
-                        <div className={styles.primaryCell}>
-                          <span className={styles.primaryAccount}>{item.displayAccount}</span>
-                          <small className={styles.primaryFile}>
-                            {item.fileName}
-                            {item.authIndex ? (
-                              <span className={styles.primaryIndex}>{` · #${item.authIndex}`}</span>
-                            ) : null}
-                          </small>
-                          {item.actionReason ? (
-                            <small className={styles.primaryReason}>{item.actionReason}</small>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td>
-                        <span
-                          className={`${styles.stateChip} ${
-                            item.disabled ? styles.stateDisabled : styles.stateEnabled
-                          }`}
-                        >
-                          {item.disabled
-                            ? t('monitoring.codex_inspection_state_disabled')
-                            : t('monitoring.codex_inspection_state_enabled')}
-                        </span>
-                      </td>
-                      <td className={styles.monoCell}>{item.statusCode ?? '--'}</td>
-                      <td className={styles.monoCell}>{formatPercent(item.usedPercent ?? null)}</td>
-                      <td>
-                        <span className={`${styles.actionBadge} ${actionToneClass[item.action] ?? styles.actionKeep}`}>
-                          {resolveActionLabel(item.action, t)}
-                        </span>
-                      </td>
-                      <td>
-                        <div className={styles.serverResultOperation}>
-                          {(() => {
-                            const statusLabel = formatServerActionStatusLabel(item, t);
-                            const detailText =
-                              item.actionError || item.error || item.status || item.state || '--';
-                            return (
-                              <span
-                                className={
-                                  actionStatus === 'failed' || item.actionError || item.error
-                                    ? styles.primaryError
-                                    : styles.primaryReason
-                                }
-                              >
-                                {statusLabel ? `${statusLabel} · ${detailText}` : detailText}
-                              </span>
-                            );
-                          })()}
-                          {canonicalExecutableIds.has(item.id) ? (
-                            <Button
-                              size="xs"
-                              variant={item.action === 'delete' ? 'danger' : 'secondary'}
-                              loading={executingResultIds.has(item.id)}
-                              disabled={!canExecuteActions || executingResultIds.size > 0}
-                              className={styles.serverResultActionButton}
-                              onClick={() => handleExecuteServerActions([item], 'single')}
-                            >
-                              {(() => {
-                                const ActionIcon = getServerActionIcon(item.action);
-                                return <ActionIcon size={13} />;
-                              })()}
-                              {resolveActionLabel(item.action, t)}
-                            </Button>
-                          ) : actionStatus === 'needs_review' || mixedActionIds.has(item.id) ? (
-                            <span className={styles.primaryReason}>
-                              {t('monitoring.server_codex_inspection_action_needs_review_hint')}
-                            </span>
-                          ) : isActionableServerCodexInspectionResult(item) ? (
-                            <span className={styles.primaryReason}>
-                              {t('monitoring.server_codex_inspection_file_level_action_hint')}
-                            </span>
-                          ) : item.action === 'reauth' ? (
-                            <span className={styles.primaryReason}>
-                              {t('monitoring.codex_inspection_manual_required')}
-                            </span>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            {pagination.totalPages > 1 ? (
-              <div className={styles.resultPaginationBar}>
-                <div className={styles.resultPaginationInfo}>
-                  {t('monitoring.pagination_info', {
-                    current: pagination.currentPage,
-                    total: pagination.totalPages,
-                    start: pagination.startItem,
-                    end: pagination.endItem,
-                    count: pagination.count,
-                  })}
-                </div>
-                <div className={styles.resultPaginationControls}>
-                  <div className={styles.resultPageSizeField}>
-                    <span>{t('monitoring.page_size_label')}</span>
-                    <Select
-                      className={styles.resultPageSizeSelect}
-                      triggerClassName={styles.resultPageSizeSelectTrigger}
-                      value={String(resultPageSize)}
-                      options={CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS.map((size) => ({
-                        value: String(size),
-                        label: t('monitoring.page_size_option', { count: size }),
-                      }))}
-                      onChange={(value) => {
-                        const parsed = Number.parseInt(value, 10);
-                        handleResultPageSizeChange(
-                          Number.isFinite(parsed) && parsed > 0 ? parsed : resultPageSize
-                        );
-                      }}
-                      ariaLabel={t('monitoring.page_size_label')}
-                      fullWidth={false}
-                    />
-                  </div>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => setResultPage(Math.max(1, pagination.currentPage - 1))}
-                    disabled={pagination.currentPage <= 1}
-                  >
-                    {t('monitoring.pagination_prev')}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() =>
-                      setResultPage(Math.min(pagination.totalPages, pagination.currentPage + 1))
-                    }
-                    disabled={pagination.currentPage >= pagination.totalPages}
-                  >
-                    {t('monitoring.pagination_next')}
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-          </>
-        ) : results.length === 0 ? (
-          <div className={styles.emptyAction}>
-            <span>{t('monitoring.codex_inspection_empty')}</span>
-            {serviceBase ? (
-              <Button size="sm" onClick={handleRunNow} loading={running} disabled={running}>
-                {t('monitoring.server_codex_inspection_run_now')}
-              </Button>
-            ) : null}
-          </div>
-        ) : (
-          <div className={styles.emptyBlock}>{t('monitoring.server_codex_inspection_filter_no_match')}</div>
-        )}
-      </Panel>
+        stateHeaderLabel={formatResultStateHeader(resultsRun, t)}
+        onActionFilterChange={setActionFilter}
+        onHandlingFilterChange={setHandlingFilter}
+        onPageChange={setResultPage}
+        onPageSizeChange={handleResultPageSizeChange}
+        onExecutePlanned={() => handleExecuteServerActions(executableResults, 'bulk')}
+        onExecuteSingle={() => undefined}
+        onReauthAccount={(item) => {
+          const source = resultByKey.get(item.key);
+          if (source) handleOpenCodexReauth(source);
+        }}
+        filterLabel={filterLabel}
+        handlingFilterLabel={handlingFilterLabel}
+        renderOperation={renderOperation}
+      />
     );
   };
 
@@ -1778,11 +1772,17 @@ export function ServerCodexInspectionPage() {
         {renderRunsPanel()}
         <div className={styles.serverDetailPanels}>
           {detail?.run.error ? <div className={styles.serverError} role="alert">{detail.run.error}</div> : null}
-          {renderResultsPanel(resultRows, filteredResultRows, resultPagination)}
+          {renderResultsPanel()}
           {renderLogsPanel(detail?.logs ?? [])}
         </div>
       </div>
       {renderConfigDrawer()}
+      <CodexReauthDialog
+        open={Boolean(codexReauthTarget)}
+        target={codexReauthTarget}
+        onClose={() => setCodexReauthTarget(null)}
+        onSuccess={handleCodexReauthSuccess}
+      />
     </div>
   );
 }

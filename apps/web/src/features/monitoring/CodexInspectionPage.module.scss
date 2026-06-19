@@ -608,6 +608,23 @@
   max-width: 100%;
 }
 
+.segmentedGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.segmentedLabel {
+  flex: 0 0 auto;
+  color: var(--inspect-muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
 .segmentedControl {
   display: inline-flex;
   align-items: stretch;
@@ -642,7 +659,11 @@
   background: color-mix(in srgb, var(--inspect-muted) 34%, transparent);
 }
 
-.filterRow .segmentedControl,
+.filterRow .segmentedControl {
+  flex: 0 1 auto;
+  width: fit-content;
+}
+
 .resultsHeaderActions .segmentedControl,
 .logFilterGroup .segmentedControl {
   flex: 1 1 auto;
@@ -783,35 +804,35 @@
 }
 
 .table {
-  width: max(100%, 920px);
-  min-width: 920px;
+  width: max(100%, 1240px);
+  min-width: 1240px;
   border-collapse: separate;
   border-spacing: 0 8px;
   table-layout: fixed;
 }
 
 .accountColumn {
-  width: 34%;
+  width: 28%;
 }
 
 .stateColumn {
-  width: 11%;
+  width: 10%;
 }
 
 .httpColumn {
-  width: 9%;
+  width: 8%;
 }
 
 .usageColumn {
-  width: 11%;
+  width: 25%;
 }
 
 .actionColumn {
-  width: 12%;
+  width: 11%;
 }
 
 .operationColumn {
-  width: 23%;
+  width: 18%;
 }
 
 .table thead th {
@@ -890,6 +911,131 @@
   color: var(--inspect-red);
   font-size: 12px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.rawDetail {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--inspect-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.rawDetail summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.rawDetail pre {
+  max-height: 140px;
+  max-width: 100%;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--inspect-red) 18%, var(--inspect-line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--inspect-red) 5%, var(--inspect-surface));
+  color: var(--inspect-ink);
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.planBadge {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  max-width: 100%;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--inspect-accent) 24%, var(--inspect-line));
+  background: color-mix(in srgb, var(--inspect-accent) 8%, var(--inspect-surface));
+  color: var(--inspect-accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.quotaWindowList {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.quotaWindowRow {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.quotaWindowHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.quotaWindowLabel,
+.quotaWindowValue,
+.quotaWindowReset {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.quotaWindowLabel {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--inspect-ink);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.quotaWindowValue {
+  flex: 0 0 auto;
+  color: var(--inspect-ink);
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.quotaWindowBar {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-subtle-strong);
+}
+
+.quotaWindowBarFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--inspect-green);
+  transition: width 0.2s ease;
+}
+
+.quotaWindowBarFillHigh {
+  background: var(--inspect-green);
+}
+
+.quotaWindowBarFillMedium {
+  background: var(--quota-medium-color, var(--inspect-amber));
+}
+
+.quotaWindowBarFillLow {
+  background: var(--inspect-red);
+}
+
+.quotaWindowReset {
+  color: var(--inspect-muted);
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   overflow-wrap: anywhere;
 }
 
@@ -2119,7 +2265,7 @@
   }
 
   .table {
-    width: 920px;
+    width: 1240px;
   }
 
   .resultPaginationControls {

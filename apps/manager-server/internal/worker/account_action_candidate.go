@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	collectorpkg "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
@@ -19,8 +20,10 @@ import (
 const accountActionCandidateQueueSize = 256
 
 type AccountActionCandidateWorker struct {
-	store       *store.Store
-	jobs        chan accountActionCandidate
+	store *store.Store
+	jobs  chan accountActionCandidate
+
+	mu          sync.RWMutex
 	autoDisable bool
 }
 
@@ -54,6 +57,24 @@ func NewAccountActionCandidateWorker(st *store.Store, autoDisable ...bool) *Acco
 
 func (w *AccountActionCandidateWorker) Start(ctx context.Context) {
 	go w.run(ctx)
+}
+
+func (w *AccountActionCandidateWorker) SetAutoDisable(enabled bool) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.autoDisable = enabled
+	w.mu.Unlock()
+}
+
+func (w *AccountActionCandidateWorker) AutoDisableEnabled() bool {
+	if w == nil {
+		return false
+	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.autoDisable
 }
 
 func (w *AccountActionCandidateWorker) HandleUsageEvents(ctx context.Context, cfg collectorpkg.RuntimeConfig, events []usage.Event) {
@@ -120,7 +141,7 @@ func (w *AccountActionCandidateWorker) handleCandidate(ctx context.Context, cand
 }
 
 func (w *AccountActionCandidateWorker) maybeAutoDisable(ctx context.Context, item model.AccountActionCandidate, candidate accountActionCandidate) {
-	if w == nil || !w.autoDisable {
+	if w == nil || !w.AutoDisableEnabled() {
 		return
 	}
 	if !accountActionAutoDisableEligible(item.ActionType) {
@@ -226,7 +247,7 @@ func classifyAccountActionEvent(event usage.Event) (string, string, bool) {
 	}
 
 	if strings.Contains(text, "token_revoked") || strings.Contains(text, "invalidated_oauth_token") || strings.Contains(text, "invalidated oauth token") || strings.Contains(text, "oauth token revoked") {
-		return model.AccountActionTypeDelete, "OAuth token revoked / invalidated; review and delete the stale auth file if appropriate", true
+		return model.AccountActionTypeReauth, "OAuth token revoked / invalidated; reauthorize the account with OAuth", true
 	}
 	if strings.Contains(text, "invalid_grant") || strings.Contains(text, "reauth") || strings.Contains(text, "auth_unavailable") {
 		return model.AccountActionTypeReauth, "Authentication is unavailable or requires reauthorization", true

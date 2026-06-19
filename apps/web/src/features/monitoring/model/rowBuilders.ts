@@ -80,6 +80,18 @@ const normalizeScopeValue = (value: string | null | undefined) =>
     .trim()
     .toLowerCase();
 
+const hasCacheActivity = (
+  row: Pick<MonitoringEventRow, 'cachedTokens' | 'cacheReadTokens' | 'cacheCreationTokens'>,
+  mode: string
+) => {
+  const cachedTokens = row.cachedTokens || 0;
+  const cacheReadTokens = row.cacheReadTokens || 0;
+  const cacheCreationTokens = row.cacheCreationTokens || 0;
+  if (mode === 'read') return cacheReadTokens > 0;
+  if (mode === 'creation') return cacheCreationTokens > 0;
+  return cachedTokens > 0 || cacheReadTokens > 0 || cacheCreationTokens > 0;
+};
+
 export const buildScopeFilteredRows = (
   rows: MonitoringEventRow[],
   scopeFilters?: MonitoringScopeFilters
@@ -92,10 +104,18 @@ export const buildScopeFilteredRows = (
   const accountApiKeyHashes = new Set(accountCriteria.apiKeyHashes.map(normalizeScopeValue));
   const hasAccountSourceHashFilter = accountCriteria.sourceHashes.length > 0;
   const provider = normalizeScopeValue(scopeFilters.provider);
+  const authFile = normalizeScopeValue(scopeFilters.authFile);
+  const projectId = normalizeScopeValue(scopeFilters.projectId);
+  const requestType = normalizeScopeValue(scopeFilters.requestType);
   const model = normalizeScopeValue(scopeFilters.model);
   const channel = normalizeScopeValue(scopeFilters.channel);
   const apiKeyHash = normalizeScopeValue(scopeFilters.apiKeyHash);
   const status = scopeFilters.status;
+  const minLatencyMs =
+    typeof scopeFilters.minLatencyMs === 'number' && scopeFilters.minLatencyMs > 0
+      ? scopeFilters.minLatencyMs
+      : null;
+  const cacheStatus = normalizeScopeValue(scopeFilters.cacheStatus);
 
   return rows.filter((row) => {
     if (isActiveScopeFilterValue(scopeFilters.account)) {
@@ -126,6 +146,29 @@ export const buildScopeFilteredRows = (
       return false;
     }
 
+    if (
+      isActiveScopeFilterValue(scopeFilters.authFile) &&
+      normalizeScopeValue(row.source) !== authFile &&
+      normalizeScopeValue(row.sourceMasked) !== authFile &&
+      !normalizeScopeValue(row.searchText).includes(authFile)
+    ) {
+      return false;
+    }
+
+    if (
+      isActiveScopeFilterValue(scopeFilters.projectId) &&
+      normalizeScopeValue(row.projectId) !== projectId
+    ) {
+      return false;
+    }
+
+    if (
+      isActiveScopeFilterValue(scopeFilters.requestType) &&
+      normalizeScopeValue(row.executorType) !== requestType
+    ) {
+      return false;
+    }
+
     if (isActiveScopeFilterValue(scopeFilters.model) && normalizeScopeValue(row.model) !== model) {
       return false;
     }
@@ -146,6 +189,17 @@ export const buildScopeFilteredRows = (
 
     if (status === 'failed' && !row.failed) return false;
     if (status === 'success' && row.failed) return false;
+    if (minLatencyMs !== null && (row.latencyMs === null || row.latencyMs < minLatencyMs)) {
+      return false;
+    }
+    if (cacheStatus === 'hit' && !hasCacheActivity(row, cacheStatus)) return false;
+    if (cacheStatus === 'miss' && hasCacheActivity(row, cacheStatus)) return false;
+    if (
+      (cacheStatus === 'read' || cacheStatus === 'creation') &&
+      !hasCacheActivity(row, cacheStatus)
+    ) {
+      return false;
+    }
 
     return true;
   });

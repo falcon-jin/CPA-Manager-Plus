@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { buildRealtimeSourceDisplay } from '@/features/monitoring/realtimeSourceDisplay';
 import type { UsageDetailWithEndpoint } from '@/utils/usage';
+import { buildSourceInfoMap } from '@/utils/sourceResolver';
 import { buildEventRows } from './eventRows';
 
 const buildRows = (overrides: Partial<UsageDetailWithEndpoint> = {}) =>
@@ -74,5 +76,61 @@ describe('buildEventRows', () => {
     expect(row.searchText).toContain('codex');
     expect(row.searchText).toContain('priority');
     expect(row.searchText).toContain('medium');
+  });
+
+  it('keeps shared provider display names available to realtime source cells', () => {
+    const sharedKey = 'sk-shared1234567890abcdef';
+    const sourceInfoMap = buildSourceInfoMap({
+      codexApiKeys: [
+        {
+          apiKey: sharedKey,
+          prefix: 'Shared Relay',
+          baseUrl: 'https://api.shared.example/v1',
+        },
+      ],
+      claudeApiKeys: [
+        {
+          apiKey: sharedKey,
+          prefix: 'Shared Relay',
+          baseUrl: 'https://api.shared.example/v1',
+        },
+      ],
+    });
+    const [row] = buildEventRows(
+      [
+        {
+          timestamp: '2026-05-19T10:00:00Z',
+          source: 'm:sk-s...cdef',
+          auth_index: null,
+          auth_provider_snapshot: 'codex',
+          latency_ms: 1500,
+          tokens: {
+            input_tokens: 10,
+            output_tokens: 20,
+            total_tokens: 30,
+          },
+          failed: false,
+          __modelName: 'gpt-5.4',
+          __endpoint: 'POST /v1/chat/completions',
+          __endpointMethod: 'POST',
+          __endpointPath: '/v1/chat/completions',
+          __timestampMs: Date.parse('2026-05-19T10:00:00Z'),
+        },
+      ],
+      new Map(),
+      new Map(),
+      sourceInfoMap,
+      new Map(),
+      {},
+      new Map()
+    );
+
+    const t = ((key: string) => key) as Parameters<typeof buildRealtimeSourceDisplay>[1];
+    const display = buildRealtimeSourceDisplay(row, t);
+
+    expect(row.source).toBe('Shared Relay');
+    expect(row.sourceKey).toBe('shared:m:sk-s...cdef');
+    expect(row.provider).toBe('codex');
+    expect(display.primary).toBe('Shared Relay');
   });
 });

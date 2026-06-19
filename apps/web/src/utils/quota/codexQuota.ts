@@ -10,6 +10,8 @@ import { normalizeNumberValue, normalizePlanType, normalizeStringValue } from '.
 const FIVE_HOUR_SECONDS = 18_000;
 const WEEK_SECONDS = 604_800;
 const MONTH_SECONDS = 2_592_000;
+const MIN_MONTH_SECONDS = 28 * 24 * 60 * 60;
+const MAX_MONTH_SECONDS = 31 * 24 * 60 * 60;
 
 type CodexQuotaWindowMeta = {
   id: string;
@@ -76,6 +78,11 @@ const formatWindowDuration = (seconds: number | null): string => {
 const hasExplicitWindowSeconds = (window?: CodexUsageWindow | null): boolean =>
   getWindowSeconds(window) !== null;
 
+const isMonthlyWindow = (window?: CodexUsageWindow | null): boolean => {
+  const seconds = getWindowSeconds(window);
+  return seconds !== null && seconds >= MIN_MONTH_SECONDS && seconds <= MAX_MONTH_SECONDS;
+};
+
 const pickClassifiedWindows = (
   limitInfo?: CodexRateLimitInfo | null,
   options?: { allowOrderFallback?: boolean; teamPlan?: boolean }
@@ -106,7 +113,7 @@ const pickClassifiedWindows = (
       fiveHourWindow = window;
     } else if (seconds === WEEK_SECONDS && !weeklyWindow) {
       weeklyWindow = window;
-    } else if (seconds === MONTH_SECONDS && !monthlyWindow) {
+    } else if ((seconds === MONTH_SECONDS || isMonthlyWindow(window)) && !monthlyWindow) {
       monthlyWindow = window;
     } else if (seconds !== null && seconds > FIVE_HOUR_SECONDS && !genericLongWindow) {
       genericLongWindow = window;

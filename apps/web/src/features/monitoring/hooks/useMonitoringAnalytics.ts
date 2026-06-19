@@ -51,6 +51,11 @@ const stableJson = (value: unknown) => JSON.stringify(value ?? {});
 
 const parseJson = <T>(value: string): T => JSON.parse(value) as T;
 
+const getBrowserTimeZone = () => {
+  if (typeof Intl === 'undefined') return '';
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+};
+
 const buildInFlightRequestIdentityKey = (
   dataScopeKey: string | undefined,
   request: MonitoringAnalyticsRequest,
@@ -118,6 +123,10 @@ export function useMonitoringAnalytics({
       from_ms: fromMs,
       to_ms: toMs,
     };
+    const timeZone = getBrowserTimeZone();
+    if (timeZone) {
+      payload.time_zone = timeZone;
+    }
     if (isFiniteTimestamp(nowMs)) {
       payload.now_ms = nowMs;
     }

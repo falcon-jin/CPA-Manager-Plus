@@ -568,6 +568,42 @@
   justify-self: center;
 }
 
+.connectivityTestPanel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: $spacing-sm;
+  align-items: end;
+
+  :global(.form-group) {
+    margin-bottom: 0;
+  }
+
+  @include mobile {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+}
+
+.connectivitySuccess,
+.connectivityError {
+  padding: $spacing-sm $spacing-md;
+  border-radius: $radius-md;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.connectivitySuccess {
+  color: var(--success-color);
+  border: 1px solid color-mix(in srgb, var(--success-color) 32%, var(--border-color));
+  background: color-mix(in srgb, var(--success-color) 8%, var(--bg-primary));
+}
+
+.connectivityError {
+  color: var(--danger-color);
+  border: 1px solid color-mix(in srgb, var(--danger-color) 32%, var(--border-color));
+  background: color-mix(in srgb, var(--danger-color) 8%, var(--bg-primary));
+}
+
 .modelTestPanel {
   display: flex;
   align-items: flex-start;

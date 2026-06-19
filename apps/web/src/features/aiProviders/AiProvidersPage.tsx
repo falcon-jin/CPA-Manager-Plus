@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  AmpcodeSection,
-  AmpcodeEditDrawer,
   buildProviderRows,
   ClaudeEditDrawer,
   CodexEditDrawer,
@@ -33,7 +31,7 @@ import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Select } from '@/components/ui/Select';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
-import { ampcodeApi, providersApi } from '@/services/api';
+import { providersApi } from '@/services/api';
 import { useAuthStore, useConfigStore, useNotificationStore, useThemeStore } from '@/stores';
 import type { CloakConfig, GeminiKeyConfig, OpenAIProviderConfig, ProviderKeyConfig } from '@/types';
 import styles from './AiProvidersPage.module.scss';
@@ -91,7 +89,6 @@ export function AiProvidersPage() {
   const [healthCheckOpen, setHealthCheckOpen] = useState(false);
   const [editDrawerKind, setEditDrawerKind] = useState<ProviderKind | null>(null);
   const [editDrawerIndex, setEditDrawerIndex] = useState<number | null>(null);
-  const [ampcodeEditOpen, setAmpcodeEditOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(PROVIDER_TABLE_DEFAULT_PAGE_SIZE);
 
@@ -119,10 +116,9 @@ export function AiProvidersPage() {
     }
     setError('');
     try {
-      const [configResult, vertexResult, ampcodeResult, openaiResult] = await Promise.allSettled([
+      const [configResult, vertexResult, openaiResult] = await Promise.allSettled([
         fetchConfig(),
         providersApi.getVertexConfigs(),
-        ampcodeApi.getAmpcode(),
         providersApi.getOpenAIProviders(),
       ]);
 
@@ -141,11 +137,6 @@ export function AiProvidersPage() {
         setVertexConfigs(vertexResult.value || []);
         updateConfigValue('vertex-api-key', vertexResult.value || []);
         clearCache('vertex-api-key');
-      }
-
-      if (ampcodeResult.status === 'fulfilled') {
-        updateConfigValue('ampcode', ampcodeResult.value);
-        clearCache('ampcode');
       }
 
       if (openaiResult.status === 'fulfilled') {
@@ -979,14 +970,6 @@ export function AiProvidersPage() {
             )}
           </Card>
         </div>
-
-        <AmpcodeSection
-          config={config?.ampcode}
-          loading={loading}
-          disableControls={disableControls}
-          isSwitching={isSwitching}
-          onEdit={() => setAmpcodeEditOpen(true)}
-        />
       </div>
 
       <ProviderDetailDrawer
@@ -1044,12 +1027,6 @@ export function AiProvidersPage() {
         editIndex={editDrawerIndex}
         disabled={actionsDisabled}
         onClose={closeEditorDrawer}
-        onSaved={handleDrawerSaved}
-      />
-      <AmpcodeEditDrawer
-        open={ampcodeEditOpen}
-        disabled={actionsDisabled}
-        onClose={() => setAmpcodeEditOpen(false)}
         onSaved={handleDrawerSaved}
       />
     </div>

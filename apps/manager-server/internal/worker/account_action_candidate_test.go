@@ -35,7 +35,7 @@ func TestAccountActionCandidateFromEventUsesSafeEvidence(t *testing.T) {
 	if !ok {
 		t.Fatal("candidate not detected")
 	}
-	if candidate.ActionType != model.AccountActionTypeDelete {
+	if candidate.ActionType != model.AccountActionTypeReauth {
 		t.Fatalf("action type = %q", candidate.ActionType)
 	}
 	if candidate.AccountID != "acct-123" {
@@ -80,7 +80,7 @@ func TestAccountActionCandidateWorkerSavesQueueOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list candidates: %v", err)
 	}
-	if len(items) != 1 || items[0].AuthFileName != "codex-auth.json" || items[0].ActionType != model.AccountActionTypeDelete {
+	if len(items) != 1 || items[0].AuthFileName != "codex-auth.json" || items[0].ActionType != model.AccountActionTypeReauth {
 		t.Fatalf("items = %#v", items)
 	}
 	if items[0].LastError != "" {

@@ -1,4 +1,3 @@
-export { AmpcodeSection } from './AmpcodeSection';
 export { ProviderStatusBar } from './ProviderStatusBar';
 export * from './ProviderTable';
 export { ProviderToolbar } from './ProviderToolbar';

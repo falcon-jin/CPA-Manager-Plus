@@ -159,6 +159,10 @@ func Migrate(db *sql.DB) error {
 			used_percent real,
 			is_quota integer not null default 0,
 			error text,
+			plan_type text,
+			quota_windows_json text,
+			error_kind text,
+			error_detail text,
 			created_at_ms integer not null,
 			foreign key(run_id) references codex_inspection_runs(id) on delete cascade,
 			unique(run_id, account_key)
@@ -336,6 +340,10 @@ func ensureCodexInspectionResultColumns(db *sql.DB) error {
 		{name: "action_status", definition: "text"},
 		{name: "executed_action", definition: "text"},
 		{name: "action_error", definition: "text"},
+		{name: "plan_type", definition: "text"},
+		{name: "quota_windows_json", definition: "text"},
+		{name: "error_kind", definition: "text"},
+		{name: "error_detail", definition: "text"},
 	}
 	for _, column := range columns {
 		if _, ok := existing[column.name]; ok {

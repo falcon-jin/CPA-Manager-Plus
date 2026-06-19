@@ -48,6 +48,12 @@ import { AuthFileModelsModal } from '@/features/authFiles/components/AuthFileMod
 import { AuthFilesPrefixProxyEditorModal } from '@/features/authFiles/components/AuthFilesPrefixProxyEditorModal';
 import { OAuthExcludedCard } from '@/features/authFiles/components/OAuthExcludedCard';
 import { OAuthModelAliasCard } from '@/features/authFiles/components/OAuthModelAliasCard';
+import { CodexReauthDialog } from '@/features/oauth/CodexReauthDialog';
+import {
+  createCodexReauthTargetFromAuthFile,
+  type CodexReauthTarget,
+} from '@/features/oauth/codexReauthModel';
+import { usageServiceApi, type CodexInspectionResult } from '@/services/api/usageService';
 import { useAuthFilesData } from '@/features/authFiles/hooks/useAuthFilesData';
 import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModels';
 import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth';
@@ -68,6 +74,7 @@ import {
   compareAuthFilePriority,
   easePower2In,
   easePower3Out,
+  getAuthFileCodexInspectionKey,
   getAuthFileCodexInspectionKeyForFile,
   getAuthFileCodexStatus,
   getAuthFilePatchTarget,
@@ -107,6 +114,29 @@ const hasInlineQuotaLayout = (file: AuthFileItem): boolean => {
   return QUOTA_PROVIDER_TYPES.has(provider as QuotaProviderType);
 };
 
+const toAuthFileCodexInspectionSnapshots = (
+  results: CodexInspectionResult[]
+): AuthFileCodexInspectionSnapshot[] =>
+  results.map((item) => ({
+    fileName: item.fileName,
+    authIndex: item.authIndex ?? null,
+    statusCode: item.statusCode ?? null,
+    action: item.action ?? null,
+    usedPercent: item.usedPercent ?? null,
+    isQuota: item.isQuota ?? null,
+  }));
+
+const isStaleCodexReauthSnapshot = (item: AuthFileCodexInspectionSnapshot): boolean => {
+  const action = typeof item.action === 'string' ? item.action.trim().toLowerCase() : '';
+  const statusCode =
+    typeof item.statusCode === 'number'
+      ? item.statusCode
+      : typeof item.statusCode === 'string'
+        ? Number(item.statusCode)
+        : null;
+  return action === 'reauth' || statusCode === 401;
+};
+
 export function AuthFilesPage() {
   const { t } = useTranslation();
   const showNotification = useNotificationStore((state) => state.showNotification);
@@ -140,6 +170,7 @@ export function AuthFilesPage() {
   const [authJsonPasteOpen, setAuthJsonPasteOpen] = useState(false);
   const [batchPriorityOpen, setBatchPriorityOpen] = useState(false);
   const [batchPriorityValue, setBatchPriorityValue] = useState('');
+  const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
   const [lastCodexInspectionResults, setLastCodexInspectionResults] = useState<
     AuthFileCodexInspectionSnapshot[]
   >([]);
@@ -340,13 +371,36 @@ export function AuthFilesPage() {
     setPageSizeInput(String(pageSize));
   }, [pageSize]);
 
-  useEffect(() => {
-    if (!isCurrentLayer) return;
+  const loadCodexInspectionSnapshots = useCallback(async () => {
     const lastRun = connectionFingerprint
       ? loadCodexInspectionLastRun(connectionFingerprint)
       : null;
+
+    if (apiBase) {
+      try {
+        const runs = await usageServiceApi.listCodexInspectionRuns(apiBase, managementKey, 1);
+        const latestRun = runs.items[0];
+        if (latestRun) {
+          const detail = await usageServiceApi.getCodexInspectionRun(
+            apiBase,
+            managementKey,
+            latestRun.id
+          );
+          setLastCodexInspectionResults(toAuthFileCodexInspectionSnapshots(detail.results));
+          return;
+        }
+      } catch {
+        // Fall back to the browser-side cache when the manager service is unavailable.
+      }
+    }
+
     setLastCodexInspectionResults(lastRun?.result.results ?? []);
-  }, [connectionFingerprint, isCurrentLayer]);
+  }, [apiBase, connectionFingerprint, managementKey]);
+
+  useEffect(() => {
+    if (!isCurrentLayer) return;
+    void loadCodexInspectionSnapshots();
+  }, [isCurrentLayer, loadCodexInspectionSnapshots]);
 
   const setCurrentModePageSize = useCallback(
     (next: number) => {
@@ -412,8 +466,13 @@ export function AuthFilesPage() {
   );
 
   const handleHeaderRefresh = useCallback(async () => {
-    await Promise.all([loadFiles({ force: true }), loadExcluded(), loadModelAlias()]);
-  }, [loadFiles, loadExcluded, loadModelAlias]);
+    await Promise.all([
+      loadFiles({ force: true }),
+      loadExcluded(),
+      loadModelAlias(),
+      loadCodexInspectionSnapshots(),
+    ]);
+  }, [loadFiles, loadExcluded, loadModelAlias, loadCodexInspectionSnapshots]);
 
   useHeaderRefresh(handleHeaderRefresh);
 
@@ -726,6 +785,21 @@ export function AuthFilesPage() {
     },
     [batchPatchFields, selectedCodexPatchTargets]
   );
+
+  const handleCodexReauthSuccess = useCallback(async () => {
+    const target = codexReauthTarget;
+    await loadFiles();
+    await loadCodexInspectionSnapshots();
+    if (!target?.fileName) return;
+
+    const targetKey = getAuthFileCodexInspectionKey(target.fileName, target.authIndex ?? null);
+    setLastCodexInspectionResults((current) =>
+      current.filter((item) => {
+        const itemKey = getAuthFileCodexInspectionKey(item.fileName, item.authIndex ?? null);
+        return itemKey !== targetKey || !isStaleCodexReauthSnapshot(item);
+      })
+    );
+  }, [codexReauthTarget, loadCodexInspectionSnapshots, loadFiles]);
 
   const openExcludedEditor = useCallback(
     (provider?: string) => {
@@ -1146,6 +1220,7 @@ export function AuthFilesPage() {
               >
                 {pageItems.map((file) => {
                   const authFileKey = getAuthFileCodexInspectionKeyForFile(file);
+                  const codexStatus = codexStatusByPageAuthFileKey.get(authFileKey);
                   return (
                     <AuthFileCard
                       key={authFileKey}
@@ -1160,7 +1235,11 @@ export function AuthFilesPage() {
                       codexStatusBadges={
                         codexStatusByPageAuthFileKey.get(authFileKey)?.badges ?? []
                       }
+                      codexNeedsReauth={codexStatus?.needsReauth ?? false}
                       onShowModels={showModels}
+                      onReauth={(targetFile) =>
+                        setCodexReauthTarget(createCodexReauthTargetFromAuthFile(targetFile))
+                      }
                       onDownload={handleDownload}
                       onOpenPrefixProxyEditor={openPrefixProxyEditor}
                       onDelete={handleDelete}
@@ -1260,6 +1339,13 @@ export function AuthFilesPage() {
           if (!authJsonPasteSaving) setAuthJsonPasteOpen(false);
         }}
         onSave={handleSavePastedAuthJson}
+      />
+
+      <CodexReauthDialog
+        open={Boolean(codexReauthTarget)}
+        target={codexReauthTarget}
+        onClose={() => setCodexReauthTarget(null)}
+        onSuccess={handleCodexReauthSuccess}
       />
 
       <Modal
