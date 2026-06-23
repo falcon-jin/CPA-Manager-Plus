@@ -119,14 +119,22 @@ func TestSummaryAggregatesCostsAndWindows(t *testing.T) {
 		resp.RequestHealth.Points[7].Tone != "future" {
 		t.Fatalf("request health timeline points = %#v", resp.RequestHealth.Points[:8])
 	}
-	if len(resp.TokenMix) != 2 || resp.TokenMix[0].Key != "input" ||
+	if len(resp.TokenMix) != 4 || resp.TokenMix[0].Key != "input" ||
 		resp.TokenMix[0].Tokens != 1_000_000 ||
-		math.Abs(resp.TokenMix[0].Share-(1000000.0/1500100.0)) > 0.000001 {
+		math.Abs(resp.TokenMix[0].Share-(1000000.0/1750100.0)) > 0.000001 {
 		t.Fatalf("token mix = %#v", resp.TokenMix)
 	}
-	if resp.TokenMix[1].Key != "output" || resp.TokenMix[1].Tokens != 500_100 ||
-		math.Abs(resp.TokenMix[1].Share-(500100.0/1500100.0)) > 0.000001 {
+	if resp.TokenMix[1].Key != "cached" || resp.TokenMix[1].Tokens != 250_000 ||
+		math.Abs(resp.TokenMix[1].Share-(250000.0/1750100.0)) > 0.000001 {
+		t.Fatalf("token mix cached = %#v", resp.TokenMix)
+	}
+	if resp.TokenMix[2].Key != "output" || resp.TokenMix[2].Tokens != 500_100 ||
+		math.Abs(resp.TokenMix[2].Share-(500100.0/1750100.0)) > 0.000001 {
 		t.Fatalf("token mix output = %#v", resp.TokenMix)
+	}
+	if resp.TokenMix[3].Key != "reasoning" || resp.TokenMix[3].Tokens != 0 ||
+		resp.TokenMix[3].Share != 0 {
+		t.Fatalf("token mix reasoning = %#v", resp.TokenMix)
 	}
 	if len(resp.ModelCostRank) != 1 || resp.ModelCostRank[0].Model != "gpt-a" ||
 		resp.ModelCostRank[0].CostShare != 1 {
@@ -150,7 +158,7 @@ func TestSummaryAggregatesCostsAndWindows(t *testing.T) {
 	}
 }
 
-func TestBuildTokenMixUsesTopLevelInputAndOutputBuckets(t *testing.T) {
+func TestBuildTokenMixRestoresFourVisibleBuckets(t *testing.T) {
 	mix := buildTokenMix(TodaySummary{
 		InputTokens:         1_000,
 		OutputTokens:        200,
@@ -158,18 +166,53 @@ func TestBuildTokenMixUsesTopLevelInputAndOutputBuckets(t *testing.T) {
 		CacheReadTokens:     400,
 		CacheCreationTokens: 100,
 		ReasoningTokens:     150,
+		TotalTokens:         2_150,
 	})
 
-	if len(mix) != 2 {
-		t.Fatalf("token mix length = %d, want 2: %#v", len(mix), mix)
+	if len(mix) != 4 {
+		t.Fatalf("token mix length = %d, want 4: %#v", len(mix), mix)
 	}
-	if mix[0].Key != "input" || mix[0].Tokens != 1_500 ||
-		math.Abs(mix[0].Share-(1500.0/1700.0)) > 0.000001 {
+	if mix[0].Key != "input" || mix[0].Tokens != 1_000 ||
+		math.Abs(mix[0].Share-(1000.0/2150.0)) > 0.000001 {
 		t.Fatalf("input mix = %#v", mix[0])
 	}
-	if mix[1].Key != "output" || mix[1].Tokens != 200 ||
-		math.Abs(mix[1].Share-(200.0/1700.0)) > 0.000001 {
-		t.Fatalf("output mix = %#v", mix[1])
+	if mix[1].Key != "cached" || mix[1].Tokens != 800 ||
+		math.Abs(mix[1].Share-(800.0/2150.0)) > 0.000001 {
+		t.Fatalf("cached mix = %#v", mix[1])
+	}
+	if mix[2].Key != "output" || mix[2].Tokens != 200 ||
+		math.Abs(mix[2].Share-(200.0/2150.0)) > 0.000001 {
+		t.Fatalf("output mix = %#v", mix[2])
+	}
+	if mix[3].Key != "reasoning" || mix[3].Tokens != 150 ||
+		math.Abs(mix[3].Share-(150.0/2150.0)) > 0.000001 {
+		t.Fatalf("reasoning mix = %#v", mix[3])
+	}
+}
+
+func TestBuildTokenMixDeduplicatesNestedCacheAndReasoning(t *testing.T) {
+	mix := buildTokenMix(TodaySummary{
+		InputTokens:     20_700,
+		OutputTokens:    245,
+		CachedTokens:    18_300,
+		ReasoningTokens: 90,
+		TotalTokens:     20_945,
+	})
+
+	if len(mix) != 4 {
+		t.Fatalf("token mix length = %d, want 4: %#v", len(mix), mix)
+	}
+	if mix[0].Key != "input" || mix[0].Tokens != 2_310 {
+		t.Fatalf("input mix = %#v", mix[0])
+	}
+	if mix[1].Key != "cached" || mix[1].Tokens != 18_300 {
+		t.Fatalf("cached mix = %#v", mix[1])
+	}
+	if mix[2].Key != "output" || mix[2].Tokens != 245 {
+		t.Fatalf("output mix = %#v", mix[2])
+	}
+	if mix[3].Key != "reasoning" || mix[3].Tokens != 90 {
+		t.Fatalf("reasoning mix = %#v", mix[3])
 	}
 }
 

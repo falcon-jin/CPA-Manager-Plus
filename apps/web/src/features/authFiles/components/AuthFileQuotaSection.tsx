@@ -5,8 +5,8 @@ import {
   ANTIGRAVITY_CONFIG,
   CLAUDE_CONFIG,
   CODEX_CONFIG,
-  GEMINI_CLI_CONFIG,
-  KIMI_CONFIG
+  KIMI_CONFIG,
+  XAI_CONFIG
 } from '@/components/quota';
 import { useNotificationStore, useQuotaStore } from '@/stores';
 import type { AuthFileItem } from '@/types';
@@ -26,7 +26,7 @@ const getQuotaConfig = (type: QuotaProviderType) => {
   if (type === 'claude') return CLAUDE_CONFIG;
   if (type === 'codex') return CODEX_CONFIG;
   if (type === 'kimi') return KIMI_CONFIG;
-  return GEMINI_CLI_CONFIG;
+  return XAI_CONFIG;
 };
 
 export type AuthFileQuotaSectionProps = {
@@ -45,7 +45,7 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
     if (quotaType === 'claude') return state.claudeQuota[file.name] as QuotaState;
     if (quotaType === 'codex') return state.codexQuota[file.name] as QuotaState;
     if (quotaType === 'kimi') return state.kimiQuota[file.name] as QuotaState;
-    return state.geminiCliQuota[file.name] as QuotaState;
+    return state.xaiQuota[file.name] as QuotaState;
   });
 
   const updateQuotaState = useQuotaStore((state) => {
@@ -53,7 +53,7 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
     if (quotaType === 'claude') return state.setClaudeQuota as unknown as (updater: unknown) => void;
     if (quotaType === 'codex') return state.setCodexQuota as unknown as (updater: unknown) => void;
     if (quotaType === 'kimi') return state.setKimiQuota as unknown as (updater: unknown) => void;
-    return state.setGeminiCliQuota as unknown as (updater: unknown) => void;
+    return state.setXaiQuota as unknown as (updater: unknown) => void;
   });
 
   const refreshQuotaForFile = useCallback(async () => {

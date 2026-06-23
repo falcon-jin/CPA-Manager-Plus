@@ -49,15 +49,19 @@ const formatHour = (bucketMs: number, locale: string) =>
 
 const tokenLabelMap: Record<string, string> = {
   input: 'dashboard.token_mix_input',
+  cached: 'dashboard.token_mix_cached',
   output: 'dashboard.token_mix_output',
+  reasoning: 'dashboard.token_mix_reasoning',
 };
 
 const tokenColorMap: Record<string, string> = {
   input: '#3b82f6',
+  cached: '#f59e0b',
   output: '#10b981',
+  reasoning: '#8b5cf6',
 };
 
-const visibleTokenMixKeys = new Set(['input', 'output']);
+const visibleTokenMixKeys = new Set(['input', 'cached', 'output', 'reasoning']);
 
 const healthToneClassMap: Record<string, string> = {
   future: 'healthFuture',

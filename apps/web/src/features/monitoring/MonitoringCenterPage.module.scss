@@ -1231,6 +1231,11 @@
 
 @include summaryTable.styles;
 @include accountOverview.styles;
+.realtimeTable {
+  --realtime-col-source: 18%;
+  --realtime-col-model: 15%;
+}
+
 .realtimeTable .logTypeCell .primaryCell > span {
   display: inline-block;
   max-width: min(240px, 100%);
@@ -1243,6 +1248,18 @@
   white-space: normal;
   word-break: break-word;
   line-height: 1.45;
+}
+
+.realtimeModelCell {
+  max-width: 100%;
+}
+
+.realtimeModelText {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap !important;
 }
 
 .realtimeApiKeyLine {

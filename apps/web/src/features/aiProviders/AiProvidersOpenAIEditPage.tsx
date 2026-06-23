@@ -15,6 +15,10 @@ import type { ApiKeyEntry } from '@/types';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import { buildHeaderObject, hasHeader } from '@/utils/headers';
 import { buildApiKeyEntry, buildOpenAIChatCompletionsEndpoint } from '@/components/providers/utils';
+import {
+  appendIdleKeyTestStatus,
+  removeKeyTestStatusAtIndex,
+} from '@/features/aiProviders/model/keyTestStatuses';
 import type { OpenAIEditOutletContext } from './AiProvidersOpenAIEditLayout';
 import type { KeyTestStatus } from '@/stores/useOpenAIEditDraftStore';
 import styles from './AiProvidersPage.module.scss';
@@ -115,6 +119,7 @@ export function AiProvidersOpenAIEditPage() {
     setTestMessage,
     keyTestStatuses,
     setDraftKeyTestStatus,
+    setDraftKeyTestStatuses,
     resetDraftKeyTestStatuses,
     availableModels,
     handleBack,
@@ -385,19 +390,18 @@ export function AiProvidersOpenAIEditPage() {
 
     const removeEntry = (idx: number) => {
       const next = list.filter((_, i) => i !== idx);
-      const nextLength = next.length ? next.length : 1;
       setForm((prev) => ({
         ...prev,
         apiKeyEntries: next.length ? next : [buildApiKeyEntry()],
       }));
-      resetDraftKeyTestStatuses(nextLength);
+      setDraftKeyTestStatuses(removeKeyTestStatusAtIndex(keyTestStatuses, idx, list.length));
       setTestStatus('idle');
       setTestMessage('');
     };
 
     const addEntry = () => {
       setForm((prev) => ({ ...prev, apiKeyEntries: [...list, buildApiKeyEntry()] }));
-      resetDraftKeyTestStatuses(list.length + 1);
+      setDraftKeyTestStatuses(appendIdleKeyTestStatus(keyTestStatuses, list.length));
       setTestStatus('idle');
       setTestMessage('');
     };

@@ -15,9 +15,14 @@ import { QuotaCard } from './QuotaCard';
 import type { QuotaStatusState } from './QuotaCard';
 import { useQuotaLoader } from './useQuotaLoader';
 import type { QuotaConfig, QuotaSortMode } from './quotaConfigs';
-import type { QuotaSectionViewMode } from '@/features/quota/quotaPageUiState';
+import { resolveQuotaAccountDisplayText } from './quotaDisplay';
+import {
+  DEFAULT_QUOTA_ACCOUNT_DISPLAY_MODE,
+  type QuotaAccountDisplayMode,
+  type QuotaSectionViewMode,
+} from '@/features/quota/quotaPageUiState';
 import { useGridColumns } from './useGridColumns';
-import { IconRefreshCw } from '@/components/ui/icons';
+import { IconEye, IconEyeOff, IconRefreshCw } from '@/components/ui/icons';
 import styles from '@/features/quota/QuotaPage.module.scss';
 
 type QuotaUpdater<T> = T | ((prev: T) => T);
@@ -111,6 +116,8 @@ interface QuotaSectionProps<TState extends QuotaStatusState, TData> {
   viewMode?: QuotaSectionViewMode;
   onViewModeChange?: (viewMode: QuotaSectionViewMode) => void;
   onReauthAccount?: (item: AuthFileItem) => void;
+  accountDisplayMode?: QuotaAccountDisplayMode;
+  onAccountDisplayModeChange?: (mode: QuotaAccountDisplayMode) => void;
 }
 
 export function QuotaSection<TState extends QuotaStatusState, TData>({
@@ -123,6 +130,8 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
   viewMode,
   onViewModeChange,
   onReauthAccount,
+  accountDisplayMode,
+  onAccountDisplayModeChange,
 }: QuotaSectionProps<TState, TData>) {
   const { t } = useTranslation();
   const resolvedTheme: ResolvedTheme = useThemeStore((state) => state.resolvedTheme);
@@ -135,8 +144,11 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
   /* Removed useRef */
   const [columns, gridRef] = useGridColumns(380); // Min card width 380px matches SCSS
   const [internalViewMode, setInternalViewMode] = useState<QuotaSectionViewMode>('paged');
+  const [internalAccountDisplayMode, setInternalAccountDisplayMode] =
+    useState<QuotaAccountDisplayMode>(DEFAULT_QUOTA_ACCOUNT_DISPLAY_MODE);
   const [showTooManyWarning, setShowTooManyWarning] = useState(false);
   const resolvedViewMode = viewMode ?? internalViewMode;
+  const resolvedAccountDisplayMode = accountDisplayMode ?? internalAccountDisplayMode;
   const setViewMode = useCallback(
     (nextViewMode: QuotaSectionViewMode) => {
       if (onViewModeChange) {
@@ -146,6 +158,21 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
       }
     },
     [onViewModeChange]
+  );
+  const setAccountDisplayMode = useCallback(
+    (nextMode: QuotaAccountDisplayMode) => {
+      if (onAccountDisplayModeChange) {
+        onAccountDisplayModeChange(nextMode);
+      } else {
+        setInternalAccountDisplayMode(nextMode);
+      }
+    },
+    [onAccountDisplayModeChange]
+  );
+  const getAccountDisplayName = useCallback(
+    (file: AuthFileItem) =>
+      resolveQuotaAccountDisplayText(file, resolvedAccountDisplayMode).primary,
+    [resolvedAccountDisplayMode]
   );
 
   const filteredFiles = useMemo(
@@ -295,6 +322,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
     async (file: AuthFileItem) => {
       if (disabled || file.disabled) return;
       if (quota[file.name]?.status === 'loading') return;
+      const displayName = getAccountDisplayName(file);
 
       setQuota((prev) => ({
         ...prev,
@@ -307,7 +335,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
           ...prev,
           [file.name]: config.buildSuccessState(data),
         }));
-        showNotification(t('auth_files.quota_refresh_success', { name: file.name }), 'success');
+        showNotification(t('auth_files.quota_refresh_success', { name: displayName }), 'success');
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : t('common.unknown_error');
         const status = getStatusFromError(err);
@@ -316,12 +344,12 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
           [file.name]: config.buildErrorState(message, status),
         }));
         showNotification(
-          t('auth_files.quota_refresh_failed', { name: file.name, message }),
+          t('auth_files.quota_refresh_failed', { name: displayName, message }),
           'error'
         );
       }
     },
-    [config, disabled, quota, setQuota, showNotification, t]
+    [config, disabled, getAccountDisplayName, quota, setQuota, showNotification, t]
   );
 
   const resetQuotaForFile = useCallback(
@@ -335,11 +363,12 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
       const resetCount =
         (fileQuota as { rateLimitResetCreditsAvailableCount?: number | null } | undefined)
           ?.rateLimitResetCreditsAvailableCount ?? 0;
+      const displayName = getAccountDisplayName(file);
 
       showConfirmation({
         title: t(`${config.i18nPrefix}.reset_confirm_title`),
         message: t(`${config.i18nPrefix}.reset_confirm_message`, {
-          name: file.name,
+          name: displayName,
           count: resetCount,
         }),
         confirmText: t(`${config.i18nPrefix}.reset_button`, { count: resetCount }),
@@ -361,7 +390,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
               [file.name]: config.buildSuccessState(data),
             }));
             showNotification(
-              t(`${config.i18nPrefix}.reset_success`, { name: file.name }),
+              t(`${config.i18nPrefix}.reset_success`, { name: displayName }),
               'success'
             );
           } catch (err: unknown) {
@@ -372,14 +401,14 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
               [file.name]: config.buildErrorState(message, status),
             }));
             showNotification(
-              t(`${config.i18nPrefix}.reset_failed`, { name: file.name, message }),
+              t(`${config.i18nPrefix}.reset_failed`, { name: displayName, message }),
               'error'
             );
           }
         },
       });
     },
-    [config, disabled, quota, setQuota, showConfirmation, showNotification, t]
+    [config, disabled, getAccountDisplayName, quota, setQuota, showConfirmation, showNotification, t]
   );
 
   const titleNode = (
@@ -394,12 +423,41 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
   );
 
   const isRefreshing = sectionLoading || loading;
+  const nextAccountDisplayMode: QuotaAccountDisplayMode =
+    resolvedAccountDisplayMode === 'masked' ? 'full' : 'masked';
+  const AccountDisplayIcon = resolvedAccountDisplayMode === 'masked' ? IconEyeOff : IconEye;
+  const accountDisplayHint = t(
+    resolvedAccountDisplayMode === 'masked'
+      ? 'quota_management.show_full_credentials_hint'
+      : 'quota_management.show_masked_credentials_hint'
+  );
 
   return (
     <Card
       title={titleNode}
       extra={
         <div className={styles.headerActions}>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className={[
+              styles.accountDisplayModeButton,
+              resolvedAccountDisplayMode === 'full' ? styles.accountDisplayModeButtonActive : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            onClick={() => setAccountDisplayMode(nextAccountDisplayMode)}
+            title={accountDisplayHint}
+            aria-label={accountDisplayHint}
+          >
+            <AccountDisplayIcon size={15} aria-hidden="true" />
+            {t(
+              resolvedAccountDisplayMode === 'masked'
+                ? 'quota_management.account_display_masked'
+                : 'quota_management.account_display_full'
+            )}
+          </Button>
           <div className={styles.viewModeToggle}>
             <Button
               variant="secondary"
@@ -486,6 +544,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
                   cardIdleMessageKey={config.cardIdleMessageKey}
                   cardClassName={config.cardClassName}
                   defaultType={config.type}
+                  accountDisplayMode={resolvedAccountDisplayMode}
                   canRefresh={!disabled && !item.disabled}
                   onRefresh={() => void refreshQuotaForFile(item)}
                   canReset={canReset}

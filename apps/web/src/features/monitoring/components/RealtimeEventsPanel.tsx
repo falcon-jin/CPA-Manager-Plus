@@ -1,4 +1,15 @@
-import { useId, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FocusEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
+import { createPortal } from 'react-dom';
 import type { TFunction } from 'i18next';
 import { Button } from '@/components/ui/Button';
 import { IconCopy, IconEye, IconEyeOff, IconFilter } from '@/components/ui/icons';
@@ -67,6 +78,18 @@ export type RealtimeEventsPanelActionsProps = {
 };
 
 const REALTIME_PAGE_SIZE_OPTIONS = [10, 50, 100, 150, 300] as const;
+const FAILURE_TOOLTIP_VIEWPORT_MARGIN = 12;
+const FAILURE_TOOLTIP_OFFSET = 8;
+const FAILURE_TOOLTIP_MAX_WIDTH = 420;
+const FAILURE_TOOLTIP_MAX_HEIGHT = 240;
+const FAILURE_TOOLTIP_CLOSE_DELAY_MS = 120;
+
+type FailureTooltipPlacement = 'above' | 'below';
+
+type FailureTooltipPosition = {
+  placement: FailureTooltipPlacement;
+  style: CSSProperties;
+};
 
 const formatOptionalText = (value: string | null | undefined) => {
   const trimmed = String(value || '').trim();
@@ -92,6 +115,60 @@ const shortLabel = (
 const formatShortHash = (value: string | null | undefined) => {
   const trimmed = formatReadableText(value);
   return trimmed ? `#${trimmed.slice(0, 8)}` : '';
+};
+
+const clampNumber = (value: number, min: number, max: number) =>
+  Math.min(Math.max(value, min), max);
+
+const resolveFailureTooltipPosition = (anchor: HTMLElement): FailureTooltipPosition | null => {
+  if (typeof window === 'undefined') return null;
+
+  const rect = anchor.getBoundingClientRect();
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const maxWidth = Math.max(
+    220,
+    Math.min(
+      FAILURE_TOOLTIP_MAX_WIDTH,
+      Math.max(0, viewportWidth - FAILURE_TOOLTIP_VIEWPORT_MARGIN * 2)
+    )
+  );
+  const left = clampNumber(
+    rect.left,
+    FAILURE_TOOLTIP_VIEWPORT_MARGIN,
+    Math.max(
+      FAILURE_TOOLTIP_VIEWPORT_MARGIN,
+      viewportWidth - maxWidth - FAILURE_TOOLTIP_VIEWPORT_MARGIN
+    )
+  );
+  const spaceBelow =
+    viewportHeight - rect.bottom - FAILURE_TOOLTIP_VIEWPORT_MARGIN - FAILURE_TOOLTIP_OFFSET;
+  const spaceAbove = rect.top - FAILURE_TOOLTIP_VIEWPORT_MARGIN - FAILURE_TOOLTIP_OFFSET;
+  const placement: FailureTooltipPlacement =
+    spaceBelow >= FAILURE_TOOLTIP_MAX_HEIGHT || spaceBelow >= spaceAbove ? 'below' : 'above';
+  const availableHeight = Math.max(0, placement === 'below' ? spaceBelow : spaceAbove);
+  const maxHeight = Math.min(FAILURE_TOOLTIP_MAX_HEIGHT, availableHeight);
+  const baseStyle: CSSProperties = {
+    left,
+    maxHeight,
+    maxWidth,
+  };
+
+  return placement === 'below'
+    ? {
+        placement,
+        style: {
+          ...baseStyle,
+          top: rect.bottom + FAILURE_TOOLTIP_OFFSET,
+        },
+      }
+    : {
+        placement,
+        style: {
+          ...baseStyle,
+          bottom: viewportHeight - rect.top + FAILURE_TOOLTIP_OFFSET,
+        },
+      };
 };
 
 const buildRealtimeApiKeyDisplay = (row: MonitoringEventRow, t: TFunction) => {
@@ -217,12 +294,188 @@ const buildFailureDetails = (row: MonitoringEventRow, t: TFunction) => {
   };
 };
 
+type RealtimeFailureDetails = NonNullable<ReturnType<typeof buildFailureDetails>>;
+
+type RealtimeFailureStatusProps = {
+  details: RealtimeFailureDetails;
+  tooltipId: string;
+  t: TFunction;
+  onCopy: (text: string) => void;
+};
+
+const isNodeInside = (element: HTMLElement | null, target: EventTarget | null) => {
+  if (!element || typeof Node === 'undefined' || !(target instanceof Node)) return false;
+  return element.contains(target);
+};
+
+function RealtimeFailureStatus({ details, tooltipId, t, onCopy }: RealtimeFailureStatusProps) {
+  const triggerRef = useRef<HTMLSpanElement | null>(null);
+  const tooltipRef = useRef<HTMLSpanElement | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const [open, setOpen] = useState(false);
+  const [tooltipPosition, setTooltipPosition] = useState<FailureTooltipPosition | null>(null);
+  const isBrowser = typeof document !== 'undefined';
+
+  const clearCloseTimer = useCallback(() => {
+    if (closeTimerRef.current === null || typeof window === 'undefined') return;
+    window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = null;
+  }, []);
+
+  const updateTooltipPosition = useCallback(() => {
+    if (!triggerRef.current) return;
+    const nextPosition = resolveFailureTooltipPosition(triggerRef.current);
+    if (nextPosition) {
+      setTooltipPosition(nextPosition);
+    }
+  }, []);
+
+  const scheduleTooltipPositionUpdate = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    if (rafRef.current !== null) {
+      window.cancelAnimationFrame(rafRef.current);
+    }
+    rafRef.current = window.requestAnimationFrame(() => {
+      rafRef.current = null;
+      updateTooltipPosition();
+    });
+  }, [updateTooltipPosition]);
+
+  const showTooltip = useCallback(() => {
+    clearCloseTimer();
+    updateTooltipPosition();
+    setOpen(true);
+  }, [clearCloseTimer, updateTooltipPosition]);
+
+  const requestHideTooltip = useCallback(() => {
+    clearCloseTimer();
+    if (typeof window === 'undefined') {
+      setOpen(false);
+      return;
+    }
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      setOpen(false);
+    }, FAILURE_TOOLTIP_CLOSE_DELAY_MS);
+  }, [clearCloseTimer]);
+
+  const handleBlur = useCallback(
+    (event: FocusEvent<HTMLElement>) => {
+      const nextTarget = event.relatedTarget;
+      if (
+        isNodeInside(triggerRef.current, nextTarget) ||
+        isNodeInside(tooltipRef.current, nextTarget)
+      ) {
+        return;
+      }
+      requestHideTooltip();
+    },
+    [requestHideTooltip]
+  );
+
+  const handleKeyDown = useCallback((event: KeyboardEvent<HTMLSpanElement>) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    setOpen(false);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearCloseTimer();
+      if (rafRef.current !== null && typeof window !== 'undefined') {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, [clearCloseTimer]);
+
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') return undefined;
+
+    scheduleTooltipPositionUpdate();
+    window.addEventListener('resize', scheduleTooltipPositionUpdate);
+    window.addEventListener('scroll', scheduleTooltipPositionUpdate, true);
+
+    return () => {
+      window.removeEventListener('resize', scheduleTooltipPositionUpdate);
+      window.removeEventListener('scroll', scheduleTooltipPositionUpdate, true);
+    };
+  }, [open, scheduleTooltipPositionUpdate]);
+
+  const placement = tooltipPosition?.placement ?? 'below';
+  const tooltipClassName = [
+    styles.realtimeFailureTooltip,
+    placement === 'above' ? styles.realtimeFailureTooltipAbove : styles.realtimeFailureTooltipBelow,
+    open ? styles.realtimeFailureTooltipOpen : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const tooltip = (
+    <span
+      id={tooltipId}
+      ref={tooltipRef}
+      role="tooltip"
+      className={tooltipClassName}
+      style={isBrowser ? tooltipPosition?.style : undefined}
+      onMouseEnter={clearCloseTimer}
+      onMouseLeave={requestHideTooltip}
+      onFocus={showTooltip}
+      onBlur={handleBlur}
+    >
+      <button
+        type="button"
+        className={styles.realtimeFailureCopyButton}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onCopy(details.copyText);
+        }}
+        title={t('common.copy')}
+        aria-label={t('common.copy')}
+      >
+        <IconCopy size={13} />
+      </button>
+      {details.statusCode ? (
+        <span className={styles.realtimeFailureTooltipStatus}>{details.statusText}</span>
+      ) : null}
+      {details.summary ? (
+        <span className={styles.realtimeFailureTooltipBody}>{details.summary}</span>
+      ) : null}
+    </span>
+  );
+
+  return (
+    <span
+      ref={triggerRef}
+      className={styles.realtimeFailureStatus}
+      tabIndex={0}
+      aria-describedby={tooltipId}
+      aria-label={details.label}
+      onMouseEnter={showTooltip}
+      onMouseLeave={requestHideTooltip}
+      onFocus={showTooltip}
+      onBlur={handleBlur}
+      onKeyDown={handleKeyDown}
+    >
+      <span className={`${styles.realtimeRequestStatus} ${styles.realtimeRequestStatusBad}`}>
+        {t('monitoring.result_failed')}
+      </span>
+      {!isBrowser ? tooltip : null}
+      {isBrowser && open ? createPortal(tooltip, document.body) : null}
+    </span>
+  );
+}
+
 const buildRealtimeTokenSummary = (row: MonitoringEventRow, t: TFunction) => {
   const parts = [
     `I ${formatCompactNumber(row.inputTokens)}`,
     `O ${formatCompactNumber(row.outputTokens)}`,
-    `C ${formatCompactNumber(row.cachedTokens)}`,
   ];
+  if (row.reasoningTokens > 0) {
+    parts.push(`R ${formatCompactNumber(row.reasoningTokens)}`);
+  }
+  parts.push(`C ${formatCompactNumber(row.cachedTokens)}`);
   if (row.cacheCreationTokens > 0) {
     parts.push(
       `${shortLabel(t, 'monitoring.cache_creation_tokens_short', 'monitoring.cache_creation_tokens', 'Create')} ${formatCompactNumber(row.cacheCreationTokens)}`
@@ -463,10 +716,19 @@ export function RealtimeEventsPanel({
                     </div>
                   </td>
                   <td>
-                    <div className={styles.primaryCell}>
-                      <span className={styles.monoCell}>{row.model}</span>
+                    <div
+                      className={`${styles.primaryCell} ${styles.realtimeModelCell}`}
+                      title={[row.model, showResolvedModel ? row.resolvedModel : '']
+                        .filter(Boolean)
+                        .join('\n')}
+                    >
+                      <span className={`${styles.monoCell} ${styles.realtimeModelText}`}>
+                        {row.model}
+                      </span>
                       {showResolvedModel ? (
-                        <small className={styles.monoCell}>{row.resolvedModel}</small>
+                        <small className={`${styles.monoCell} ${styles.realtimeModelText}`}>
+                          {row.resolvedModel}
+                        </small>
                       ) : null}
                     </div>
                   </td>
@@ -490,47 +752,12 @@ export function RealtimeEventsPanel({
                   <td>
                     <div className={styles.primaryCell}>
                       {failureDetails ? (
-                        <span
-                          className={styles.realtimeFailureStatus}
-                          tabIndex={0}
-                          aria-describedby={failureTooltipId}
-                          aria-label={failureDetails.label}
-                        >
-                          <span
-                            className={`${styles.realtimeRequestStatus} ${styles.realtimeRequestStatusBad}`}
-                          >
-                            {t('monitoring.result_failed')}
-                          </span>
-                          <span
-                            id={failureTooltipId}
-                            role="tooltip"
-                            className={styles.realtimeFailureTooltip}
-                          >
-                            <button
-                              type="button"
-                              className={styles.realtimeFailureCopyButton}
-                              onClick={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                void handleCopyFailureDetails(failureDetails.copyText);
-                              }}
-                              title={t('common.copy')}
-                              aria-label={t('common.copy')}
-                            >
-                              <IconCopy size={13} />
-                            </button>
-                            {failureDetails.statusCode ? (
-                              <span className={styles.realtimeFailureTooltipStatus}>
-                                {failureDetails.statusText}
-                              </span>
-                            ) : null}
-                            {failureDetails.summary ? (
-                              <span className={styles.realtimeFailureTooltipBody}>
-                                {failureDetails.summary}
-                              </span>
-                            ) : null}
-                          </span>
-                        </span>
+                        <RealtimeFailureStatus
+                          details={failureDetails}
+                          tooltipId={failureTooltipId ?? `${tooltipIdPrefix}-failure-tooltip`}
+                          t={t}
+                          onCopy={handleCopyFailureDetails}
+                        />
                       ) : (
                         <span
                           className={[

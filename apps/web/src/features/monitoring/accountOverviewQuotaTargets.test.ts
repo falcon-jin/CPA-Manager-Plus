@@ -137,28 +137,15 @@ describe('accountOverviewQuotaTargets', () => {
               label: 'Antigravity',
             },
             {
-              name: 'gemini-cli.json',
-              type: 'gemini-cli',
-              authIndex: '2',
-              label: 'Gemini CLI',
-            },
-            {
               name: 'kimi.json',
               type: 'kimi',
-              authIndex: '3',
+              authIndex: '2',
               label: 'Kimi',
-            },
-            {
-              name: 'runtime-gemini-cli.json',
-              type: 'gemini-cli',
-              authIndex: '4',
-              runtimeOnly: true,
-              label: 'Runtime Gemini CLI',
             },
             {
               name: 'disabled-claude.json',
               type: 'claude',
-              authIndex: '5',
+              authIndex: '3',
               disabled: true,
               label: 'Disabled Claude',
             },
@@ -173,7 +160,7 @@ describe('accountOverviewQuotaTargets', () => {
         createAccountRow({
           id: 'account@example.com',
           account: 'account@example.com',
-          authIndices: ['1', '2', '3', '4', '5'],
+          authIndices: ['1', '2', '3'],
         }),
       ],
       authStateByRowId
@@ -181,7 +168,6 @@ describe('accountOverviewQuotaTargets', () => {
 
     expect(result.get('account@example.com')).toMatchObject([
       { provider: 'antigravity', fileName: 'antigravity.json' },
-      { provider: 'gemini-cli', fileName: 'gemini-cli.json' },
       { provider: 'kimi', fileName: 'kimi.json' },
     ]);
   });

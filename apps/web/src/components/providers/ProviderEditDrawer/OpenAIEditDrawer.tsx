@@ -16,6 +16,10 @@ import { normalizeAuthIndex } from '@/utils/authIndex';
 import { areKeyValueEntriesEqual, areModelEntriesEqual } from '@/utils/compare';
 import { entriesToModels, modelsToEntries } from '@/components/ui/modelInputListUtils';
 import { buildApiKeyEntry, buildOpenAIChatCompletionsEndpoint } from '@/components/providers/utils';
+import {
+  appendIdleKeyTestStatus,
+  removeKeyTestStatusAtIndex,
+} from '@/features/aiProviders/model/keyTestStatuses';
 import type { ModelInfo } from '@/utils/models';
 import type { OpenAIFormState } from '@/components/providers';
 import styles from '@/features/aiProviders/AiProvidersPage.module.scss';
@@ -689,9 +693,11 @@ export function OpenAIEditDrawer({
     const removeEntry = (idx: number) => {
       const next = list.filter((_, i) => i !== idx);
       setForm((prev) => ({ ...prev, apiKeyEntries: next.length ? next : [buildApiKeyEntry()] }));
+      setKeyTestStatuses((prev) => removeKeyTestStatusAtIndex(prev, idx, list.length));
     };
     const addEntry = () => {
       setForm((prev) => ({ ...prev, apiKeyEntries: [...list, buildApiKeyEntry()] }));
+      setKeyTestStatuses((prev) => appendIdleKeyTestStatus(prev, list.length));
     };
 
     return (

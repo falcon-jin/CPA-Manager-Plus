@@ -93,6 +93,20 @@ export interface AccountProcessingPolicyPatch {
   authIssueAutoDisableEnabled?: boolean;
 }
 
+export interface QuotaCooldownInfo {
+  authFileName: string;
+  authIndex?: string;
+  provider?: string;
+  owner?: string;
+  recoverAtMs: number;
+  disabledAtMs?: number;
+  createdAtMs?: number;
+}
+
+export interface QuotaCooldownsResponse {
+  items: QuotaCooldownInfo[];
+}
+
 export interface UsageServiceSetupRequest {
   cpaBaseUrl: string;
   cpaManagementKey: string;
@@ -1299,6 +1313,22 @@ export const usageServiceApi = {
         }
       );
       return response.data;
+    });
+  },
+
+  getActiveQuotaCooldowns: async (
+    base: string,
+    managementKey?: string
+  ): Promise<QuotaCooldownInfo[]> => {
+    return withUsageServiceError(async () => {
+      const response = await axios.get<QuotaCooldownsResponse>(
+        buildUrl(base, '/usage-service/quota-cooldowns'),
+        {
+          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+        }
+      );
+      return response.data.items ?? [];
     });
   },
 

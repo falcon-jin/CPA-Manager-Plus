@@ -15,6 +15,14 @@ import type {
   MonitoringAnalyticsSummaryComparison,
   MonitoringAnalyticsTimelinePoint,
 } from '@/services/api/usageService';
+import {
+  sanitizeApiKeyDisplayText,
+  type ApiKeyDisplayInfo,
+} from '@/features/monitoring/model/apiKeys';
+import { buildMonitoringSourceDisplay } from '@/features/monitoring/model/sourceDisplay';
+import type { MonitoringAuthMeta, MonitoringChannelMeta } from '@/features/monitoring/model/types';
+import type { CredentialInfo } from '@/types/sourceInfo';
+import { buildSourceInfoMap } from '@/utils/sourceResolver';
 import { formatCompactNumber, formatUsd } from '@/utils/usage';
 
 export type UsageAnalyticsTab =
@@ -381,6 +389,7 @@ export type UsageDrilldownEvent = {
   timestampMs: number;
   model: string;
   apiKeyHash: string;
+  apiKeyLabel: string;
   source: string;
   authIndex: string;
   endpoint: string;
@@ -801,21 +810,15 @@ export const buildUsageTimeline = (
 
 export const buildUsageCredentialTimeline = (
   timeline: MonitoringAnalyticsCredentialTimelinePoint[] = [],
-  granularity: UsageAnalyticsResolvedGranularity
+  granularity: UsageAnalyticsResolvedGranularity,
+  credentialDisplayContext?: UsageCredentialDisplayContext
 ): UsageCredentialTimelinePoint[] =>
   timeline.map((point) => {
     const bucketMs = toNumber(point.bucket_ms);
+    const display = resolveUsageCredentialDisplay(point, credentialDisplayContext);
     return {
       id: point.id || point.auth_file_snapshot || point.auth_index || point.source_hash || '-',
-      label:
-        point.label ||
-        point.auth_label_snapshot ||
-        point.account_snapshot ||
-        point.auth_file_snapshot ||
-        point.source ||
-        point.auth_index ||
-        point.id ||
-        '-',
+      label: display.label,
       bucketMs,
       bucketLabel: point.bucket_label || formatLocalBucketLabel(bucketMs, granularity),
       requestCount: toNumber(point.calls),
@@ -1124,6 +1127,111 @@ export const maskApiKeyHash = (hash: string | null | undefined) => {
   return `sk-****${value.slice(-4)}`;
 };
 
+export type UsageApiKeyDisplayMap = ReadonlyMap<string, ApiKeyDisplayInfo>;
+
+export type UsageCredentialDisplayContext = {
+  authMetaMap: Map<string, MonitoringAuthMeta>;
+  authFileMap: Map<string, CredentialInfo>;
+  sourceInfoMap: ReturnType<typeof buildSourceInfoMap>;
+  channelByAuthIndex: Map<string, MonitoringChannelMeta>;
+};
+
+const normalizeApiKeyHash = (value: string | null | undefined) =>
+  String(value ?? '').trim().toLowerCase();
+
+const isSameApiKeyIdentity = (label: string, hash: string) =>
+  Boolean(label) && Boolean(hash) && label.trim().toLowerCase() === hash;
+
+export const resolveUsageApiKeyLabel = (
+  apiKeyHash: string | null | undefined,
+  apiKeyDisplayMap?: UsageApiKeyDisplayMap,
+  fallbackLabel?: string | null
+) => {
+  const hash = normalizeApiKeyHash(apiKeyHash);
+  const fallback = sanitizeApiKeyDisplayText(String(fallbackLabel ?? ''));
+
+  if (!hash) {
+    return fallback || '-';
+  }
+
+  const display = apiKeyDisplayMap?.get(hash);
+  const displayLabel = sanitizeApiKeyDisplayText(display?.label || display?.masked || '');
+  if (displayLabel && !isSameApiKeyIdentity(displayLabel, hash)) {
+    return displayLabel;
+  }
+
+  if (fallback && !isSameApiKeyIdentity(fallback, hash)) {
+    return fallback;
+  }
+
+  return maskApiKeyHash(hash);
+};
+
+type UsageCredentialDisplayInput = {
+  id?: string;
+  label?: string;
+  auth_file_snapshot?: string;
+  auth_index?: string;
+  source?: string;
+  source_hash?: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
+};
+
+const isReadableCredentialLabel = (value: string | null | undefined) => {
+  const trimmed = String(value ?? '').trim();
+  return Boolean(trimmed) && trimmed !== '-';
+};
+
+const firstReadableCredentialLabel = (...values: Array<string | null | undefined>) =>
+  values.find(isReadableCredentialLabel)?.trim() || '';
+
+const resolveUsageCredentialDisplay = (
+  row: UsageCredentialDisplayInput,
+  context?: UsageCredentialDisplayContext
+) => {
+  const fallbackLabel =
+    firstReadableCredentialLabel(
+      row.label,
+      row.auth_label_snapshot,
+      row.account_snapshot,
+      row.auth_file_snapshot,
+      row.source,
+      row.auth_index,
+      row.id
+    ) || '-';
+
+  if (!context) {
+    return {
+      label: fallbackLabel,
+      account: firstReadableCredentialLabel(row.account_snapshot, row.auth_label_snapshot),
+      provider: row.auth_provider_snapshot,
+    };
+  }
+
+  const display = buildMonitoringSourceDisplay(
+    {
+      source: row.source,
+      sourceHash: row.source_hash,
+      authIndex: row.auth_index,
+      accountSnapshot: row.account_snapshot,
+      authLabelSnapshot: row.auth_label_snapshot,
+      authProviderSnapshot: row.auth_provider_snapshot,
+    },
+    context
+  );
+
+  const label =
+    firstReadableCredentialLabel(display.sourceLabel, display.primary, fallbackLabel) || '-';
+
+  return {
+    label,
+    account: firstReadableCredentialLabel(display.account, row.account_snapshot, label),
+    provider: firstReadableCredentialLabel(display.provider, row.auth_provider_snapshot),
+  };
+};
+
 const buildModelSpendRows = (
   rows:
     | NonNullable<MonitoringAnalyticsApiKeyStatRow['models']>
@@ -1177,7 +1285,8 @@ const buildApiKeyContextRows = (
 export const buildApiKeyRows = (
   rows: MonitoringAnalyticsApiKeyStatRow[] = [],
   summary?: UsageSummaryMetrics,
-  keyword = ''
+  keyword = '',
+  apiKeyDisplayMap?: UsageApiKeyDisplayMap
 ): UsageRankRow[] => {
   const normalizedKeyword = keyword.trim().toLowerCase();
   const totalCost = summary?.estimatedCost ?? rows.reduce((sum, row) => sum + rowTotalCost(row), 0);
@@ -1185,17 +1294,19 @@ export const buildApiKeyRows = (
     summary?.totalTokens ?? rows.reduce((sum, row) => sum + toNumber(row.total_tokens), 0);
   return rows
     .filter((row) => {
+      const hash = normalizeApiKeyHash(row.api_key_hash || row.id || '');
+      const label = resolveUsageApiKeyLabel(hash, apiKeyDisplayMap);
       if (!normalizedKeyword) return true;
-      const haystack = [row.api_key_hash, row.account_snapshot, row.auth_label_snapshot]
+      const haystack = [hash, label, row.account_snapshot, row.auth_label_snapshot]
         .join(' ')
         .toLowerCase();
       return haystack.includes(normalizedKeyword);
     })
     .map((row) => {
-      const hash = row.api_key_hash || row.id || '';
+      const hash = normalizeApiKeyHash(row.api_key_hash || row.id || '');
       return {
         id: hash || row.id || '-',
-        label: maskApiKeyHash(hash),
+        label: resolveUsageApiKeyLabel(hash, apiKeyDisplayMap),
         apiKeyHash: hash,
         provider: row.auth_provider_snapshot,
         authIndex: row.auth_indices?.[0],
@@ -1235,30 +1346,25 @@ export const buildApiKeyRows = (
 
 export const buildCredentialRows = (
   rows: MonitoringAnalyticsCredentialStatRow[] = [],
-  summary?: UsageSummaryMetrics
+  summary?: UsageSummaryMetrics,
+  credentialDisplayContext?: UsageCredentialDisplayContext
 ): UsageRankRow[] => {
   const totalCost = summary?.estimatedCost ?? rows.reduce((sum, row) => sum + rowTotalCost(row), 0);
   const totalTokens =
     summary?.totalTokens ?? rows.reduce((sum, row) => sum + toNumber(row.total_tokens), 0);
   return rows
     .map((row) => {
-      const label =
-        row.auth_label_snapshot ||
-        row.account_snapshot ||
-        row.auth_file_snapshot ||
-        row.source ||
-        row.auth_index ||
-        row.id ||
-        '-';
+      const display = resolveUsageCredentialDisplay(row, credentialDisplayContext);
+      const label = display.label;
       return {
         id: row.id || label,
         label,
-        provider: row.auth_provider_snapshot,
+        provider: display.provider || row.auth_provider_snapshot,
         authFile: row.auth_file_snapshot,
         authIndex: row.auth_index,
         source: row.source,
         sourceHash: row.source_hash,
-        account: row.account_snapshot || row.auth_label_snapshot,
+        account: display.account || row.account_snapshot || row.auth_label_snapshot,
         projectId: row.auth_project_id_snapshot,
         requestCount: toNumber(row.calls),
         successCount: toNumber(row.success_calls),
@@ -1519,7 +1625,11 @@ export const buildUsageMatrix = ({
   const cells = buildMatrixCellsFromEntityRows(
     sourceRows,
     (row) => {
-      if (dimension === 'apiKeyModel') return maskApiKeyHash(row.apiKeyHash || row.id);
+      if (dimension === 'apiKeyModel') {
+        return normalizeMatrixLabel(
+          resolveUsageApiKeyLabel(row.apiKeyHash || row.id, undefined, row.label)
+        );
+      }
       if (dimension === 'authFileModel') return normalizeMatrixLabel(row.authFile || row.label);
       return normalizeProviderLabel(row.provider);
     },
@@ -1839,22 +1949,29 @@ export const buildUsageInsights = ({
 };
 
 const buildUsageHeatmapContributors = (
-  contributors: MonitoringAnalyticsHeatmapContributor[] = []
+  contributors: MonitoringAnalyticsHeatmapContributor[] = [],
+  apiKeyDisplayMap?: UsageApiKeyDisplayMap
 ): UsageHeatmapContributor[] =>
-  contributors.map((contributor) => ({
-    key: contributor.key || '',
-    label: contributor.label || contributor.key || '',
-    requestCount: toNumber(contributor.calls),
-    successCount: toNumber(contributor.success),
-    failureCount: toNumber(contributor.failure),
-    totalTokens: toNumber(contributor.tokens),
-    estimatedCost: toNumber(contributor.cost),
-    failureRate: toNumber(contributor.failure_rate),
-    share: toNumber(contributor.share),
-  }));
+  contributors.map((contributor) => {
+    const key = normalizeApiKeyHash(contributor.key || contributor.label || '');
+    return {
+      key: contributor.key || key,
+      label: apiKeyDisplayMap
+        ? resolveUsageApiKeyLabel(key, apiKeyDisplayMap, contributor.label)
+        : contributor.label || contributor.key || '',
+      requestCount: toNumber(contributor.calls),
+      successCount: toNumber(contributor.success),
+      failureCount: toNumber(contributor.failure),
+      totalTokens: toNumber(contributor.tokens),
+      estimatedCost: toNumber(contributor.cost),
+      failureRate: toNumber(contributor.failure_rate),
+      share: toNumber(contributor.share),
+    };
+  });
 
 export const buildUsageHeatmap = (
-  points: MonitoringAnalyticsHeatmapPoint[] = []
+  points: MonitoringAnalyticsHeatmapPoint[] = [],
+  apiKeyDisplayMap?: UsageApiKeyDisplayMap
 ): UsageHeatmapPoint[] =>
   points.map((point) => ({
     weekday: toNumber(point.weekday),
@@ -1866,7 +1983,10 @@ export const buildUsageHeatmap = (
     estimatedCost: toNumber(point.cost),
     failureRate: toNumber(point.failure_rate),
     modelContributors: buildUsageHeatmapContributors(point.model_contributors),
-    apiKeyContributors: buildUsageHeatmapContributors(point.api_key_contributors),
+    apiKeyContributors: buildUsageHeatmapContributors(
+      point.api_key_contributors,
+      apiKeyDisplayMap
+    ),
     providerContributors: buildUsageHeatmapContributors(point.provider_contributors),
   }));
 
@@ -2017,7 +2137,8 @@ export const summarizeAnomalies = (
 
 export const buildDrilldownPreview = (
   rows: MonitoringAnalyticsEventRow[] = [],
-  modelRows: UsageRankRow[] = []
+  modelRows: UsageRankRow[] = [],
+  apiKeyDisplayMap?: UsageApiKeyDisplayMap
 ): UsageDrilldownEvent[] => {
   const modelCostPerToken = new Map(
     modelRows.map((row) => [
@@ -2034,7 +2155,8 @@ export const buildDrilldownPreview = (
       eventHash: row.event_hash,
       timestampMs: toNumber(row.timestamp_ms),
       model,
-      apiKeyHash: row.api_key_hash || '',
+      apiKeyHash: normalizeApiKeyHash(row.api_key_hash || ''),
+      apiKeyLabel: resolveUsageApiKeyLabel(row.api_key_hash || '', apiKeyDisplayMap),
       source: row.source || '',
       authIndex: row.auth_index || '',
       endpoint: row.endpoint || row.path || '',
@@ -2052,17 +2174,24 @@ export const buildDrilldownPreview = (
 export const adaptUsageAnalyticsData = (
   data: MonitoringAnalyticsResponse | null | undefined,
   granularity: UsageAnalyticsResolvedGranularity,
-  keyword = ''
+  keyword = '',
+  apiKeyDisplayMap?: UsageApiKeyDisplayMap,
+  credentialDisplayContext?: UsageCredentialDisplayContext
 ) => {
   const summary = buildUsageSummary(data?.summary);
   const timeline = buildUsageTimeline(data?.timeline ?? [], granularity);
   const credentialTimeline = buildUsageCredentialTimeline(
     data?.credential_timeline ?? [],
-    granularity
+    granularity,
+    credentialDisplayContext
   );
   const modelRows = buildModelRows(data?.model_stats ?? [], summary);
-  const apiKeyRows = buildApiKeyRows(data?.api_key_stats ?? [], summary, keyword);
-  const credentialRows = buildCredentialRows(data?.credential_stats ?? [], summary);
+  const apiKeyRows = buildApiKeyRows(data?.api_key_stats ?? [], summary, keyword, apiKeyDisplayMap);
+  const credentialRows = buildCredentialRows(
+    data?.credential_stats ?? [],
+    summary,
+    credentialDisplayContext
+  );
   const providerRows = buildProviderRows(
     data?.channel_share ?? [],
     apiKeyRows,
@@ -2078,9 +2207,13 @@ export const adaptUsageAnalyticsData = (
     apiKeyRows,
     credentialRows,
     providerRows,
-    heatmap: buildUsageHeatmap(data?.heatmap ?? []),
+    heatmap: buildUsageHeatmap(data?.heatmap ?? [], apiKeyDisplayMap),
     anomalyPoints: buildServerAnomalyPoints(data?.anomaly_points ?? []),
-    drilldownPreview: buildDrilldownPreview(data?.drilldown_preview?.items ?? [], modelRows),
+    drilldownPreview: buildDrilldownPreview(
+      data?.drilldown_preview?.items ?? [],
+      modelRows,
+      apiKeyDisplayMap
+    ),
     filterOptions: data?.filter_options,
   };
 };

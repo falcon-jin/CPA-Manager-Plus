@@ -1,10 +1,9 @@
 import type { TFunction } from 'i18next';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  fetchAntigravityQuota,
   fetchClaudeQuota,
   fetchCodexQuota,
-  fetchGeminiCliCodeAssist,
-  fetchGeminiCliQuotaBuckets,
   fetchXaiQuota,
 } from '@/utils/quota';
 import type { MonitoringAccountQuotaTarget } from '@/features/monitoring/accountOverviewQuotaTargets';
@@ -30,8 +29,6 @@ vi.mock('@/utils/quota', async (importOriginal) => {
     fetchAntigravityQuota: vi.fn(),
     fetchClaudeQuota: vi.fn(),
     fetchCodexQuota: vi.fn(),
-    fetchGeminiCliCodeAssist: vi.fn(),
-    fetchGeminiCliQuotaBuckets: vi.fn(),
     fetchKimiQuota: vi.fn(),
     fetchXaiQuota: vi.fn(),
   };
@@ -52,19 +49,13 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'codex_quota.plan_free': 'Free',
     'codex_quota.monthly_window': 'Monthly limit',
     'codex_quota.window_usage_duration': '{{used}} / {{total}} used',
-    'gemini_cli_quota.title': 'Gemini CLI Quota',
-    'gemini_cli_quota.tier_label': 'Tier',
-    'gemini_cli_quota.credit_label': 'Google One AI Credits',
-    'gemini_cli_quota.credit_amount': '{{count}} credits',
-    'gemini_cli_quota.empty_buckets': 'No Gemini quota data',
-    'gemini_cli_quota.remaining_amount': 'Remaining {{count}}',
     'kimi_quota.title': 'Kimi Quota',
     'kimi_quota.empty_data': 'No Kimi quota data',
     'xai_quota.title': 'xAI Quota',
     'xai_quota.empty_data': 'No xAI quota data',
     'xai_quota.monthly_limit': 'Monthly billing limit',
     'xai_quota.on_demand_cap': 'On-demand cap',
-    'xai_quota.usage_amount': '{{used}} / {{limit}}',
+    'xai_quota.usage_amount': '{{remaining}} / {{limit}} remaining',
   };
   let value = copy[key] ?? key;
   Object.entries(options ?? {}).forEach(([name, replacement]) => {
@@ -211,10 +202,9 @@ describe('monitoringCenterPageModel filter options', () => {
 
 describe('monitoringCenterPageModel account quota', () => {
   beforeEach(() => {
+    vi.mocked(fetchAntigravityQuota).mockReset();
     vi.mocked(fetchClaudeQuota).mockReset();
     vi.mocked(fetchCodexQuota).mockReset();
-    vi.mocked(fetchGeminiCliCodeAssist).mockReset();
-    vi.mocked(fetchGeminiCliQuotaBuckets).mockReset();
     vi.mocked(fetchXaiQuota).mockReset();
   });
 
@@ -298,51 +288,52 @@ describe('monitoringCenterPageModel account quota', () => {
     });
   });
 
-  it('maps Gemini CLI buckets and supplementary tier metadata', async () => {
-    vi.mocked(fetchGeminiCliQuotaBuckets).mockResolvedValue({
-      authIndex: '2',
-      projectId: 'project-1',
-      buckets: [
+  it('maps Antigravity grouped buckets into account quota entries', async () => {
+    vi.mocked(fetchAntigravityQuota).mockResolvedValue({
+      serverTimeOffsetMs: null,
+      groups: [
         {
-          id: 'gemini-pro-series',
-          label: 'Gemini Pro Series',
-          remainingFraction: 0.25,
-          remainingAmount: 12,
-          resetTime: undefined,
-          tokenType: 'tokens',
+          id: 'agent',
+          label: 'Agent',
+          buckets: [
+            {
+              id: 'daily',
+              label: 'Daily',
+              window: '24h',
+              remainingFraction: 0.25,
+              resetTime: undefined,
+            },
+            {
+              id: 'weekly',
+              label: 'Weekly',
+              window: '7d',
+              remainingFraction: 0.5,
+              resetTime: undefined,
+            },
+          ],
         },
       ],
-    });
-    vi.mocked(fetchGeminiCliCodeAssist).mockResolvedValue({
-      tierLabel: 'Ultra',
-      tierId: 'g1-ultra-tier',
-      creditBalance: 7,
     });
 
     const entry = await requestAccountQuota(
       createTarget({
-        provider: 'gemini-cli',
+        provider: 'antigravity',
         authIndex: '2',
-        fileName: 'gemini-cli.json',
+        fileName: 'antigravity.json',
       }),
       t
     );
 
-    expect(entry.metaLabels).toEqual([
-      'Gemini CLI Quota',
-      'Tier: Ultra',
-      'Google One AI Credits: 7 credits',
-    ]);
+    expect(entry.metaLabels).toEqual(['Antigravity Quota']);
     expect(entry.windows).toMatchObject([
       {
-        id: 'gemini-pro-series',
-        label: 'Gemini Pro Series',
+        id: 'agent',
+        label: 'Agent',
         remainingPercent: 25,
         resetLabel: '-',
-        usageLabel: 'Remaining 12 · tokens',
+        usageLabel: null,
       },
     ]);
-    expect(fetchGeminiCliCodeAssist).toHaveBeenCalledWith('2', 'project-1', t);
   });
 
   it('maps xAI billing into account quota entries', async () => {
@@ -373,7 +364,7 @@ describe('monitoringCenterPageModel account quota', () => {
           id: 'monthly-limit',
           label: 'Monthly billing limit',
           remainingPercent: 75,
-          usageLabel: '$25.00 / $100.00',
+          usageLabel: '$75.00 / $100.00 remaining',
         },
       ],
     });

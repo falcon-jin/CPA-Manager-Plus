@@ -4,7 +4,6 @@ import type {
   AuthFileItem,
   ClaudeQuotaWindow,
   CodexQuotaWindow,
-  GeminiCliQuotaBucketState,
   KimiQuotaRow,
   XaiBillingSummary,
 } from '@/types';
@@ -38,8 +37,6 @@ import {
   fetchAntigravityQuota,
   fetchClaudeQuota,
   fetchCodexQuota,
-  fetchGeminiCliCodeAssist,
-  fetchGeminiCliQuotaBuckets,
   fetchKimiQuota,
   fetchXaiQuota,
   formatKimiResetHint,
@@ -784,38 +781,31 @@ const buildClaudeAccountQuotaWindows = (
 const buildAntigravityAccountQuotaWindows = (
   groups: AntigravityQuotaGroup[]
 ): AccountQuotaWindow[] =>
-  groups.map((group) => ({
-    id: group.id,
-    label: group.label,
-    remainingPercent: clampRemainingPercent(group.remainingFraction * 100),
-    resetLabel: formatQuotaResetTime(group.resetTime),
-    usageLabel: null,
-  }));
+  groups
+    .map((group): AccountQuotaWindow | null => {
+      if (group.buckets.length === 0) return null;
+      const remainingFraction = Math.min(
+        ...group.buckets.map((bucket) => bucket.remainingFraction)
+      );
+      const resetTime = group.buckets.reduce<string | undefined>((current, bucket) => {
+        if (!current) return bucket.resetTime;
+        if (!bucket.resetTime) return current;
+        const currentTime = new Date(current).getTime();
+        const nextTime = new Date(bucket.resetTime).getTime();
+        if (Number.isNaN(currentTime)) return bucket.resetTime;
+        if (Number.isNaN(nextTime)) return current;
+        return currentTime <= nextTime ? current : bucket.resetTime;
+      }, undefined);
 
-const buildGeminiCliAccountQuotaWindows = (
-  buckets: GeminiCliQuotaBucketState[],
-  t: TFunction
-): AccountQuotaWindow[] =>
-  buckets.map((bucket) => {
-    const remainingPercent =
-      bucket.remainingFraction === null
-        ? null
-        : clampRemainingPercent(bucket.remainingFraction * 100);
-    const usageLabelParts = [
-      bucket.remainingAmount === null || bucket.remainingAmount === undefined
-        ? ''
-        : t('gemini_cli_quota.remaining_amount', { count: bucket.remainingAmount }),
-      bucket.tokenType ?? '',
-    ].filter(Boolean);
-
-    return {
-      id: bucket.id,
-      label: bucket.label,
-      remainingPercent,
-      resetLabel: formatQuotaResetTime(bucket.resetTime),
-      usageLabel: usageLabelParts.length > 0 ? usageLabelParts.join(' · ') : null,
-    };
-  });
+      return {
+        id: group.id,
+        label: group.label,
+        remainingPercent: clampRemainingPercent(remainingFraction * 100),
+        resetLabel: formatQuotaResetTime(resetTime),
+        usageLabel: null,
+      };
+    })
+    .filter((window): window is AccountQuotaWindow => window !== null);
 
 const buildKimiAccountQuotaWindows = (rows: KimiQuotaRow[], t: TFunction): AccountQuotaWindow[] =>
   rows.map((row) => {
@@ -849,18 +839,25 @@ const formatXaiCurrency = (value: number | null): string => {
 const buildXaiAccountQuotaWindows = (
   billing: XaiBillingSummary,
   t: TFunction
-): AccountQuotaWindow[] => [
-  {
-    id: 'monthly-limit',
-    label: t('xai_quota.monthly_limit'),
-    remainingPercent: buildRemainingFromUsedPercent(billing.usedPercent),
-    resetLabel: billing.billingPeriodEnd ? formatQuotaResetTime(billing.billingPeriodEnd) : '-',
-    usageLabel: t('xai_quota.usage_amount', {
-      used: formatXaiCurrency(billing.usedCents),
-      limit: formatXaiCurrency(billing.monthlyLimitCents),
-    }),
-  },
-];
+): AccountQuotaWindow[] => {
+  const remainingCents =
+    billing.monthlyLimitCents !== null && billing.usedCents !== null
+      ? Math.max(0, billing.monthlyLimitCents - billing.usedCents)
+      : null;
+
+  return [
+    {
+      id: 'monthly-limit',
+      label: t('xai_quota.monthly_limit'),
+      remainingPercent: buildRemainingFromUsedPercent(billing.usedPercent),
+      resetLabel: billing.billingPeriodEnd ? formatQuotaResetTime(billing.billingPeriodEnd) : '-',
+      usageLabel: t('xai_quota.usage_amount', {
+        remaining: formatXaiCurrency(remainingCents),
+        limit: formatXaiCurrency(billing.monthlyLimitCents),
+      }),
+    },
+  ];
+};
 
 export const getAccountQuotaProviderLabel = (
   provider: MonitoringAccountQuotaProvider,
@@ -871,8 +868,6 @@ export const getAccountQuotaProviderLabel = (
       return t('antigravity_quota.title');
     case 'claude':
       return t('claude_quota.title');
-    case 'gemini-cli':
-      return t('gemini_cli_quota.title');
     case 'kimi':
       return t('kimi_quota.title');
     case 'xai':
@@ -889,8 +884,6 @@ const getAccountQuotaEmptyMessage = (provider: MonitoringAccountQuotaProvider, t
       return t('antigravity_quota.empty_models');
     case 'claude':
       return t('claude_quota.empty_windows');
-    case 'gemini-cli':
-      return t('gemini_cli_quota.empty_buckets');
     case 'kimi':
       return t('kimi_quota.empty_data');
     case 'xai':
@@ -935,7 +928,7 @@ export const requestAccountQuota = async (
 ): Promise<AccountQuotaEntry> => {
   switch (target.provider) {
     case 'antigravity': {
-      const groups = await fetchAntigravityQuota(target.file, t);
+      const { groups } = await fetchAntigravityQuota(target.file, t);
       return {
         ...buildBaseAccountQuotaEntry(target, t),
         windows: buildAntigravityAccountQuotaWindows(groups),
@@ -956,24 +949,6 @@ export const requestAccountQuota = async (
         ...buildBaseAccountQuotaEntry(target, t, metaLabels),
         planType: quota.planType ?? target.planType,
         windows: buildClaudeAccountQuotaWindows(quota.windows, t),
-      };
-    }
-    case 'gemini-cli': {
-      const quota = await fetchGeminiCliQuotaBuckets(target.file, t);
-      const supplementary = await fetchGeminiCliCodeAssist(quota.authIndex, quota.projectId, t);
-      const metaLabels = [
-        supplementary.tierLabel
-          ? `${t('gemini_cli_quota.tier_label')}: ${supplementary.tierLabel}`
-          : '',
-        supplementary.creditBalance !== null
-          ? `${t('gemini_cli_quota.credit_label')}: ${t('gemini_cli_quota.credit_amount', {
-              count: supplementary.creditBalance,
-            })}`
-          : '',
-      ].filter(Boolean);
-      return {
-        ...buildBaseAccountQuotaEntry(target, t, metaLabels),
-        windows: buildGeminiCliAccountQuotaWindows(quota.buckets, t),
       };
     }
     case 'kimi': {

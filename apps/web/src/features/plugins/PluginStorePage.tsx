@@ -33,6 +33,7 @@ import {
   PLUGIN_RESOURCES_SETTLE_REFRESH_DELAY_MS,
   resolvePluginAssetURL,
 } from './pluginResources';
+import { waitForPluginStoreState } from './pluginPolling';
 import { PluginInstallGateModal } from './components/PluginInstallGateModal';
 import styles from './PluginStorePage.module.scss';
 
@@ -286,7 +287,16 @@ export function PluginStorePage({
           showNotification(t('plugin_store.restart_required_notice'), 'warning');
         }
         clearConfigCache();
-        await loadStore();
+        if (result.restartRequired) {
+          await loadStore();
+        } else {
+          const waitResult = await waitForPluginStoreState(
+            entry.id,
+            entry.sourceId,
+            (plugin) => plugin.installed && !plugin.updateAvailable
+          );
+          setData(waitResult.response);
+        }
         notifyPluginResourcesChanged();
         if (!result.restartRequired) {
           notifyPluginResourcesChanged({

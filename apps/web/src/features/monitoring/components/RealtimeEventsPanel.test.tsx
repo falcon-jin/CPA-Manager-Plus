@@ -3,6 +3,7 @@ import type { TFunction } from 'i18next';
 import { describe, expect, it, vi } from 'vitest';
 import type { AccountDisplayMode } from '@/features/monitoring/accountOverviewState';
 import type { MonitoringEventRow } from '@/features/monitoring/hooks/useMonitoringData';
+import styles from '../MonitoringCenterPage.module.scss';
 import { RealtimeEventsPanel } from './RealtimeEventsPanel';
 
 const t = ((key: string, options?: Record<string, unknown>) => {
@@ -202,8 +203,10 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toContain('Elapsed');
     expect(markup).toContain('1.5 s');
     expect(markup).toContain('20');
-    expect(markup).toContain('I 10 · O 20 · C 5 · Create 1 · Read 4');
+    expect(markup).toContain('I 10 · O 20 · R 3 · C 5 · Create 1 · Read 4');
     expect(markup).toContain('role="tooltip"');
+    expect(markup).toContain(styles.realtimeFailureTooltip);
+    expect(markup).toContain(styles.realtimeFailureTooltipBelow);
     expect(markup).toContain('aria-describedby=');
     expect(markup).toContain('aria-label="HTTP 429 · rate limit exceeded"');
     expect(markup).toContain('aria-label="Copy"');
@@ -212,7 +215,7 @@ describe('RealtimeEventsPanel', () => {
   });
 
   it('renders safe defaults when optional usage fields are missing', () => {
-    const markup = renderPanel(baseRow());
+    const markup = renderPanel(baseRow({ reasoningTokens: 0 }));
 
     expect(markup).toContain('<colgroup>');
     expect(markup.match(/<col\b/g)).toHaveLength(12);
@@ -224,6 +227,7 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toContain(expectedDate);
     expect(markup).toContain(expectedTime);
     expect(markup).toContain('I 10 · O 20 · C 5');
+    expect(markup).not.toContain('R 0');
     expect(markup).not.toContain('Read 0');
     expect(markup).not.toContain('Create 0');
     expect(markup).not.toContain('role="tooltip"');
@@ -248,6 +252,17 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toContain('Masked key: sk-...cdef');
     expect(markup).toContain('Executor: codex');
     expect(markup).not.toContain('>Executor: codex<');
+  });
+
+  it('keeps long realtime model names constrained with a full title', () => {
+    const longModel =
+      'claude-opus-4-6-thinking-with-a-very-long-provider-routing-suffix-for-realtime-monitoring';
+    const markup = renderPanel(baseRow({ model: longModel, resolvedModel: longModel }));
+
+    expect(markup).toContain(`title="${longModel}"`);
+    expect(markup).toContain(longModel);
+    expect(markup).toMatch(/class="[^"]*realtimeModelCell[^"]*"/);
+    expect(markup).toMatch(/class="[^"]*realtimeModelText[^"]*"/);
   });
 
   it('switches realtime source labels between masked and full display', () => {

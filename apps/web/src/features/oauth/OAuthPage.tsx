@@ -19,7 +19,6 @@ import styles from './OAuthPage.module.scss';
 import iconCodex from '@/assets/icons/codex.svg';
 import iconClaude from '@/assets/icons/claude.svg';
 import iconAntigravity from '@/assets/icons/antigravity.svg';
-import iconGemini from '@/assets/icons/gemini.svg';
 import iconKimiLight from '@/assets/icons/kimi-light.svg';
 import iconKimiDark from '@/assets/icons/kimi-dark.svg';
 import iconVertex from '@/assets/icons/vertex.svg';
@@ -32,8 +31,6 @@ interface ProviderState {
   status?: 'idle' | 'waiting' | 'success' | 'error';
   error?: string;
   polling?: boolean;
-  projectId?: string;
-  projectIdError?: string;
   callbackUrl?: string;
   callbackSubmitting?: boolean;
   callbackStatus?: 'success' | 'error';
@@ -112,13 +109,6 @@ const BUILT_IN_PROVIDERS: BuiltInProviderDefinition[] = [
     icon: iconAntigravity,
   },
   {
-    id: 'gemini-cli',
-    titleKey: 'auth_login.gemini_cli_oauth_title',
-    hintKey: 'auth_login.gemini_cli_oauth_hint',
-    urlLabelKey: 'auth_login.gemini_cli_oauth_url_label',
-    icon: iconGemini,
-  },
-  {
     id: 'kimi',
     titleKey: 'auth_login.kimi_oauth_title',
     hintKey: 'auth_login.kimi_oauth_hint',
@@ -140,7 +130,6 @@ const CALLBACK_SUPPORTED = new Set<string>([
   'codex',
   'anthropic',
   'antigravity',
-  'gemini-cli',
   'xai',
 ]);
 const XAI_CALLBACK_URL = 'http://127.0.0.1:56121/callback';
@@ -360,14 +349,9 @@ export function OAuthPage() {
   const resetProviderAttempt = (provider: OAuthProvider) => {
     clearProviderTimers(provider);
     setStates((prev) => {
-      const current = prev[provider] ?? {};
-      const next: ProviderState = {};
-      if (provider === 'gemini-cli' && current.projectId !== undefined) {
-        next.projectId = current.projectId;
-      }
       return {
         ...prev,
-        [provider]: next,
+        [provider]: {},
       };
     });
   };
@@ -423,17 +407,6 @@ export function OAuthPage() {
 
   const startAuth = async (provider: OAuthProvider) => {
     clearProviderTimers(provider);
-    const geminiState = provider === 'gemini-cli' ? states[provider] : undefined;
-    const rawProjectId = provider === 'gemini-cli' ? (geminiState?.projectId || '').trim() : '';
-    const projectId = rawProjectId
-      ? rawProjectId.toUpperCase() === 'ALL'
-        ? 'ALL'
-        : rawProjectId
-      : undefined;
-    // 项目 ID 可选：留空自动选择第一个可用项目；输入 ALL 获取全部项目
-    if (provider === 'gemini-cli') {
-      updateProviderState(provider, { projectIdError: undefined });
-    }
     updateProviderState(provider, {
       url: undefined,
       state: undefined,
@@ -445,10 +418,7 @@ export function OAuthPage() {
       callbackUrl: '',
     });
     try {
-      const res = await oauthApi.startAuth(
-        provider,
-        provider === 'gemini-cli' ? { projectId: projectId || undefined } : undefined
-      );
+      const res = await oauthApi.startAuth(provider);
       if (!res.state) {
         const message = t('auth_login.missing_state');
         updateProviderState(provider, {
@@ -642,24 +612,6 @@ export function OAuthPage() {
               >
                 <div className={styles.cardContent}>
                   <div className={styles.cardHint}>{provider.hint}</div>
-                  {provider.id === 'gemini-cli' && (
-                    <div className={styles.geminiProjectField}>
-                      <Input
-                        label={t('auth_login.gemini_cli_project_id_label')}
-                        hint={t('auth_login.gemini_cli_project_id_hint')}
-                        value={state.projectId || ''}
-                        error={state.projectIdError}
-                        disabled={Boolean(state.polling)}
-                        onChange={(e) =>
-                          updateProviderState(provider.id, {
-                            projectId: e.target.value,
-                            projectIdError: undefined,
-                          })
-                        }
-                        placeholder={t('auth_login.gemini_cli_project_id_placeholder')}
-                      />
-                    </div>
-                  )}
                   {state.url && (
                     <div className={styles.authUrlBox}>
                       <div className={styles.authUrlLabel}>{provider.urlLabel}</div>

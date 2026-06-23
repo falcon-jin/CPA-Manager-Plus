@@ -20,7 +20,6 @@ type AuthFileModelItem = { id: string; display_name?: string; type?: string; own
 type LocationState = { fromAuthFiles?: boolean } | null;
 
 const OAUTH_PROVIDER_PRESETS = [
-  'gemini-cli',
   'vertex',
   'aistudio',
   'antigravity',

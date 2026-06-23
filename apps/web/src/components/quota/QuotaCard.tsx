@@ -6,8 +6,13 @@ import { useTranslation } from 'react-i18next';
 import type { ReactElement, ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import { Button } from '@/components/ui/Button';
+import {
+  DEFAULT_QUOTA_ACCOUNT_DISPLAY_MODE,
+  type QuotaAccountDisplayMode,
+} from '@/features/quota/quotaPageUiState';
 import type { AuthFileItem, ResolvedTheme, ThemeColors } from '@/types';
 import { TYPE_COLORS } from '@/utils/quota';
+import { resolveQuotaAccountDisplayText } from './quotaDisplay';
 import styles from '@/features/quota/QuotaPage.module.scss';
 
 type QuotaStatus = 'idle' | 'loading' | 'success' | 'error';
@@ -64,6 +69,7 @@ interface QuotaCardProps<TState extends QuotaStatusState> {
   cardIdleMessageKey?: string;
   cardClassName: string;
   defaultType: string;
+  accountDisplayMode?: QuotaAccountDisplayMode;
   canRefresh?: boolean;
   onRefresh?: () => void;
   canReset?: boolean;
@@ -82,6 +88,7 @@ export function QuotaCard<TState extends QuotaStatusState>({
   cardIdleMessageKey,
   cardClassName,
   defaultType,
+  accountDisplayMode = DEFAULT_QUOTA_ACCOUNT_DISPLAY_MODE,
   canRefresh = false,
   onRefresh,
   canReset = false,
@@ -110,6 +117,7 @@ export function QuotaCard<TState extends QuotaStatusState>({
   const idleMessageKey = onRefresh
     ? `${i18nPrefix}.idle`
     : (cardIdleMessageKey ?? `${i18nPrefix}.idle`);
+  const accountDisplay = resolveQuotaAccountDisplayText(item, accountDisplayMode);
 
   const getTypeLabel = (type: string): string => {
     const key = `auth_files.filter_${type}`;
@@ -174,7 +182,9 @@ export function QuotaCard<TState extends QuotaStatusState>({
         >
           {getTypeLabel(displayType)}
         </span>
-        <span className={styles.fileName}>{item.name}</span>
+        <span className={styles.fileName} title={accountDisplay.title}>
+          {accountDisplay.primary}
+        </span>
       </div>
 
       <div className={styles.quotaSection}>

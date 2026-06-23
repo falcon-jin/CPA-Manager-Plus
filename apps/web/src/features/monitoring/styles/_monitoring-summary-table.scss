@@ -1101,16 +1101,6 @@
     outline: none;
   }
 
-  .realtimeFailureStatus::after {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 100%;
-    z-index: 19;
-    width: min(420px, calc(100vw - 48px));
-    height: 10px;
-  }
-
   .realtimeFailureStatus:focus-visible .realtimeRequestStatus {
     text-decoration: underline;
     text-underline-offset: 3px;
@@ -1145,10 +1135,18 @@
   }
 
   .realtimeFailureTooltip {
-    position: absolute;
-    left: 0;
-    top: calc(100% + 4px);
-    z-index: 20;
+    --monitor-surface: var(--bg-primary);
+    --monitor-surface-elevated: color-mix(in srgb, var(--bg-primary) 82%, var(--surface-subtle));
+    --monitor-surface-hover: color-mix(in srgb, var(--surface-subtle-hover) 74%, var(--bg-primary));
+    --monitor-ink: var(--text-primary);
+    --monitor-muted: var(--text-secondary);
+    --monitor-line: var(--border-color);
+    --monitor-accent: var(--primary-color);
+    --monitor-accent-strong: var(--primary-active);
+    --monitor-red: var(--error-color);
+
+    position: fixed;
+    z-index: 2030;
     display: grid;
     gap: 8px;
     width: max-content;
@@ -1171,6 +1169,7 @@
     transition:
       opacity 0.12s ease,
       transform 0.12s ease;
+    visibility: hidden;
     white-space: normal;
     user-select: text;
   }
@@ -1182,18 +1181,29 @@
     top: -5px;
     width: 8px;
     height: 8px;
-    border-left: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
-    border-top: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
     background: var(--monitor-surface-elevated);
     transform: rotate(45deg);
   }
 
-  .realtimeFailureStatus:hover .realtimeFailureTooltip,
-  .realtimeFailureStatus:focus-visible .realtimeFailureTooltip,
-  .realtimeFailureStatus:focus-within .realtimeFailureTooltip {
+  .realtimeFailureTooltipBelow::before {
+    top: -5px;
+    bottom: auto;
+    border-left: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
+    border-top: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
+  }
+
+  .realtimeFailureTooltipAbove::before {
+    top: auto;
+    bottom: -5px;
+    border-right: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
+    border-bottom: 1px solid color-mix(in srgb, var(--monitor-red) 26%, var(--monitor-line));
+  }
+
+  .realtimeFailureTooltipOpen {
     opacity: 1;
     pointer-events: auto;
     transform: translateY(0);
+    visibility: visible;
   }
 
   .realtimeFailureCopyButton {

@@ -73,6 +73,7 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  min-width: 0;
   min-height: 34px;
   max-width: 100%;
   padding: 0 10px;
@@ -84,9 +85,13 @@
   line-height: 1;
 
   strong {
+    min-width: 0;
+    max-width: min(240px, 42vw);
+    overflow: hidden;
     color: var(--text-primary);
     font-size: 13px;
     font-weight: 800;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
@@ -149,6 +154,7 @@
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 $plugin-table-columns: minmax(220px, 1.2fr) minmax(136px, 0.68fr) minmax(180px, 1fr)
@@ -554,27 +560,7 @@ $plugin-table-columns: minmax(220px, 1.2fr) minmax(136px, 0.68fr) minmax(180px, 
   }
 }
 
-@media (max-width: 768px) {
-  .controlHeader {
-    grid-template-columns: 1fr;
-  }
-
-  .summaryMetrics {
-    justify-content: flex-start;
-  }
-
-  .controlToolbar {
-    grid-template-columns: 1fr;
-  }
-
-  .controlToolbar::before {
-    width: min(260px, 56%);
-  }
-
-  .toolbarActions {
-    justify-content: flex-start;
-  }
-
+@media (max-width: 1180px) {
   .list {
     gap: 10px;
     overflow: visible;
@@ -649,9 +635,99 @@ $plugin-table-columns: minmax(220px, 1.2fr) minmax(136px, 0.68fr) minmax(180px, 
     flex-wrap: wrap;
   }
 
+  .statusDetails span,
   .capabilityDescription,
   .pathText {
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 1040px) {
+  .controlHeader {
+    grid-template-columns: 1fr;
+  }
+
+  .summaryMetrics {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 900px) {
+  .controlToolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .controlToolbar::before {
+    width: min(260px, 56%);
+  }
+
+  .toolbarActions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 768px) {
+  .summaryMetric {
+    flex: 1 1 160px;
+  }
+
+  .summaryMetric strong {
+    max-width: 100%;
+  }
+
+  .toolbarActions {
+    width: 100%;
+  }
+
+  .toolbarActions :global(.btn.btn-sm) {
+    flex: 1 1 140px;
+    min-width: 0;
+  }
+
+  .drawerFooter {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .drawerFooter :global(.btn) {
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .tabSurface {
+    padding: 10px;
+  }
+
+  .summaryMetrics {
+    width: 100%;
+  }
+
+  .summaryMetric {
+    flex-basis: 100%;
+    justify-content: space-between;
+  }
+
+  .actions {
+    width: 100%;
+  }
+
+  .actions :global(.btn.btn-sm) {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .fieldRow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .arrayItemRow {
+    grid-template-columns: 1fr;
+  }
+
+  .arrayActions {
+    justify-content: flex-start;
   }
 }

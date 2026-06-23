@@ -19,6 +19,11 @@ const { mocks } = vi.hoisted(() => {
       showNotification: vi.fn(),
       showConfirmation: vi.fn(),
       navigate: vi.fn(),
+      panelFeatureAvailability: {
+        checking: false,
+        managerServiceBase: 'http://manager.local:18317',
+        serverCodexInspectionAvailable: true,
+      },
       loadExcluded: vi.fn(async () => undefined),
       loadModelAlias: vi.fn(async () => undefined),
       listCodexInspectionRuns: vi.fn(),
@@ -79,6 +84,10 @@ vi.mock('@/hooks/useInterval', () => ({
 
 vi.mock('@/hooks/useHeaderRefresh', () => ({
   useHeaderRefresh: () => {},
+}));
+
+vi.mock('@/hooks/usePanelFeatureAvailability', () => ({
+  usePanelFeatureAvailability: () => mocks.panelFeatureAvailability,
 }));
 
 vi.mock('@/components/common/PageTransitionLayer', () => ({
@@ -282,6 +291,11 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
     mocks.listCodexInspectionRuns.mockReset();
     mocks.getCodexInspectionRun.mockReset();
     mocks.connectionStatus = 'connected';
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: 'http://manager.local:18317',
+      serverCodexInspectionAvailable: true,
+    };
     mocks.lastCodexInspectionLastRun = null;
 
     mocks.list.mockResolvedValue({ files: [] });
@@ -458,6 +472,51 @@ describe('AuthFilesPage real auth JSON paste flow', () => {
         ]
       ).not.toContain('reauth');
     });
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+  });
+
+  it('uses local Codex inspection cache without probing server runs when server inspection is unavailable', async () => {
+    mocks.panelFeatureAvailability = {
+      checking: false,
+      managerServiceBase: '',
+      serverCodexInspectionAvailable: false,
+    };
+    mocks.list.mockResolvedValue({
+      files: [{ name: 'local-codex.json', type: 'codex', authIndex: 0 }],
+    });
+    mocks.lastCodexInspectionLastRun = {
+      result: {
+        results: [
+          {
+            fileName: 'local-codex.json',
+            authIndex: 0,
+            statusCode: 401,
+            action: 'reauth',
+            usedPercent: null,
+            isQuota: false,
+          },
+        ],
+      },
+    };
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        renderer!.root.findByProps({ 'data-auth-card': 'local-codex.json::0' }).props[
+          'data-codex-badges'
+        ]
+      ).toContain('reauth');
+    });
+
+    expect(mocks.listCodexInspectionRuns).not.toHaveBeenCalled();
+    expect(mocks.getCodexInspectionRun).not.toHaveBeenCalled();
 
     await act(async () => {
       renderer!.unmount();

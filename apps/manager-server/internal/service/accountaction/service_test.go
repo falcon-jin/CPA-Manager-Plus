@@ -147,9 +147,9 @@ func TestDeleteAcceptsCurrentAuthFileProjectID(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /v0/management/auth-files":
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
-				"name":       "gemini-auth.json",
-				"auth_index": "gemini-1",
-				"provider":   "gemini-cli",
+				"name":       "antigravity-auth.json",
+				"auth_index": "antigravity-1",
+				"provider":   "antigravity",
 				"account":    "vertex@example.com",
 				"project_id": "vertex-project-42",
 			}})
@@ -167,9 +167,9 @@ func TestDeleteAcceptsCurrentAuthFileProjectID(t *testing.T) {
 	}
 	item, err := st.UpsertAccountActionCandidate(ctx, model.AccountActionCandidateUpsert{
 		ActionType:        model.AccountActionTypeDelete,
-		Provider:          "gemini-cli",
-		AuthFileName:      "gemini-auth.json",
-		AuthIndex:         "gemini-1",
+		Provider:          "antigravity",
+		AuthFileName:      "antigravity-auth.json",
+		AuthIndex:         "antigravity-1",
 		AccountSnapshot:   "vertex@example.com",
 		AccountIDSnapshot: "vertex-project-42",
 		Reason:            "workspace deactivated",

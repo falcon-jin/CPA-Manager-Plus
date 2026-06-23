@@ -185,6 +185,22 @@ const mergeKnownFields = (
   return next;
 };
 
+const hasDefinedField = (record: Record<string, unknown>, fields: readonly string[]) =>
+  fields.some((field) => record[field] !== undefined);
+
+const preserveOmittedRawField = (
+  raw: unknown,
+  payload: Record<string, unknown>,
+  next: Record<string, unknown>,
+  fields: readonly string[]
+) => {
+  if (!isRecord(raw) || hasDefinedField(payload, fields)) return;
+  const rawField = fields.find((field) => raw[field] !== undefined);
+  if (rawField) {
+    next[rawField] = raw[rawField];
+  }
+};
+
 const findRawRecord = (
   rawRecords: Array<Record<string, unknown> | undefined>,
   usedIndexes: Set<number>,
@@ -242,12 +258,22 @@ const getRawSectionList = (rawConfig: unknown, section: string) => {
 
 const mergeModelPayloads = (raw: unknown, models: unknown) =>
   Array.isArray(models)
-    ? mergeKnownRecordList(
-        isRecord(raw) ? raw.models : undefined,
-        models.filter(isRecord),
-        MODEL_ALIAS_FIELDS,
-        modelIdentity
-      )
+    ? (() => {
+        const payloadItems = models.filter(isRecord);
+        const rawItems = isRecord(raw) ? raw.models : undefined;
+        const rawRecords = Array.isArray(rawItems)
+          ? rawItems.map((item) => (isRecord(item) ? item : undefined))
+          : [];
+        const usedIndexes = new Set<number>();
+
+        return payloadItems.map((payload, index) => {
+          const rawModel = findRawRecord(rawRecords, usedIndexes, payload, index, modelIdentity);
+          const next = mergeKnownFields(rawModel, payload, MODEL_ALIAS_FIELDS);
+          preserveOmittedRawField(rawModel, payload, next, ['image']);
+          preserveOmittedRawField(rawModel, payload, next, ['thinking']);
+          return next;
+        });
+      })()
     : undefined;
 
 const mergeProviderKeyPayload = (
@@ -256,20 +282,30 @@ const mergeProviderKeyPayload = (
   knownFields: readonly string[]
 ) => {
   const next = mergeKnownFields(raw, payload, knownFields);
+  preserveOmittedRawField(raw, payload, next, DISABLE_COOLING_FIELDS);
+  preserveOmittedRawField(raw, payload, next, [
+    'experimental-cch-signing',
+    'experimentalCchSigning',
+    'experimental_cch_signing',
+  ]);
   const models = mergeModelPayloads(raw, payload.models);
   if (models) next.models = models;
   if (isRecord(payload.cloak)) {
-    next.cloak = mergeKnownFields(
-      isRecord(raw) ? raw.cloak : undefined,
-      payload.cloak,
-      CLOAK_FIELDS
-    );
+    const rawCloak = isRecord(raw) ? raw.cloak : undefined;
+    const cloak = mergeKnownFields(rawCloak, payload.cloak, CLOAK_FIELDS);
+    preserveOmittedRawField(rawCloak, payload.cloak, cloak, [
+      'cache-user-id',
+      'cacheUserId',
+      'cache_user_id',
+    ]);
+    next.cloak = cloak;
   }
   return next;
 };
 
 const mergeOpenAIProviderPayload = (raw: unknown, payload: Record<string, unknown>) => {
   const next = mergeKnownFields(raw, payload, OPENAI_PROVIDER_FIELDS);
+  preserveOmittedRawField(raw, payload, next, DISABLE_COOLING_FIELDS);
   const rawApiKeyEntries = isRecord(raw)
     ? (raw['api-key-entries'] ?? raw.apiKeyEntries)
     : undefined;

@@ -16,6 +16,12 @@
   line-height: 1.5;
 }
 
+.errorBox > span,
+.warningBox > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .errorBox {
   color: var(--danger-color);
   border: 1px solid color-mix(in srgb, var(--danger-color) 36%, transparent);
@@ -141,6 +147,7 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  min-width: 0;
   min-height: 34px;
   max-width: 100%;
   padding: 0 10px;
@@ -152,9 +159,13 @@
   line-height: 1;
 
   strong {
+    min-width: 0;
+    max-width: min(240px, 42vw);
+    overflow: hidden;
     color: var(--text-primary);
     font-size: 13px;
     font-weight: 800;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
@@ -202,6 +213,11 @@
   strong {
     color: var(--text-primary);
   }
+
+  span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
 }
 
 .controlToolbar {
@@ -234,23 +250,31 @@
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .filters {
   display: inline-flex;
   align-self: flex-start;
   max-width: 100%;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   border: 1px solid color-mix(in srgb, var(--border-color) 86%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface-subtle) 72%, var(--bg-primary));
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 .filterChip {
   position: relative;
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 6px;
   min-height: 32px;
   padding: 0 12px;
@@ -493,7 +517,7 @@
 
 .meta {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr));
   gap: 6px;
   color: var(--text-secondary);
   font-size: 12px;
@@ -624,9 +648,31 @@
   }
 }
 
+@media (max-width: 1040px) {
+  .controlHeader {
+    grid-template-columns: 1fr;
+  }
+
+  .summaryMetrics {
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 900px) {
   .grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .controlToolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .controlToolbar::before {
+    width: min(260px, 56%);
+  }
+
+  .toolbarActions {
+    justify-content: flex-start;
   }
 }
 
@@ -652,17 +698,26 @@
     justify-content: flex-start;
   }
 
-  .controlToolbar,
+  .summaryMetric {
+    flex: 1 1 160px;
+  }
+
+  .summaryMetric strong {
+    max-width: 100%;
+  }
+
   .cardHeader {
     grid-template-columns: 1fr;
   }
 
-  .controlToolbar::before {
-    width: min(260px, 56%);
+  .toolbarActions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
-  .toolbarActions {
-    justify-content: flex-start;
+  .toolbarActions :global(.btn.btn-sm) {
+    flex: 1 1 140px;
+    min-width: 0;
   }
 
   .storeContentSurface {
@@ -671,16 +726,40 @@
 
   .filters {
     width: 100%;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .filterChip {
-    flex: 0 0 auto;
   }
 
   .badges {
     grid-column: auto;
     justify-content: flex-start;
+  }
+}
+
+@media (max-width: 520px) {
+  .tabSurface,
+  .storeContentSurface {
+    padding: 10px;
+  }
+
+  .summaryMetrics {
+    width: 100%;
+  }
+
+  .summaryMetric {
+    flex-basis: 100%;
+    justify-content: space-between;
+  }
+
+  .cardActions,
+  .deleteActions {
+    width: 100%;
+  }
+
+  .cardActions :global(.btn.btn-sm) {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .deleteActions {
+    margin-left: 0;
   }
 }

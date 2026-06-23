@@ -44,6 +44,7 @@ import {
   notifyPluginResourcesChanged,
   resolvePluginAssetURL,
 } from './pluginResources';
+import { waitForPluginState } from './pluginPolling';
 import { buildPluginDisplay, type PluginStatusTone } from './pluginDisplay';
 import { PluginStorePage } from './PluginStorePage';
 import styles from './PluginsPage.module.scss';
@@ -385,7 +386,16 @@ function InstalledPluginsView({
   }, [connected, supportsPlugin, t]);
 
   const loadPluginsAfterMutation = useCallback(
-    async (waitForRegistration: boolean) => {
+    async (
+      waitForRegistration: boolean,
+      pluginID?: string,
+      predicate?: (plugin: PluginListEntry, response: PluginListResponse) => boolean
+    ) => {
+      if (waitForRegistration && pluginID && predicate) {
+        const result = await waitForPluginState(pluginID, predicate);
+        setData(result.response);
+        return;
+      }
       if (waitForRegistration) {
         await wait(PLUGIN_ENABLE_REFRESH_DELAY_MS);
       }
@@ -489,7 +499,7 @@ function InstalledPluginsView({
     try {
       await pluginsApi.updateEnabled(plugin.id, enabled);
       clearConfigCache();
-      await loadPluginsAfterMutation(enabled);
+      await loadPluginsAfterMutation(true, plugin.id, (item) => item.enabled === enabled);
       notifyPluginResourcesChanged();
       showNotification(t('plugin_management.toggle_success'), 'success');
     } catch (err: unknown) {
@@ -594,7 +604,11 @@ function InstalledPluginsView({
           const sourceId = storeEntry.sourceId || undefined;
           const installResult = await pluginStoreApi.install(storeEntry.id, { sourceId });
           clearConfigCache();
-          await loadPluginsAfterMutation(!installResult.restartRequired);
+          await loadPluginsAfterMutation(
+            !installResult.restartRequired,
+            plugin.id,
+            (item) => item.registered || item.configured || item.enabled
+          );
           notifyPluginResourcesChanged();
           if (installResult.restartRequired) {
             showNotification(t('plugin_management.reinstall_restart_required'), 'warning');
@@ -640,7 +654,11 @@ function InstalledPluginsView({
     try {
       await pluginsApi.putConfig(editingPlugin.id, nextConfig);
       clearConfigCache();
-      await loadPluginsAfterMutation(nextConfig.enabled === true && editingPlugin.enabled !== true);
+      await loadPluginsAfterMutation(
+        nextConfig.enabled === true && editingPlugin.enabled !== true,
+        editingPlugin.id,
+        (item) => item.enabled === true
+      );
       notifyPluginResourcesChanged();
       setEditingPlugin(null);
       setEditingConfig({});
