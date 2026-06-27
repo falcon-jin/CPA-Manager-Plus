@@ -498,6 +498,7 @@ describe('buildFilterOptionsFromAnalytics', () => {
       'auth:openai-auth',
       'source:source-b',
     ]);
+    expect(options.accountRows[0].sourceKeys).toContain('openai:0:0');
   });
 });
 

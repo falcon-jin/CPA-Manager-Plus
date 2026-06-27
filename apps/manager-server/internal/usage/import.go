@@ -238,6 +238,7 @@ func eventFromExportedRecord(record map[string]any) (Event, bool, error) {
 	if event.Endpoint == "" {
 		event.Endpoint = "-"
 	}
+	AttachResponseHeaderMetadata(&event, ResponseHeaderMetadataFromRecord(record, time.UnixMilli(timestampMS)))
 	if event.CreatedAtMS <= 0 {
 		event.CreatedAtMS = time.Now().UnixMilli()
 	}
@@ -404,6 +405,7 @@ func eventFromLegacyDetail(
 	if event.Endpoint == "" {
 		event.Endpoint = "-"
 	}
+	AttachResponseHeaderMetadata(&event, ResponseHeaderMetadataFromRecord(detail, time.UnixMilli(timestampMS)))
 	event.EventHash = buildEventHash(event)
 	return event, nil
 }

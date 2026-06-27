@@ -55,9 +55,17 @@ type Event struct {
 	FailSummary         string `json:"fail_summary,omitempty"`
 	// FailBody is retained only in the local DB as a sensitive internal field.
 	// Public APIs, compatible payloads, and exports must use FailSummary instead.
-	FailBody    string `json:"-"`
-	RawJSON     string `json:"raw_json,omitempty"`
-	CreatedAtMS int64  `json:"created_at_ms"`
+	FailBody               string                  `json:"-"`
+	ResponseMetadata       *ResponseHeaderMetadata `json:"response_metadata,omitempty"`
+	ResponseMetadataJSON   string                  `json:"-"`
+	HeaderQuotaRecoverAtMS int64                   `json:"header_quota_recover_at_ms,omitempty"`
+	HeaderQuotaUsedPercent *float64                `json:"header_quota_used_percent,omitempty"`
+	HeaderQuotaPlanType    string                  `json:"header_quota_plan_type,omitempty"`
+	HeaderErrorKind        string                  `json:"header_error_kind,omitempty"`
+	HeaderErrorCode        string                  `json:"header_error_code,omitempty"`
+	HeaderTraceID          string                  `json:"header_trace_id,omitempty"`
+	RawJSON                string                  `json:"raw_json,omitempty"`
+	CreatedAtMS            int64                   `json:"created_at_ms"`
 }
 
 type Tokens struct {
@@ -72,26 +80,27 @@ type Tokens struct {
 }
 
 type Detail struct {
-	Timestamp             string `json:"timestamp"`
-	Source                string `json:"source"`
-	AuthIndex             string `json:"auth_index,omitempty"`
-	APIKeyHash            string `json:"api_key_hash,omitempty"`
-	AccountSnapshot       string `json:"account_snapshot,omitempty"`
-	AuthLabelSnapshot     string `json:"auth_label_snapshot,omitempty"`
-	AuthFileSnapshot      string `json:"auth_file_snapshot,omitempty"`
-	AuthProviderSnapshot  string `json:"auth_provider_snapshot,omitempty"`
-	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
-	AuthSnapshotAtMS      int64  `json:"auth_snapshot_at_ms,omitempty"`
-	LatencyMS             *int64 `json:"latency_ms,omitempty"`
-	TTFTMS                *int64 `json:"ttft_ms,omitempty"`
-	ResolvedModel         string `json:"resolved_model,omitempty"`
-	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
-	ServiceTier           string `json:"service_tier,omitempty"`
-	ExecutorType          string `json:"executor_type,omitempty"`
-	Tokens                Tokens `json:"tokens"`
-	Failed                bool   `json:"failed"`
-	FailStatusCode        int    `json:"fail_status_code,omitempty"`
-	FailSummary           string `json:"fail_summary,omitempty"`
+	Timestamp             string                  `json:"timestamp"`
+	Source                string                  `json:"source"`
+	AuthIndex             string                  `json:"auth_index,omitempty"`
+	APIKeyHash            string                  `json:"api_key_hash,omitempty"`
+	AccountSnapshot       string                  `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot     string                  `json:"auth_label_snapshot,omitempty"`
+	AuthFileSnapshot      string                  `json:"auth_file_snapshot,omitempty"`
+	AuthProviderSnapshot  string                  `json:"auth_provider_snapshot,omitempty"`
+	AuthProjectIDSnapshot string                  `json:"auth_project_id_snapshot,omitempty"`
+	AuthSnapshotAtMS      int64                   `json:"auth_snapshot_at_ms,omitempty"`
+	LatencyMS             *int64                  `json:"latency_ms,omitempty"`
+	TTFTMS                *int64                  `json:"ttft_ms,omitempty"`
+	ResolvedModel         string                  `json:"resolved_model,omitempty"`
+	ReasoningEffort       string                  `json:"reasoning_effort,omitempty"`
+	ServiceTier           string                  `json:"service_tier,omitempty"`
+	ExecutorType          string                  `json:"executor_type,omitempty"`
+	Tokens                Tokens                  `json:"tokens"`
+	Failed                bool                    `json:"failed"`
+	FailStatusCode        int                     `json:"fail_status_code,omitempty"`
+	FailSummary           string                  `json:"fail_summary,omitempty"`
+	ResponseMetadata      *ResponseHeaderMetadata `json:"response_metadata,omitempty"`
 }
 
 type ModelAggregate struct {
@@ -250,6 +259,7 @@ func NormalizeRaw(raw []byte) (Event, error) {
 	if event.Model == "" {
 		event.Model = "-"
 	}
+	AttachResponseHeaderMetadata(&event, ResponseHeaderMetadataFromRecord(record, time.UnixMilli(timestampMS)))
 	event.EventHash = buildEventHash(event)
 	return event, nil
 }
@@ -309,6 +319,7 @@ func BuildPayload(events []Event) Payload {
 			Failed:                event.Failed,
 			FailStatusCode:        event.FailStatusCode,
 			FailSummary:           event.FailSummary,
+			ResponseMetadata:      event.ResponseMetadata,
 			Tokens: Tokens{
 				InputTokens:         event.InputTokens,
 				OutputTokens:        event.OutputTokens,

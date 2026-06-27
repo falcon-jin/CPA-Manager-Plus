@@ -526,6 +526,13 @@ export interface DashboardRecentFailure {
   duration_ms: number | null;
   fail_status_code?: number | null;
   fail_summary?: string;
+  response_metadata?: ResponseHeaderMetadata;
+  header_quota_recover_at_ms?: number | null;
+  header_quota_used_percent?: number | null;
+  header_quota_plan_type?: string;
+  header_error_kind?: string;
+  header_error_code?: string;
+  header_trace_id?: string;
 }
 
 export interface DashboardSummaryResponse {
@@ -561,6 +568,10 @@ export interface MonitoringAnalyticsFilters {
   source_hashes?: string[];
   project_ids?: string[];
   request_types?: string[];
+  header_error_kinds?: string[];
+  header_error_codes?: string[];
+  header_quota_plans?: string[];
+  header_trace_ids?: string[];
   include_failed?: boolean;
   failed_only?: boolean;
   min_latency_ms?: number;
@@ -926,6 +937,10 @@ export interface MonitoringAnalyticsFilterOptions {
   auth_files?: string[];
   project_ids?: string[];
   request_types?: string[];
+  header_error_kinds?: string[];
+  header_error_codes?: string[];
+  header_quota_plans?: string[];
+  header_trace_ids?: string[];
 }
 
 export interface MonitoringAnalyticsTaskBucketRow {
@@ -950,6 +965,118 @@ export interface MonitoringAnalyticsTaskBucketRow {
   max_latency_ms: number | null;
 }
 
+export interface ResponseHeaderQuotaWindow {
+  used_percent?: number;
+  reset_at_ms?: number;
+  reset_after_seconds?: number;
+  window_minutes?: number;
+}
+
+export interface ResponseHeaderQuotaMetadata {
+  plan_type?: string;
+  active_limit?: string;
+  rate_limit_reached_type?: string;
+  summary_window_kind?: string;
+  summary_window_source?: string;
+  reached_window_kind?: string;
+  reached_window_source?: string;
+  credits_balance?: string;
+  credits_has_credits?: boolean;
+  credits_unlimited?: boolean;
+  primary_over_secondary_limit_percent?: number;
+  primary?: ResponseHeaderQuotaWindow;
+  secondary?: ResponseHeaderQuotaWindow;
+  recover_at_ms?: number;
+  used_percent?: number;
+}
+
+export interface ResponseHeaderErrorMetadata {
+  kind?: string;
+  code?: string;
+  authorization_error?: string;
+  ide_error_code?: string;
+  ide_root_error_code?: string;
+  retry_after_seconds?: number;
+  retry_after_recover_at_ms?: number;
+  rate_limit_bypass?: string;
+}
+
+export interface ResponseHeaderTraceMetadata {
+  primary_trace_id?: string;
+  openai_request_id?: string;
+  request_id?: string;
+  oneapi_request_id?: string;
+  cf_ray?: string;
+  eagle_id?: string;
+  cloud_ai_companion_trace_id?: string;
+  client_request_id?: string;
+  zeabur_request_id?: string;
+}
+
+export interface ResponseHeaderRoutingMetadata {
+  openai_proxy_wasm?: string;
+  models_etag?: string;
+  new_api_version?: string;
+  server?: string;
+  via?: string;
+  cf_cache_status?: string;
+  site_cache_status?: string;
+  served_by?: string;
+  mife_upstream_status?: string;
+}
+
+export interface ResponseHeaderResponseMetadata {
+  content_type?: string;
+  content_length?: number;
+  content_disposition?: string;
+  server_timing?: string;
+}
+
+export interface ResponseHeaderProviderMetadata {
+  antigravity_trace_id?: string;
+  antigravity_server_timing?: string;
+  mife_upstream_status?: string;
+  oneapi_request_id?: string;
+  cloudflare_ray?: string;
+  cloudflare_cache_status?: string;
+}
+
+export interface ResponseHeaderMetadata {
+  quota?: ResponseHeaderQuotaMetadata;
+  errors?: ResponseHeaderErrorMetadata;
+  trace?: ResponseHeaderTraceMetadata;
+  routing?: ResponseHeaderRoutingMetadata;
+  response?: ResponseHeaderResponseMetadata;
+  providers?: ResponseHeaderProviderMetadata;
+}
+
+export interface UsageHeaderSnapshot {
+  event_hash: string;
+  timestamp_ms: number;
+  auth_file_snapshot?: string;
+  auth_index?: string;
+  account_snapshot?: string;
+  auth_label_snapshot?: string;
+  auth_provider_snapshot?: string;
+  auth_project_id_snapshot?: string;
+  source?: string;
+  source_hash?: string;
+  response_metadata?: ResponseHeaderMetadata;
+  header_quota_recover_at_ms?: number | null;
+  header_quota_used_percent?: number | null;
+  header_quota_plan_type?: string;
+  header_error_kind?: string;
+  header_error_code?: string;
+  header_trace_id?: string;
+}
+
+export interface UsageHeaderSnapshotsResponse {
+  generated_at_ms: number;
+  from_ms: number;
+  to_ms: number;
+  items: UsageHeaderSnapshot[];
+}
+
 export interface MonitoringAnalyticsRecentFailure {
   timestamp_ms: number;
   model: string;
@@ -965,6 +1092,13 @@ export interface MonitoringAnalyticsRecentFailure {
   duration_ms: number | null;
   fail_status_code?: number | null;
   fail_summary?: string;
+  response_metadata?: ResponseHeaderMetadata;
+  header_quota_recover_at_ms?: number | null;
+  header_quota_used_percent?: number | null;
+  header_quota_plan_type?: string;
+  header_error_kind?: string;
+  header_error_code?: string;
+  header_trace_id?: string;
 }
 
 export interface MonitoringAnalyticsEventRow {
@@ -1000,6 +1134,13 @@ export interface MonitoringAnalyticsEventRow {
   failed: boolean;
   fail_status_code?: number | null;
   fail_summary?: string;
+  response_metadata?: ResponseHeaderMetadata;
+  header_quota_recover_at_ms?: number | null;
+  header_quota_used_percent?: number | null;
+  header_quota_plan_type?: string;
+  header_error_kind?: string;
+  header_error_code?: string;
+  header_trace_id?: string;
 }
 
 export interface MonitoringAnalyticsEventsResponse {
@@ -1636,6 +1777,23 @@ export const dashboardApi = {
 };
 
 export const monitoringAnalyticsApi = {
+  getHeaderSnapshots: async (
+    base: string,
+    managementKey: string | undefined,
+    params: { days?: number; limit?: number } = {}
+  ): Promise<UsageHeaderSnapshotsResponse> => {
+    return withUsageServiceError(async () => {
+      const response = await axios.get<UsageHeaderSnapshotsResponse>(
+        buildUrl(base, '/v0/management/monitoring/header-snapshots'),
+        {
+          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+          params,
+        }
+      );
+      return response.data;
+    });
+  },
   getAnalytics: async (
     base: string,
     managementKey: string | undefined,

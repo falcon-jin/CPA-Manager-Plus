@@ -7,6 +7,7 @@ import type {
   KimiQuotaRow,
   XaiBillingSummary,
 } from '@/types';
+import type { UsageHeaderSnapshot } from '@/services/api/usageService';
 import type {
   MonitoringAccountRow,
   MonitoringApiKeyRow,
@@ -39,9 +40,20 @@ import {
   fetchCodexQuota,
   fetchKimiQuota,
   fetchXaiQuota,
+  buildCodexQuotaWindowInfos,
   formatKimiResetHint,
   formatQuotaResetTime,
 } from '@/utils/quota';
+import {
+  buildObservedCodexQuotaFromHeaderSnapshot,
+  getHeaderSnapshotErrorCode,
+  getHeaderSnapshotErrorKind,
+  getHeaderSnapshotPlanType,
+  getHeaderSnapshotRecoverAtMs,
+  getHeaderSnapshotTraceId,
+  getHeaderSnapshotUsedPercent,
+  hasUsageHeaderQuotaSignal,
+} from '@/utils/usageHeaderSnapshots';
 import {
   formatCompactNumber,
   formatDurationMs,
@@ -60,6 +72,7 @@ export type FocusSnapshot = {
   selectedChannel: string;
   selectedApiKeyHash: string;
   selectedStatus: StatusFilter;
+  selectedHeaderTraceId: string;
 };
 
 export type PriceDraft = {
@@ -149,9 +162,15 @@ export const buildMonitoringInitialStateFromQuery = (
   const searchQuery = params.get('search')?.trim();
   const minLatencyMs = params.get('min_latency_ms')?.trim();
   const cacheStatus = params.get('cache_status')?.trim();
+  const headerTraceId = params.get('header_trace_id')?.trim();
   const hasRange = fromMs !== null && toMs !== null && fromMs < toMs;
   const hasStructuredScopeFilter = Boolean(
-    authFile || projectId || requestType || minLatencyMs || cacheStatus
+    authFile ||
+    projectId ||
+    requestType ||
+    minLatencyMs ||
+    cacheStatus ||
+    headerTraceId
   );
 
   return {
@@ -164,13 +183,20 @@ export const buildMonitoringInitialStateFromQuery = (
     selectedModel: model || state.selectedModel,
     selectedProvider: provider || state.selectedProvider,
     selectedApiKeyHash: apiKeyHash || state.selectedApiKeyHash,
+    selectedHeaderTraceId: headerTraceId || state.selectedHeaderTraceId,
     selectedStatus:
       status === 'success' || status === 'failed' || status === 'all'
         ? status
         : state.selectedStatus,
     searchInput: searchQuery || state.searchInput,
     activeDataTab:
-      hasRange || model || apiKeyHash || status || provider || searchQuery || hasStructuredScopeFilter
+      hasRange ||
+      model ||
+      apiKeyHash ||
+      status ||
+      provider ||
+      searchQuery ||
+      hasStructuredScopeFilter
         ? 'realtime'
         : state.activeDataTab,
   };
@@ -921,6 +947,77 @@ export const buildAccountQuotaErrorEntry = (
   windows: [],
   error,
 });
+
+export const buildObservedCodexAccountQuotaEntry = (
+  target: MonitoringAccountQuotaTarget,
+  snapshot: UsageHeaderSnapshot | undefined,
+  t: TFunction
+): AccountQuotaEntry | null => {
+  if (target.provider !== 'codex' || !hasUsageHeaderQuotaSignal(snapshot)) return null;
+  const planType = target.planType ?? getHeaderSnapshotPlanType(snapshot) ?? null;
+  const observedQuota = buildObservedCodexQuotaFromHeaderSnapshot(snapshot);
+  const planLabel = getCodexPlanLabel(planType, t);
+  const observedAt =
+    snapshot?.timestamp_ms && Number.isFinite(snapshot.timestamp_ms)
+      ? new Date(snapshot.timestamp_ms).toLocaleString()
+      : '';
+  const usedPercent = getHeaderSnapshotUsedPercent(snapshot);
+  const recoverAtMS = getHeaderSnapshotRecoverAtMs(snapshot);
+  const errorKind = getHeaderSnapshotErrorKind(snapshot);
+  const errorCode = getHeaderSnapshotErrorCode(snapshot);
+  const traceID = getHeaderSnapshotTraceId(snapshot);
+  const metaLabels = [
+    planLabel ? `${t('codex_quota.plan_label')}: ${planLabel}` : '',
+    observedAt
+      ? t('quota_management.observed_from_usage_headers_at', {
+          time: observedAt,
+          defaultValue: `Observed from latest usage response headers · ${observedAt}`,
+        })
+      : t('quota_management.observed_from_usage_headers', {
+          defaultValue: 'Observed from latest usage response headers',
+        }),
+    [errorKind, errorCode].filter(Boolean).join(' / '),
+    traceID ? `Trace: ${traceID}` : '',
+  ].filter(Boolean);
+
+  const observedWindows: CodexQuotaWindow[] = observedQuota?.payload
+    ? buildCodexQuotaWindowInfos(observedQuota.payload, { planType }).map((window) => ({
+        id: window.id,
+        label: t(window.labelKey, window.labelParams),
+        labelKey: window.labelKey,
+        labelParams: window.labelParams,
+        usedPercent: window.usedPercent,
+        resetLabel: window.resetLabel,
+        limitWindowSeconds: window.limitWindowSeconds,
+      }))
+    : [];
+  const windows: AccountQuotaWindow[] =
+    observedWindows.length > 0
+      ? buildCodexAccountQuotaWindows(observedWindows, t)
+      : usedPercent !== null || recoverAtMS
+        ? [
+            {
+              id: 'usage-header-observed',
+              label: t('codex_quota.observed_window', { defaultValue: 'Latest request' }),
+              remainingPercent: buildRemainingFromUsedPercent(usedPercent),
+              resetLabel: recoverAtMS ? new Date(recoverAtMS).toLocaleString() : '-',
+              usageLabel:
+                usedPercent !== null
+                  ? t('monitoring.account_quota_observed_used', {
+                      percent: `${Math.round(usedPercent)}%`,
+                      defaultValue: `Observed used ${Math.round(usedPercent)}%`,
+                    })
+                  : null,
+            },
+          ]
+        : [];
+
+  return {
+    ...buildBaseAccountQuotaEntry({ ...target, planType }, t, metaLabels),
+    planType,
+    windows,
+  };
+};
 
 export const requestAccountQuota = async (
   target: MonitoringAccountQuotaTarget,

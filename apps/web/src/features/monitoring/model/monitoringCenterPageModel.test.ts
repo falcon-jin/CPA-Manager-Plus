@@ -250,6 +250,8 @@ describe('monitoringCenterPageModel account quota', () => {
       planType: 'free',
       subscriptionActiveUntil: null,
       rateLimitResetCreditsAvailableCount: null,
+      rateLimitResetCredits: [],
+      rateLimitResetCreditsError: null,
       windows: [
         {
           id: 'monthly',

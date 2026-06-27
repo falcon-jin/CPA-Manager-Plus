@@ -234,7 +234,9 @@ export function CodexInspectionResultsPanel({
                             <small className={styles.primaryFile}>
                               {item.fileName}
                               {item.authIndex ? (
-                                <span className={styles.primaryIndex}>{` \u00b7 #${item.authIndex}`}</span>
+                                <span
+                                  className={styles.primaryIndex}
+                                >{` \u00b7 #${item.authIndex}`}</span>
                               ) : null}
                             </small>
                             {planLabel ? (
@@ -244,6 +246,12 @@ export function CodexInspectionResultsPanel({
                             ) : null}
                             {item.actionReason ? (
                               <small className={styles.primaryReason}>{item.actionReason}</small>
+                            ) : null}
+                            {item.observedHeaderEvidence?.length ? (
+                              <small className={styles.primaryEvidence}>
+                                {t('monitoring.codex_inspection_observed_header_evidence')}:{' '}
+                                {item.observedHeaderEvidence.join(' · ')}
+                              </small>
                             ) : null}
                             {errorSummary ? (
                               <small className={styles.primaryError}>{errorSummary}</small>
@@ -281,49 +289,50 @@ export function CodexInspectionResultsPanel({
                           </span>
                         </td>
                         <td>
-                          {operation ?? (isExecutableAction(item) ? (
-                            <Button
-                              size="sm"
-                              variant={item.action === 'delete' ? 'danger' : 'secondary'}
-                              onClick={() => onExecuteSingle(item)}
-                              disabled={isInspectionInFlight || executing}
-                            >
-                              {formatActionLabel(item.action, t)}
-                            </Button>
-                          ) : item.action === 'reauth' ? (
-                            <div className={styles.resultsHeaderActions}>
-                              {onReauthAccount ? (
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  onClick={() => onReauthAccount(item)}
-                                  disabled={isInspectionInFlight || executing}
-                                >
-                                  <IconRefreshCw size={14} />
-                                  {t('codex_reauth.button')}
-                                </Button>
-                              ) : (
-                                <span className={styles.primaryReason}>
-                                  {t('monitoring.codex_inspection_manual_required')}
-                                </span>
-                              )}
-                              {onDeleteReauthSingle ? (
-                                <Button
-                                  size="sm"
-                                  variant="danger"
-                                  onClick={() => onDeleteReauthSingle(item)}
-                                  disabled={isInspectionInFlight || executing}
-                                >
-                                  <IconTrash2 size={14} />
-                                  {t('monitoring.codex_inspection_action_delete')}
-                                </Button>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <span className={styles.primaryReason}>
-                              {t('monitoring.codex_inspection_no_action')}
-                            </span>
-                          ))}
+                          {operation ??
+                            (isExecutableAction(item) ? (
+                              <Button
+                                size="sm"
+                                variant={item.action === 'delete' ? 'danger' : 'secondary'}
+                                onClick={() => onExecuteSingle(item)}
+                                disabled={isInspectionInFlight || executing}
+                              >
+                                {formatActionLabel(item.action, t)}
+                              </Button>
+                            ) : item.action === 'reauth' ? (
+                              <div className={styles.resultsHeaderActions}>
+                                {onReauthAccount ? (
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() => onReauthAccount(item)}
+                                    disabled={isInspectionInFlight || executing}
+                                  >
+                                    <IconRefreshCw size={14} />
+                                    {t('codex_reauth.button')}
+                                  </Button>
+                                ) : (
+                                  <span className={styles.primaryReason}>
+                                    {t('monitoring.codex_inspection_manual_required')}
+                                  </span>
+                                )}
+                                {onDeleteReauthSingle ? (
+                                  <Button
+                                    size="sm"
+                                    variant="danger"
+                                    onClick={() => onDeleteReauthSingle(item)}
+                                    disabled={isInspectionInFlight || executing}
+                                  >
+                                    <IconTrash2 size={14} />
+                                    {t('monitoring.codex_inspection_action_delete')}
+                                  </Button>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <span className={styles.primaryReason}>
+                                {t('monitoring.codex_inspection_no_action')}
+                              </span>
+                            ))}
                         </td>
                       </tr>
                     );

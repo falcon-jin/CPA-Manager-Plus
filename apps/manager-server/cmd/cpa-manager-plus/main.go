@@ -75,6 +75,7 @@ func runServer() {
 	collectorWorker := worker.NewCollectorWorker(cfg, db, collectorService)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go runUsageResponseMetadataBackfill(ctx, db)
 
 	serverApp := httpapi.New(cfg, db, manager)
 	automationSettingsService := serverApp.AppContext().AccountProcessingPolicyService
@@ -117,5 +118,31 @@ func runServer() {
 	collectorWorker.Stop(context.Background())
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
+	}
+}
+
+func runUsageResponseMetadataBackfill(ctx context.Context, db *store.Store) {
+	const batchLimit = 1000
+	total := 0
+	for {
+		updated, err := db.BackfillUsageResponseMetadata(ctx, batchLimit)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("usage response metadata backfill: %v", err)
+			}
+			return
+		}
+		if updated == 0 {
+			if total > 0 {
+				log.Printf("usage response metadata backfill completed: updated=%d", total)
+			}
+			return
+		}
+		total += updated
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
 const (
@@ -32,6 +34,10 @@ type AnalyticsFilter struct {
 	FailedOnly       bool
 	MinLatencyMS     int64
 	CacheStatus      string
+	HeaderErrorKinds []string
+	HeaderErrorCodes []string
+	HeaderQuotaPlans []string
+	HeaderTraceIDs   []string
 }
 
 var analyticsSearchTextColumns = []string{
@@ -55,6 +61,10 @@ var analyticsSearchTextColumns = []string{
 	"service_tier",
 	"executor_type",
 	"fail_summary",
+	"header_quota_plan_type",
+	"header_error_kind",
+	"header_error_code",
+	"header_trace_id",
 }
 
 type LatencyPercentiles struct {
@@ -69,10 +79,14 @@ type LatencySummary struct {
 }
 
 type FilterOptionValues struct {
-	Providers    []string
-	AuthFiles    []string
-	ProjectIDs   []string
-	RequestTypes []string
+	Providers        []string
+	AuthFiles        []string
+	ProjectIDs       []string
+	RequestTypes     []string
+	HeaderErrorKinds []string
+	HeaderErrorCodes []string
+	HeaderQuotaPlans []string
+	HeaderTraceIDs   []string
 }
 
 type TimelinePoint struct {
@@ -281,40 +295,47 @@ type TaskBucket struct {
 }
 
 type EventPageItem struct {
-	ID                    int64
-	RequestID             string
-	EventHash             string
-	TimestampMS           int64
-	Timestamp             string
-	Model                 string
-	ResolvedModel         string
-	Endpoint              string
-	Method                string
-	Path                  string
-	AuthIndex             string
-	Source                string
-	SourceHash            string
-	APIKeyHash            string
-	AccountSnapshot       string
-	AuthLabelSnapshot     string
-	AuthFileSnapshot      string
-	AuthProviderSnapshot  string
-	AuthProjectIDSnapshot string
-	ReasoningEffort       string
-	ServiceTier           string
-	ExecutorType          string
-	InputTokens           int64
-	OutputTokens          int64
-	CachedTokens          int64
-	CacheReadTokens       int64
-	CacheCreationTokens   int64
-	ReasoningTokens       int64
-	TotalTokens           int64
-	LatencyMS             sql.NullInt64
-	TTFTMS                sql.NullInt64
-	Failed                bool
-	FailStatusCode        sql.NullInt64
-	FailSummary           string
+	ID                     int64
+	RequestID              string
+	EventHash              string
+	TimestampMS            int64
+	Timestamp              string
+	Model                  string
+	ResolvedModel          string
+	Endpoint               string
+	Method                 string
+	Path                   string
+	AuthIndex              string
+	Source                 string
+	SourceHash             string
+	APIKeyHash             string
+	AccountSnapshot        string
+	AuthLabelSnapshot      string
+	AuthFileSnapshot       string
+	AuthProviderSnapshot   string
+	AuthProjectIDSnapshot  string
+	ReasoningEffort        string
+	ServiceTier            string
+	ExecutorType           string
+	InputTokens            int64
+	OutputTokens           int64
+	CachedTokens           int64
+	CacheReadTokens        int64
+	CacheCreationTokens    int64
+	ReasoningTokens        int64
+	TotalTokens            int64
+	LatencyMS              sql.NullInt64
+	TTFTMS                 sql.NullInt64
+	Failed                 bool
+	FailStatusCode         sql.NullInt64
+	FailSummary            string
+	ResponseMetadata       *usage.ResponseHeaderMetadata
+	HeaderQuotaRecoverAtMS sql.NullInt64
+	HeaderQuotaUsedPercent sql.NullFloat64
+	HeaderQuotaPlanType    string
+	HeaderErrorKind        string
+	HeaderErrorCode        string
+	HeaderTraceID          string
 }
 
 type EventsPage struct {
@@ -322,6 +343,27 @@ type EventsPage struct {
 	NextBeforeMS int64
 	NextBeforeID int64
 	HasMore      bool
+}
+
+type HeaderSnapshot struct {
+	ID                     int64
+	EventHash              string
+	TimestampMS            int64
+	AuthFileSnapshot       string
+	AuthIndex              string
+	AccountSnapshot        string
+	AuthLabelSnapshot      string
+	AuthProviderSnapshot   string
+	AuthProjectIDSnapshot  string
+	Source                 string
+	SourceHash             string
+	ResponseMetadata       *usage.ResponseHeaderMetadata
+	HeaderQuotaRecoverAtMS sql.NullInt64
+	HeaderQuotaUsedPercent sql.NullFloat64
+	HeaderQuotaPlanType    string
+	HeaderErrorKind        string
+	HeaderErrorCode        string
+	HeaderTraceID          string
 }
 
 func (r *repository) AggregateWithFilter(ctx context.Context, filter AnalyticsFilter) (Aggregate, error) {
@@ -744,11 +786,31 @@ func (r *repository) FilterOptionValuesWithFilter(ctx context.Context, filter An
 	if err != nil {
 		return FilterOptionValues{}, err
 	}
+	headerErrorKinds, err := r.distinctFilterValues(ctx, filter, "coalesce(header_error_kind, '')")
+	if err != nil {
+		return FilterOptionValues{}, err
+	}
+	headerErrorCodes, err := r.distinctFilterValues(ctx, filter, "coalesce(header_error_code, '')")
+	if err != nil {
+		return FilterOptionValues{}, err
+	}
+	headerQuotaPlans, err := r.distinctFilterValues(ctx, filter, "coalesce(header_quota_plan_type, '')")
+	if err != nil {
+		return FilterOptionValues{}, err
+	}
+	headerTraceIDs, err := r.distinctFilterValues(ctx, filter, "coalesce(header_trace_id, '')")
+	if err != nil {
+		return FilterOptionValues{}, err
+	}
 	return FilterOptionValues{
-		Providers:    providers,
-		AuthFiles:    authFiles,
-		ProjectIDs:   projectIDs,
-		RequestTypes: requestTypes,
+		Providers:        providers,
+		AuthFiles:        authFiles,
+		ProjectIDs:       projectIDs,
+		RequestTypes:     requestTypes,
+		HeaderErrorKinds: headerErrorKinds,
+		HeaderErrorCodes: headerErrorCodes,
+		HeaderQuotaPlans: headerQuotaPlans,
+		HeaderTraceIDs:   headerTraceIDs,
 	}, nil
 }
 
@@ -1421,7 +1483,14 @@ func (r *repository) RecentFailuresWithFilter(ctx context.Context, filter Analyt
 	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
 	coalesce(auth_project_id_snapshot, ''),
 	fail_status_code,
-	coalesce(fail_summary, '')
+	coalesce(fail_summary, ''),
+	coalesce(response_metadata_json, ''),
+	header_quota_recover_at_ms,
+	header_quota_used_percent,
+	coalesce(header_quota_plan_type, ''),
+	coalesce(header_error_kind, ''),
+	coalesce(header_error_code, ''),
+	coalesce(header_trace_id, '')
 from usage_events `+where+`
 and failed = 1
 order by timestamp_ms desc, id desc
@@ -1434,6 +1503,7 @@ limit ?`, args...)
 	failures := make([]RecentFailure, 0, limit)
 	for rows.Next() {
 		var failure RecentFailure
+		var responseMetadataJSON string
 		if err := rows.Scan(
 			&failure.TimestampMS,
 			&failure.Model,
@@ -1449,9 +1519,17 @@ limit ?`, args...)
 			&failure.AuthProjectIDSnapshot,
 			&failure.FailStatusCode,
 			&failure.FailSummary,
+			&responseMetadataJSON,
+			&failure.HeaderQuotaRecoverAtMS,
+			&failure.HeaderQuotaUsedPercent,
+			&failure.HeaderQuotaPlanType,
+			&failure.HeaderErrorKind,
+			&failure.HeaderErrorCode,
+			&failure.HeaderTraceID,
 		); err != nil {
 			return nil, err
 		}
+		failure.ResponseMetadata = usage.ResponseHeaderMetadataFromJSON(responseMetadataJSON)
 		failures = append(failures, failure)
 	}
 	return failures, rows.Err()
@@ -1523,7 +1601,14 @@ func (r *repository) EventsPageWithFilter(ctx context.Context, filter AnalyticsF
 	ttft_ms,
 	failed,
 	fail_status_code,
-	coalesce(fail_summary, '')
+	coalesce(fail_summary, ''),
+	coalesce(response_metadata_json, ''),
+	header_quota_recover_at_ms,
+	header_quota_used_percent,
+	coalesce(header_quota_plan_type, ''),
+	coalesce(header_error_kind, ''),
+	coalesce(header_error_code, ''),
+	coalesce(header_trace_id, '')
 from usage_events `+where+`
 order by timestamp_ms desc, id desc
 limit ?`, args...)
@@ -1536,6 +1621,7 @@ limit ?`, args...)
 	for rows.Next() {
 		var item EventPageItem
 		var failed int
+		var responseMetadataJSON string
 		if err := rows.Scan(
 			&item.ID,
 			&item.RequestID,
@@ -1571,10 +1657,18 @@ limit ?`, args...)
 			&failed,
 			&item.FailStatusCode,
 			&item.FailSummary,
+			&responseMetadataJSON,
+			&item.HeaderQuotaRecoverAtMS,
+			&item.HeaderQuotaUsedPercent,
+			&item.HeaderQuotaPlanType,
+			&item.HeaderErrorKind,
+			&item.HeaderErrorCode,
+			&item.HeaderTraceID,
 		); err != nil {
 			return EventsPage{}, err
 		}
 		item.Failed = failed != 0
+		item.ResponseMetadata = usage.ResponseHeaderMetadataFromJSON(responseMetadataJSON)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -1593,6 +1687,119 @@ limit ?`, args...)
 		nextBeforeID = last.ID
 	}
 	return EventsPage{Items: items, NextBeforeMS: nextBeforeMS, NextBeforeID: nextBeforeID, HasMore: hasMore}, nil
+}
+
+func (r *repository) LatestHeaderSnapshots(ctx context.Context, sinceMS int64, limit int) ([]HeaderSnapshot, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `with candidates as (
+	select
+		id,
+		event_hash,
+		timestamp_ms,
+		coalesce(auth_file_snapshot, '') as auth_file_snapshot,
+		coalesce(auth_index, '') as auth_index,
+		coalesce(account_snapshot, '') as account_snapshot,
+		coalesce(auth_label_snapshot, '') as auth_label_snapshot,
+		coalesce(nullif(auth_provider_snapshot, ''), provider, '') as auth_provider_snapshot,
+		coalesce(auth_project_id_snapshot, '') as auth_project_id_snapshot,
+		coalesce(source, '') as source,
+		coalesce(source_hash, '') as source_hash,
+		coalesce(response_metadata_json, '') as response_metadata_json,
+		header_quota_recover_at_ms,
+		header_quota_used_percent,
+		coalesce(header_quota_plan_type, '') as header_quota_plan_type,
+		coalesce(header_error_kind, '') as header_error_kind,
+		coalesce(header_error_code, '') as header_error_code,
+		coalesce(header_trace_id, '') as header_trace_id,
+		case
+			when coalesce(auth_file_snapshot, '') <> '' and coalesce(auth_index, '') <> '' then coalesce(auth_file_snapshot, '') || '::' || coalesce(auth_index, '')
+			when coalesce(auth_file_snapshot, '') <> '' then 'file::' || coalesce(auth_file_snapshot, '')
+			when coalesce(auth_index, '') <> '' then 'auth::' || coalesce(auth_index, '')
+			when coalesce(account_snapshot, '') <> '' then 'account::' || lower(coalesce(account_snapshot, ''))
+			when coalesce(source_hash, '') <> '' then 'source::' || coalesce(source_hash, '')
+			else 'event::' || event_hash
+		end as snapshot_key
+	from usage_events
+	where timestamp_ms >= ?
+	and (
+		coalesce(response_metadata_json, '') <> ''
+		or header_quota_recover_at_ms is not null
+		or header_quota_used_percent is not null
+		or coalesce(header_quota_plan_type, '') <> ''
+		or coalesce(header_error_kind, '') <> ''
+		or coalesce(header_error_code, '') <> ''
+		or coalesce(header_trace_id, '') <> ''
+	)
+	and (
+		coalesce(auth_file_snapshot, '') <> ''
+		or coalesce(auth_index, '') <> ''
+		or coalesce(account_snapshot, '') <> ''
+		or coalesce(source_hash, '') <> ''
+	)
+), ranked as (
+	select *, row_number() over (partition by snapshot_key order by timestamp_ms desc, id desc) as rn
+	from candidates
+)
+select
+	id,
+	event_hash,
+	timestamp_ms,
+	auth_file_snapshot,
+	auth_index,
+	account_snapshot,
+	auth_label_snapshot,
+	auth_provider_snapshot,
+	auth_project_id_snapshot,
+	source,
+	source_hash,
+	response_metadata_json,
+	header_quota_recover_at_ms,
+	header_quota_used_percent,
+	header_quota_plan_type,
+	header_error_kind,
+	header_error_code,
+	header_trace_id
+from ranked
+where rn = 1
+order by timestamp_ms desc, id desc
+limit ?`, sinceMS, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]HeaderSnapshot, 0, limit)
+	for rows.Next() {
+		var item HeaderSnapshot
+		var responseMetadataJSON string
+		if err := rows.Scan(
+			&item.ID,
+			&item.EventHash,
+			&item.TimestampMS,
+			&item.AuthFileSnapshot,
+			&item.AuthIndex,
+			&item.AccountSnapshot,
+			&item.AuthLabelSnapshot,
+			&item.AuthProviderSnapshot,
+			&item.AuthProjectIDSnapshot,
+			&item.Source,
+			&item.SourceHash,
+			&responseMetadataJSON,
+			&item.HeaderQuotaRecoverAtMS,
+			&item.HeaderQuotaUsedPercent,
+			&item.HeaderQuotaPlanType,
+			&item.HeaderErrorKind,
+			&item.HeaderErrorCode,
+			&item.HeaderTraceID,
+		); err != nil {
+			return nil, err
+		}
+		item.ResponseMetadata = usage.ResponseHeaderMetadataFromJSON(responseMetadataJSON)
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (r *repository) ActiveDaysWithFilter(ctx context.Context, filter AnalyticsFilter, location *time.Location) (int64, error) {
@@ -1688,6 +1895,10 @@ func analyticsWhere(filter AnalyticsFilter) (string, []any) {
 	addInCondition("source_hash", filter.SourceHashes)
 	addInCondition("auth_project_id_snapshot", filter.ProjectIDs)
 	addInCondition("executor_type", filter.RequestTypes)
+	addInCondition("header_error_kind", filter.HeaderErrorKinds)
+	addInCondition("header_error_code", filter.HeaderErrorCodes)
+	addInCondition("header_quota_plan_type", filter.HeaderQuotaPlans)
+	addInCondition("header_trace_id", filter.HeaderTraceIDs)
 	if !filter.IncludeFailed {
 		conditions = append(conditions, "failed = 0")
 	}

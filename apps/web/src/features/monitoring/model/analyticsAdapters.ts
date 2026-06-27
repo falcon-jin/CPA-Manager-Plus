@@ -15,9 +15,19 @@ import type {
   MonitoringAnalyticsTimelinePoint,
 } from '@/services/api/usageService';
 import type { CredentialInfo } from '@/types/sourceInfo';
-import { buildSourceInfoMap, resolveSourceDisplay } from '@/utils/sourceResolver';
+import {
+  buildSourceInfoMap,
+  resolveSourceDisplay,
+  resolveSourceIdentityKey,
+} from '@/utils/sourceResolver';
 import { normalizeAuthIndex, type UsageDetailWithEndpoint } from '@/utils/usage';
-import { formatApiKeyHashLabel, joinUnique, maskAuthIndex, maskEmailLike, readString } from './base';
+import {
+  formatApiKeyHashLabel,
+  joinUnique,
+  maskAuthIndex,
+  maskEmailLike,
+  readString,
+} from './base';
 import { sanitizeApiKeyDisplayText, type ApiKeyDisplayInfo } from './apiKeys';
 import { buildDayLabel, buildHourLabel, buildLocalDayKey, padNumber } from './range';
 import { buildMonitoringSourceDisplay } from './sourceDisplay';
@@ -53,6 +63,34 @@ const uniqueReadableValues = (values: Array<string | null | undefined> = []) =>
 
 const firstReadableValue = (...values: Array<string | null | undefined>) =>
   values.map(readString).find((value) => value && value !== '-') || '';
+
+const buildSourceKeysFromAnalyticsIdentity = (
+  authIndices: Array<string | null | undefined> | undefined,
+  sources: Array<string | null | undefined> | undefined,
+  sourceInfoMap: ReturnType<typeof buildSourceInfoMap>,
+  authFileMap: Map<string, CredentialInfo>
+) => {
+  const keys = new Set<string>();
+  const normalizedAuthIndices = uniqueReadableValues(authIndices);
+  const normalizedSources = uniqueReadableValues(sources);
+
+  normalizedAuthIndices.forEach((authIndex) => {
+    const key = resolveSourceIdentityKey('', authIndex, sourceInfoMap, authFileMap);
+    if (key) keys.add(key);
+  });
+
+  normalizedSources.forEach((source) => {
+    const sourceOnlyKey = resolveSourceIdentityKey(source, '', sourceInfoMap, authFileMap);
+    if (sourceOnlyKey) keys.add(sourceOnlyKey);
+
+    normalizedAuthIndices.forEach((authIndex) => {
+      const key = resolveSourceIdentityKey(source, authIndex, sourceInfoMap, authFileMap);
+      if (key) keys.add(key);
+    });
+  });
+
+  return Array.from(keys).filter((key) => key && key !== 'source:-').sort();
+};
 
 const normalizeFilterText = (value: string | null | undefined) =>
   readString(value).trim().toLowerCase();
@@ -282,6 +320,9 @@ export const buildAnalyticsFilters = (
   }
   if (isActiveFilterValue(scopeFilters.cacheStatus)) {
     filters.cache_status = scopeFilters.cacheStatus!.trim();
+  }
+  if (isActiveFilterValue(scopeFilters.headerTraceId)) {
+    filters.header_trace_ids = [scopeFilters.headerTraceId!.trim()];
   }
 
   let authIndices: Set<string> | null = null;
@@ -565,6 +606,12 @@ export const buildAccountRowsFromAnalytics = (
         display.sourceLabel,
       ]);
       const channels = uniqueReadableValues([...channelNames, display.channel]);
+      const sourceKeys = buildSourceKeysFromAnalyticsIdentity(
+        row.auth_indices,
+        row.sources,
+        sourceInfoMap,
+        authFileMap
+      );
 
       return {
         id: account || row.id,
@@ -573,6 +620,7 @@ export const buildAccountRowsFromAnalytics = (
         accountMasked: display.accountMasked || maskEmailLike(account),
         authLabels,
         authIndices: uniqueReadableValues(row.auth_indices),
+        sourceKeys,
         channels,
         totalCalls: row.calls,
         successCalls: row.success_calls,
@@ -700,6 +748,7 @@ export const buildFilterOptionsFromAnalytics = (
       providers: [],
       models: [],
       channels: [],
+      headerTraceIds: [],
     };
   }
 
@@ -740,6 +789,7 @@ export const buildFilterOptionsFromAnalytics = (
         );
       })
     ),
+    headerTraceIds: uniqueReadableValues(options.header_trace_ids || []),
   };
 };
 
@@ -871,6 +921,13 @@ export const buildUsageDetailsFromAnalyticsEvents = (
     failed: item.failed === true,
     fail_status_code: item.fail_status_code ?? null,
     fail_summary: readString(item.fail_summary),
+    response_metadata: item.response_metadata,
+    header_quota_recover_at_ms: item.header_quota_recover_at_ms ?? null,
+    header_quota_used_percent: item.header_quota_used_percent ?? null,
+    header_quota_plan_type: readString(item.header_quota_plan_type),
+    header_error_kind: readString(item.header_error_kind),
+    header_error_code: readString(item.header_error_code),
+    header_trace_id: readString(item.header_trace_id),
     __modelName: item.model,
     __resolvedModel: readString(item.resolved_model),
     __endpoint: item.endpoint || `${item.method} ${item.path}`.trim(),

@@ -27,6 +27,7 @@ const createAccountRow = (overrides: Partial<MonitoringAccountRow> = {}): Monito
   accountMasked: overrides.accountMasked ?? 'acc***@example.com',
   authLabels: overrides.authLabels ?? [],
   authIndices: overrides.authIndices ?? [],
+  sourceKeys: overrides.sourceKeys ?? [],
   channels: overrides.channels ?? [],
   totalCalls: overrides.totalCalls ?? 0,
   successCalls: overrides.successCalls ?? 0,
@@ -240,6 +241,7 @@ describe('accountOverviewState', () => {
       selectedAccount: 'all',
       selectedApiKeyHash: 'all',
       selectedChannel: 'all',
+      selectedHeaderTraceId: 'all',
       selectedModel: 'all',
       selectedProvider: 'all',
       selectedStatus: 'all',
@@ -262,6 +264,7 @@ describe('accountOverviewState', () => {
       selectedAccount: 'all',
       selectedApiKeyHash: 'all',
       selectedChannel: 'all',
+      selectedHeaderTraceId: 'all',
       selectedModel: 'all',
       selectedProvider: 'all',
       selectedStatus: 'all',
@@ -337,6 +340,74 @@ describe('accountOverviewState', () => {
     const result = buildMonitoringAccountAuthState(['1'], authFilesByIndex);
 
     expect(result.enabledState).toBe('disabled');
+  });
+
+  it('uses enabled OpenAI provider state for provider-only account rows', () => {
+    const result = buildMonitoringAccountAuthState(
+      [],
+      new Map(),
+      ['openai:0'],
+      new Map([['openai:0', 'enabled']])
+    );
+
+    expect(result.files).toHaveLength(0);
+    expect(result.enabledState).toBe('enabled');
+  });
+
+  it('uses disabled OpenAI provider state for provider-only account rows', () => {
+    const result = buildMonitoringAccountAuthState(
+      [],
+      new Map(),
+      ['openai:0'],
+      new Map([['openai:0', 'disabled']])
+    );
+
+    expect(result.enabledState).toBe('disabled');
+  });
+
+  it('uses disabled non-OpenAI provider state for provider-only account rows', () => {
+    const result = buildMonitoringAccountAuthState(
+      [],
+      new Map(),
+      ['codex:0'],
+      new Map([['codex:0', 'disabled']])
+    );
+
+    expect(result.enabledState).toBe('disabled');
+  });
+
+  it('merges auth-file and provider states as mixed when they differ', () => {
+    const authFilesByIndex = new Map<string, AuthFileItem>([
+      [
+        '1',
+        {
+          name: 'alpha.json',
+          authIndex: '1',
+          disabled: false,
+        },
+      ],
+    ]);
+
+    const result = buildMonitoringAccountAuthState(
+      ['1'],
+      authFilesByIndex,
+      ['openai:0'],
+      new Map([['openai:0', 'disabled']])
+    );
+
+    expect(result.files.map((file) => file.name)).toEqual(['alpha.json']);
+    expect(result.enabledState).toBe('mixed');
+  });
+
+  it('keeps account auth state unavailable when no source can be toggled', () => {
+    const result = buildMonitoringAccountAuthState(
+      [],
+      new Map(),
+      ['source:unknown'],
+      new Map([['openai:0', 'enabled']])
+    );
+
+    expect(result.enabledState).toBe('unavailable');
   });
 
   it('only includes auth files matching the row auth indices', () => {

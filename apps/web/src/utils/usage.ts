@@ -35,6 +35,75 @@ export interface UsageTokens {
   total_tokens?: number;
 }
 
+export interface UsageResponseHeaderQuotaWindow {
+  used_percent?: number;
+  reset_at_ms?: number;
+  reset_after_seconds?: number;
+  window_minutes?: number;
+}
+
+export interface UsageResponseHeaderMetadata {
+  quota?: {
+    plan_type?: string;
+    active_limit?: string;
+    rate_limit_reached_type?: string;
+    summary_window_kind?: string;
+    summary_window_source?: string;
+    reached_window_kind?: string;
+    reached_window_source?: string;
+    primary?: UsageResponseHeaderQuotaWindow;
+    secondary?: UsageResponseHeaderQuotaWindow;
+    recover_at_ms?: number;
+    used_percent?: number;
+  };
+  errors?: {
+    kind?: string;
+    code?: string;
+    authorization_error?: string;
+    ide_error_code?: string;
+    ide_root_error_code?: string;
+    retry_after_seconds?: number;
+    retry_after_recover_at_ms?: number;
+    rate_limit_bypass?: string;
+  };
+  trace?: {
+    primary_trace_id?: string;
+    openai_request_id?: string;
+    request_id?: string;
+    oneapi_request_id?: string;
+    cf_ray?: string;
+    eagle_id?: string;
+    cloud_ai_companion_trace_id?: string;
+    client_request_id?: string;
+    zeabur_request_id?: string;
+  };
+  routing?: {
+    openai_proxy_wasm?: string;
+    models_etag?: string;
+    new_api_version?: string;
+    server?: string;
+    via?: string;
+    cf_cache_status?: string;
+    site_cache_status?: string;
+    served_by?: string;
+    mife_upstream_status?: string;
+  };
+  response?: {
+    content_type?: string;
+    content_length?: number;
+    content_disposition?: string;
+    server_timing?: string;
+  };
+  providers?: {
+    antigravity_trace_id?: string;
+    antigravity_server_timing?: string;
+    mife_upstream_status?: string;
+    oneapi_request_id?: string;
+    cloudflare_ray?: string;
+    cloudflare_cache_status?: string;
+  };
+}
+
 export interface UsageDetail {
   timestamp: string;
   source: string;
@@ -67,6 +136,20 @@ export interface UsageDetail {
   failStatusCode?: number | null;
   fail_summary?: string;
   failSummary?: string;
+  response_metadata?: UsageResponseHeaderMetadata;
+  responseMetadata?: UsageResponseHeaderMetadata;
+  header_quota_recover_at_ms?: number | null;
+  headerQuotaRecoverAtMs?: number | null;
+  header_quota_used_percent?: number | null;
+  headerQuotaUsedPercent?: number | null;
+  header_quota_plan_type?: string;
+  headerQuotaPlanType?: string;
+  header_error_kind?: string;
+  headerErrorKind?: string;
+  header_error_code?: string;
+  headerErrorCode?: string;
+  header_trace_id?: string;
+  headerTraceId?: string;
   fail_body?: string;
   failBody?: string;
   __modelName?: string;
@@ -151,6 +234,9 @@ const readDetailString = (value: unknown): string | undefined => {
   const text = String(value).trim();
   return text || undefined;
 };
+
+const readResponseHeaderMetadata = (value: unknown): UsageResponseHeaderMetadata | undefined =>
+  isRecord(value) ? (value as UsageResponseHeaderMetadata) : undefined;
 
 const isModelFamily = (modelName: string, family: string): boolean =>
   modelName === family || modelName.startsWith(`${family}-`);
@@ -464,6 +550,27 @@ export function collectUsageDetails(usageData: unknown): UsageDetail[] {
                 failRaw.statusCode
             ) ?? null,
           fail_summary: readDetailString(detailRaw.fail_summary ?? detailRaw.failSummary),
+          response_metadata: readResponseHeaderMetadata(
+            detailRaw.response_metadata ?? detailRaw.responseMetadata
+          ),
+          header_quota_recover_at_ms:
+            toOptionalNumber(
+              detailRaw.header_quota_recover_at_ms ?? detailRaw.headerQuotaRecoverAtMs
+            ) ?? null,
+          header_quota_used_percent:
+            toOptionalNumber(
+              detailRaw.header_quota_used_percent ?? detailRaw.headerQuotaUsedPercent
+            ) ?? null,
+          header_quota_plan_type: readDetailString(
+            detailRaw.header_quota_plan_type ?? detailRaw.headerQuotaPlanType
+          ),
+          header_error_kind: readDetailString(
+            detailRaw.header_error_kind ?? detailRaw.headerErrorKind
+          ),
+          header_error_code: readDetailString(
+            detailRaw.header_error_code ?? detailRaw.headerErrorCode
+          ),
+          header_trace_id: readDetailString(detailRaw.header_trace_id ?? detailRaw.headerTraceId),
           fail_body: readDetailString(detailRaw.fail_body ?? detailRaw.failBody ?? failRaw.body),
           __modelName: modelName,
           __resolvedModel: readDetailString(detailRaw.resolved_model ?? detailRaw.resolvedModel),
@@ -553,6 +660,27 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
                 failRaw.statusCode
             ) ?? null,
           fail_summary: readDetailString(detailRaw.fail_summary ?? detailRaw.failSummary),
+          response_metadata: readResponseHeaderMetadata(
+            detailRaw.response_metadata ?? detailRaw.responseMetadata
+          ),
+          header_quota_recover_at_ms:
+            toOptionalNumber(
+              detailRaw.header_quota_recover_at_ms ?? detailRaw.headerQuotaRecoverAtMs
+            ) ?? null,
+          header_quota_used_percent:
+            toOptionalNumber(
+              detailRaw.header_quota_used_percent ?? detailRaw.headerQuotaUsedPercent
+            ) ?? null,
+          header_quota_plan_type: readDetailString(
+            detailRaw.header_quota_plan_type ?? detailRaw.headerQuotaPlanType
+          ),
+          header_error_kind: readDetailString(
+            detailRaw.header_error_kind ?? detailRaw.headerErrorKind
+          ),
+          header_error_code: readDetailString(
+            detailRaw.header_error_code ?? detailRaw.headerErrorCode
+          ),
+          header_trace_id: readDetailString(detailRaw.header_trace_id ?? detailRaw.headerTraceId),
           fail_body: readDetailString(detailRaw.fail_body ?? detailRaw.failBody ?? failRaw.body),
           __modelName: modelName,
           __resolvedModel: readDetailString(detailRaw.resolved_model ?? detailRaw.resolvedModel),

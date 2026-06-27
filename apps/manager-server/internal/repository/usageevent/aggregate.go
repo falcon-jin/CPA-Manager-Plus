@@ -3,6 +3,8 @@ package usageevent
 import (
 	"context"
 	"database/sql"
+
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
 // Aggregate captures roll-up metrics for a usage_events window.
@@ -39,20 +41,27 @@ type ModelStat struct {
 
 // RecentFailure holds the columns required to display a recent failure entry.
 type RecentFailure struct {
-	TimestampMS           int64
-	Model                 string
-	APIKeyHash            string
-	Source                string
-	SourceHash            string
-	AuthIndex             string
-	Endpoint              string
-	LatencyMS             sql.NullInt64
-	AccountSnapshot       string
-	AuthLabelSnapshot     string
-	AuthProviderSnapshot  string
-	AuthProjectIDSnapshot string
-	FailStatusCode        sql.NullInt64
-	FailSummary           string
+	TimestampMS            int64
+	Model                  string
+	APIKeyHash             string
+	Source                 string
+	SourceHash             string
+	AuthIndex              string
+	Endpoint               string
+	LatencyMS              sql.NullInt64
+	AccountSnapshot        string
+	AuthLabelSnapshot      string
+	AuthProviderSnapshot   string
+	AuthProjectIDSnapshot  string
+	FailStatusCode         sql.NullInt64
+	FailSummary            string
+	ResponseMetadata       *usage.ResponseHeaderMetadata
+	HeaderQuotaRecoverAtMS sql.NullInt64
+	HeaderQuotaUsedPercent sql.NullFloat64
+	HeaderQuotaPlanType    string
+	HeaderErrorKind        string
+	HeaderErrorCode        string
+	HeaderTraceID          string
 }
 
 const aggregateSQL = `select
@@ -224,7 +233,14 @@ const recentFailuresSQL = `select
 	coalesce(auth_provider_snapshot, ''),
 	coalesce(auth_project_id_snapshot, ''),
 	fail_status_code,
-	coalesce(fail_summary, '')
+	coalesce(fail_summary, ''),
+	coalesce(response_metadata_json, ''),
+	header_quota_recover_at_ms,
+	header_quota_used_percent,
+	coalesce(header_quota_plan_type, ''),
+	coalesce(header_error_kind, ''),
+	coalesce(header_error_code, ''),
+	coalesce(header_trace_id, '')
 from usage_events
 where failed = 1 and timestamp_ms >= ? and timestamp_ms < ?
 order by timestamp_ms desc, id desc
@@ -244,6 +260,7 @@ func (r *repository) RecentFailuresBetween(ctx context.Context, fromMs, toMs int
 	results := make([]RecentFailure, 0, limit)
 	for rows.Next() {
 		var rf RecentFailure
+		var responseMetadataJSON string
 		if err := rows.Scan(
 			&rf.TimestampMS,
 			&rf.Model,
@@ -259,9 +276,17 @@ func (r *repository) RecentFailuresBetween(ctx context.Context, fromMs, toMs int
 			&rf.AuthProjectIDSnapshot,
 			&rf.FailStatusCode,
 			&rf.FailSummary,
+			&responseMetadataJSON,
+			&rf.HeaderQuotaRecoverAtMS,
+			&rf.HeaderQuotaUsedPercent,
+			&rf.HeaderQuotaPlanType,
+			&rf.HeaderErrorKind,
+			&rf.HeaderErrorCode,
+			&rf.HeaderTraceID,
 		); err != nil {
 			return nil, err
 		}
+		rf.ResponseMetadata = usage.ResponseHeaderMetadataFromJSON(responseMetadataJSON)
 		results = append(results, rf)
 	}
 	return results, rows.Err()

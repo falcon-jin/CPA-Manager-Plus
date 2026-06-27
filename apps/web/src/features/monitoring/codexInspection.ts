@@ -126,6 +126,8 @@ export interface CodexInspectionResultItem extends CodexInspectionAccount {
   quotaWindows?: CodexInspectionQuotaWindow[];
   errorKind?: string;
   errorDetail?: string;
+  observedHeaderEvidence?: string[];
+  observedHeaderAtMs?: number | null;
 }
 
 export interface CodexInspectionSummary {
@@ -639,7 +641,9 @@ export const resolveCodexInspectionAutoActionItems = (
 
   if (normalizedMode === 'disable') {
     return items
-      .filter((item) => item.action === 'delete' || item.action === 'disable' || item.action === 'enable')
+      .filter(
+        (item) => item.action === 'delete' || item.action === 'disable' || item.action === 'enable'
+      )
       .map((item) =>
         item.action === 'delete'
           ? {
@@ -653,7 +657,9 @@ export const resolveCodexInspectionAutoActionItems = (
       );
   }
 
-  return items.filter((item) => item.action === 'delete' || item.action === 'disable' || item.action === 'enable');
+  return items.filter(
+    (item) => item.action === 'delete' || item.action === 'disable' || item.action === 'enable'
+  );
 };
 
 export const isCodexInspectionStoppedError = (
@@ -709,8 +715,7 @@ export const applyCodexInspectionExecutionResult = (
   const disableCount = nextResults.filter((item) => item.action === 'disable').length;
   const enableCount = nextResults.filter((item) => item.action === 'enable').length;
   const reauthCount = nextResults.filter((item) => item.action === 'reauth').length;
-  const keepCount =
-    nextResults.length - deleteCount - disableCount - enableCount - reauthCount;
+  const keepCount = nextResults.length - deleteCount - disableCount - enableCount - reauthCount;
   const plannedActionPreview = nextResults
     .filter((item) => item.action !== 'keep')
     .slice(0, 10)

@@ -33,6 +33,7 @@ export interface PluginMenu {
 
 export interface PluginListEntry {
   id: string;
+  oauthProvider?: string;
   path: string;
   configured: boolean;
   registered: boolean;

@@ -122,6 +122,40 @@ export const buildEventRows = (
       const normalizedFailStatusCode =
         Number.isFinite(failStatusCode) && failStatusCode > 0 ? failStatusCode : null;
       const failSummary = readString(detail.fail_summary ?? detail.failSummary);
+      const responseMetadata = detail.response_metadata ?? detail.responseMetadata;
+      const headerQuotaRecoverAtMsRaw =
+        detail.header_quota_recover_at_ms ??
+        detail.headerQuotaRecoverAtMs ??
+        responseMetadata?.quota?.recover_at_ms;
+      const headerQuotaRecoverAtMs =
+        typeof headerQuotaRecoverAtMsRaw === 'number' && Number.isFinite(headerQuotaRecoverAtMsRaw)
+          ? headerQuotaRecoverAtMsRaw
+          : null;
+      const headerQuotaUsedPercentRaw =
+        detail.header_quota_used_percent ??
+        detail.headerQuotaUsedPercent ??
+        responseMetadata?.quota?.used_percent;
+      const headerQuotaUsedPercent =
+        typeof headerQuotaUsedPercentRaw === 'number' && Number.isFinite(headerQuotaUsedPercentRaw)
+          ? headerQuotaUsedPercentRaw
+          : null;
+      const headerQuotaPlanType =
+        readString(detail.header_quota_plan_type ?? detail.headerQuotaPlanType) ||
+        readString(responseMetadata?.quota?.plan_type ?? responseMetadata?.quota?.active_limit);
+      const headerErrorKind =
+        readString(detail.header_error_kind ?? detail.headerErrorKind) ||
+        readString(responseMetadata?.errors?.kind);
+      const headerErrorCode =
+        readString(detail.header_error_code ?? detail.headerErrorCode) ||
+        readString(
+          responseMetadata?.errors?.code ??
+            responseMetadata?.errors?.ide_root_error_code ??
+            responseMetadata?.errors?.ide_error_code ??
+            responseMetadata?.errors?.authorization_error
+        );
+      const headerTraceId =
+        readString(detail.header_trace_id ?? detail.headerTraceId) ||
+        readString(responseMetadata?.trace?.primary_trace_id);
 
       return {
         id: `${detail.timestamp}-${detail.__modelName || '-'}-${sourceKey}-${authIndex}-${index}`,
@@ -169,6 +203,13 @@ export const buildEventRows = (
         executorType,
         failStatusCode: normalizedFailStatusCode,
         failSummary,
+        responseMetadata,
+        headerQuotaRecoverAtMs,
+        headerQuotaUsedPercent,
+        headerQuotaPlanType,
+        headerErrorKind,
+        headerErrorCode,
+        headerTraceId,
         taskKey,
         searchText: buildSearchText(
           detail.__modelName,
@@ -191,7 +232,11 @@ export const buildEventRows = (
           serviceTier,
           executorType,
           normalizedFailStatusCode,
-          failSummary
+          failSummary,
+          headerErrorKind,
+          headerErrorCode,
+          headerTraceId,
+          headerQuotaPlanType
         ),
       } satisfies MonitoringEventRow;
     })

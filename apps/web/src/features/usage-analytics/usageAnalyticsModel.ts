@@ -400,6 +400,12 @@ export type UsageDrilldownEvent = {
   failed: boolean;
   failStatusCode: number | null;
   failSummary: string;
+  headerErrorKind: string;
+  headerErrorCode: string;
+  headerTraceId: string;
+  headerQuotaPlanType: string;
+  headerQuotaUsedPercent: number | null;
+  headerQuotaRecoverAtMs: number | null;
 };
 
 export type UsageAnomaly = {
@@ -1137,7 +1143,9 @@ export type UsageCredentialDisplayContext = {
 };
 
 const normalizeApiKeyHash = (value: string | null | undefined) =>
-  String(value ?? '').trim().toLowerCase();
+  String(value ?? '')
+    .trim()
+    .toLowerCase();
 
 const isSameApiKeyIdentity = (label: string, hash: string) =>
   Boolean(label) && Boolean(hash) && label.trim().toLowerCase() === hash;
@@ -1983,10 +1991,7 @@ export const buildUsageHeatmap = (
     estimatedCost: toNumber(point.cost),
     failureRate: toNumber(point.failure_rate),
     modelContributors: buildUsageHeatmapContributors(point.model_contributors),
-    apiKeyContributors: buildUsageHeatmapContributors(
-      point.api_key_contributors,
-      apiKeyDisplayMap
-    ),
+    apiKeyContributors: buildUsageHeatmapContributors(point.api_key_contributors, apiKeyDisplayMap),
     providerContributors: buildUsageHeatmapContributors(point.provider_contributors),
   }));
 
@@ -2167,6 +2172,12 @@ export const buildDrilldownPreview = (
       failed: Boolean(row.failed),
       failStatusCode: row.fail_status_code ?? null,
       failSummary: row.fail_summary ?? '',
+      headerErrorKind: row.header_error_kind ?? '',
+      headerErrorCode: row.header_error_code ?? '',
+      headerTraceId: row.header_trace_id ?? '',
+      headerQuotaPlanType: row.header_quota_plan_type ?? '',
+      headerQuotaUsedPercent: row.header_quota_used_percent ?? null,
+      headerQuotaRecoverAtMs: row.header_quota_recover_at_ms ?? null,
     };
   });
 };

@@ -588,6 +588,112 @@
   }
 }
 
+.quotaWindowLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow: visible;
+
+  > .quotaModel {
+    flex: 0 1 auto;
+  }
+}
+
+.quotaInfoTrigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  cursor: help;
+  outline: none;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--text-secondary);
+  }
+
+  &:focus-visible {
+    border-radius: 50%;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 24%, transparent);
+  }
+}
+
+.quotaInfoIcon {
+  display: block;
+}
+
+.quotaInfoTooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: $z-dropdown;
+  display: grid;
+  gap: 4px;
+  min-width: 210px;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+  color: var(--text-primary);
+  font-size: 11px;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition:
+    opacity 0.14s ease,
+    transform 0.14s ease,
+    visibility 0.14s ease;
+  visibility: hidden;
+  white-space: normal;
+
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: -5px;
+    left: 6px;
+    width: 9px;
+    height: 9px;
+    border-right: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
+    background: inherit;
+    transform: rotate(45deg);
+  }
+}
+
+.quotaInfoTrigger:hover .quotaInfoTooltip,
+.quotaInfoTrigger:focus-within .quotaInfoTooltip {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.quotaInfoTooltipRow {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.quotaInfoTooltipLabel {
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.quotaInfoTooltipValue {
+  color: var(--text-primary);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
 .quotaBar {
   height: 8px;
   background-color: var(--surface-subtle-strong);

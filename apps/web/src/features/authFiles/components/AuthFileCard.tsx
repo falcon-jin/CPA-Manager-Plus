@@ -12,7 +12,7 @@ import {
   IconTrash2,
 } from '@/components/ui/icons';
 import { ProviderStatusBar } from '@/components/providers/ProviderStatusBar';
-import type { AuthFileItem } from '@/types';
+import type { AuthFileItem, CodexQuotaState } from '@/types';
 import { resolveAuthProvider } from '@/utils/quota';
 import {
   normalizeRecentRequestAuthIndex,
@@ -53,6 +53,7 @@ export type AuthFileCardProps = {
   statusBarCache: Map<string, AuthFileStatusBarData>;
   codexStatusBadges?: AuthFileCodexStatusBadge[];
   codexNeedsReauth?: boolean;
+  codexDisplayQuota?: CodexQuotaState;
   antigravitySubscription?: AntigravitySubscriptionState;
   onRefreshAntigravitySubscription?: (file: AuthFileItem) => void;
   quotaCooldown?: QuotaCooldownInfo;
@@ -90,6 +91,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
     statusBarCache,
     codexStatusBadges = [],
     codexNeedsReauth = false,
+    codexDisplayQuota,
     antigravitySubscription,
     onRefreshAntigravitySubscription,
     quotaCooldown,
@@ -390,6 +392,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
                 file={file}
                 quotaType={quotaType}
                 disableControls={disableControls}
+                quotaOverride={quotaType === 'codex' ? (codexDisplayQuota ?? null) : undefined}
               />
             )}
           </div>

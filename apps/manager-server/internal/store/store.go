@@ -64,6 +64,7 @@ type APIKeyModelStat = usageevent.APIKeyModelStat
 type TaskBucket = usageevent.TaskBucket
 type EventPageItem = usageevent.EventPageItem
 type EventsPage = usageevent.EventsPage
+type HeaderSnapshot = usageevent.HeaderSnapshot
 
 type Store struct {
 	db *sql.DB
@@ -275,6 +276,10 @@ func (s *Store) RecentEvents(ctx context.Context, limit int) ([]usage.Event, err
 	return s.UsageEvents.ListRecent(ctx, limit)
 }
 
+func (s *Store) BackfillUsageResponseMetadata(ctx context.Context, batchLimit int) (int, error) {
+	return s.UsageEvents.BackfillResponseMetadata(ctx, batchLimit)
+}
+
 func (s *Store) Counts(ctx context.Context) (events int64, deadLetters int64, err error) {
 	events, err = s.UsageEvents.Count(ctx)
 	if err != nil {
@@ -389,6 +394,10 @@ func (s *Store) EventsPageWithFilter(ctx context.Context, filter AnalyticsFilter
 
 func (s *Store) EventsCountWithFilter(ctx context.Context, filter AnalyticsFilter) (int64, error) {
 	return s.UsageEvents.EventsCountWithFilter(ctx, filter)
+}
+
+func (s *Store) LatestHeaderSnapshots(ctx context.Context, sinceMS int64, limit int) ([]HeaderSnapshot, error) {
+	return s.UsageEvents.LatestHeaderSnapshots(ctx, sinceMS, limit)
 }
 
 func (s *Store) ActiveDaysWithFilter(ctx context.Context, filter AnalyticsFilter, location *time.Location) (int64, error) {

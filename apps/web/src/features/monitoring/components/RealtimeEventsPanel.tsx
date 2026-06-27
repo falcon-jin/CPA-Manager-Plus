@@ -263,7 +263,106 @@ const formatRealtimeDateParts = (timestampMs: number, locale: string) => {
   };
 };
 
-const buildFailureMetaText = (row: MonitoringEventRow, t: TFunction) => {
+const formatHeaderRecoverAt = (value: number | null | undefined, locale: string) => {
+  if (!value || !Number.isFinite(value)) return '';
+  return new Date(value).toLocaleString(locale, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+};
+
+const buildHeaderDiagnosticParts = (
+  row: MonitoringEventRow,
+  t: TFunction,
+  locale: string
+): string[] => {
+  const parts: string[] = [];
+  const compactSignal = (label: string, value: string | number | null | undefined, limit = 42) => {
+    const normalized =
+      typeof value === 'number'
+        ? Number.isFinite(value)
+          ? String(value)
+          : ''
+        : formatReadableText(value);
+    return normalized ? `${label} ${truncateText(normalized, limit)}` : '';
+  };
+  const errorCode = row.headerErrorCode || row.responseMetadata?.errors?.code || '';
+  const errorKind = row.headerErrorKind || row.responseMetadata?.errors?.kind || '';
+  if (errorCode || errorKind) {
+    parts.push(
+      `${t('monitoring.header_error')}: ${[errorKind, errorCode].filter(Boolean).join(' / ')}`
+    );
+  }
+  const traceId = row.headerTraceId || row.responseMetadata?.trace?.primary_trace_id || '';
+  if (traceId) {
+    parts.push(`${t('monitoring.header_trace')}: ${truncateText(traceId, 42)}`);
+  }
+  const quotaParts: string[] = [];
+  const planType =
+    row.headerQuotaPlanType ||
+    row.responseMetadata?.quota?.plan_type ||
+    row.responseMetadata?.quota?.active_limit ||
+    '';
+  if (planType) quotaParts.push(planType);
+  const usedPercent =
+    row.headerQuotaUsedPercent ?? row.responseMetadata?.quota?.used_percent ?? null;
+  if (typeof usedPercent === 'number' && Number.isFinite(usedPercent)) {
+    quotaParts.push(formatPercent(usedPercent / 100));
+  }
+  const recoverAt = formatHeaderRecoverAt(
+    row.headerQuotaRecoverAtMs ?? row.responseMetadata?.quota?.recover_at_ms,
+    locale
+  );
+  if (recoverAt) {
+    quotaParts.push(`${t('monitoring.header_recover_at')} ${recoverAt}`);
+  }
+  if (quotaParts.length > 0) {
+    parts.push(`${t('monitoring.header_quota')}: ${quotaParts.join(' · ')}`);
+  }
+  const routing = row.responseMetadata?.routing;
+  const routingParts = [
+    compactSignal('server', routing?.server),
+    compactSignal('via', routing?.via),
+    compactSignal('cf', routing?.cf_cache_status),
+    compactSignal('site', routing?.site_cache_status),
+    compactSignal('mife', routing?.mife_upstream_status),
+  ].filter(Boolean);
+  if (routingParts.length > 0) {
+    parts.push(
+      `${t('monitoring.header_routing', { defaultValue: 'Routing' })}: ${routingParts.join(' · ')}`
+    );
+  }
+  const providers = row.responseMetadata?.providers;
+  const providerParts = [
+    compactSignal('antigravity', providers?.antigravity_trace_id),
+    compactSignal('oneapi', providers?.oneapi_request_id),
+    compactSignal('cf-ray', providers?.cloudflare_ray),
+    compactSignal('cf-cache', providers?.cloudflare_cache_status),
+  ].filter(Boolean);
+  if (providerParts.length > 0) {
+    parts.push(
+      `${t('monitoring.header_provider', { defaultValue: 'Provider' })}: ${providerParts.join(' · ')}`
+    );
+  }
+  const response = row.responseMetadata?.response;
+  const contentType = response?.content_type || '';
+  const responseParts = [
+    row.failed && contentType && !contentType.includes('event-stream')
+      ? truncateText(contentType, 48)
+      : '',
+    compactSignal('len', response?.content_length, 16),
+    compactSignal('timing', response?.server_timing, 64),
+  ].filter(Boolean);
+  if (responseParts.length > 0) {
+    parts.push(`${t('monitoring.header_response')}: ${responseParts.join(' · ')}`);
+  }
+  return parts;
+};
+
+const buildFailureMetaText = (row: MonitoringEventRow, t: TFunction, locale: string) => {
   if (!row.failed) return '';
   const parts: string[] = [];
   if (row.failStatusCode) {
@@ -275,13 +374,15 @@ const buildFailureMetaText = (row: MonitoringEventRow, t: TFunction) => {
   if (body) {
     parts.push(truncateText(body, 96));
   }
+  parts.push(...buildHeaderDiagnosticParts(row, t, locale).map((part) => truncateText(part, 96)));
   return parts.join(' · ');
 };
 
-const buildFailureDetails = (row: MonitoringEventRow, t: TFunction) => {
+const buildFailureDetails = (row: MonitoringEventRow, t: TFunction, locale: string) => {
   if (!row.failed) return null;
   const summary = maskSensitiveText(row.failSummary || '');
-  if (!row.failStatusCode && !summary) return null;
+  const diagnostics = buildHeaderDiagnosticParts(row, t, locale);
+  if (!row.failStatusCode && !summary && diagnostics.length === 0) return null;
   const statusText = row.failStatusCode
     ? `${shortLabel(t, 'monitoring.fail_status_code_short', 'monitoring.fail_status_code')} ${row.failStatusCode}`
     : '';
@@ -289,8 +390,9 @@ const buildFailureDetails = (row: MonitoringEventRow, t: TFunction) => {
     statusCode: row.failStatusCode,
     statusText,
     summary,
-    label: buildFailureMetaText(row, t),
-    copyText: [statusText, summary].filter(Boolean).join('\n'),
+    diagnostics,
+    label: buildFailureMetaText(row, t, locale),
+    copyText: [statusText, summary, ...diagnostics].filter(Boolean).join('\n'),
   };
 };
 
@@ -442,6 +544,11 @@ function RealtimeFailureStatus({ details, tooltipId, t, onCopy }: RealtimeFailur
       {details.summary ? (
         <span className={styles.realtimeFailureTooltipBody}>{details.summary}</span>
       ) : null}
+      {details.diagnostics.map((item) => (
+        <span key={item} className={styles.realtimeFailureTooltipBody}>
+          {item}
+        </span>
+      ))}
     </span>
   );
 
@@ -692,7 +799,7 @@ export function RealtimeEventsPanel({
                 row.resolvedModel.trim() !== row.model;
               const reasoningEffort = formatOptionalText(row.reasoningEffort);
               const serviceTier = formatOptionalText(row.serviceTier);
-              const failureDetails = buildFailureDetails(row, t);
+              const failureDetails = buildFailureDetails(row, t, locale);
               const failureTooltipId = failureDetails
                 ? `${tooltipIdPrefix}-failure-tooltip-${row.id}`
                 : undefined;

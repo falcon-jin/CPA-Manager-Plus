@@ -15,6 +15,10 @@ import { vertexApi, type VertexImportResponse } from '@/services/api/vertex';
 import { copyToClipboard } from '@/utils/clipboard';
 import type { PluginListEntry } from '@/types';
 import { getPluginTitle, resolvePluginAssetURL } from '@/features/plugins/pluginResources';
+import {
+  resolvePluginOAuthProviderId,
+  shouldShowPluginOAuthProvider,
+} from './oauthProviderHelpers';
 import styles from './OAuthPage.module.scss';
 import iconCodex from '@/assets/icons/codex.svg';
 import iconClaude from '@/assets/icons/claude.svg';
@@ -245,12 +249,12 @@ export function OAuthPage() {
     }));
     const pluginProviders = pluginOAuthAvailable
       ? pluginOAuthPlugins
-          .filter((plugin) => plugin.supportsOAuth && !BUILT_IN_PROVIDER_IDS.has(plugin.id))
+          .filter((plugin) => shouldShowPluginOAuthProvider(plugin, BUILT_IN_PROVIDER_IDS))
           .map((plugin) => {
             const title = getPluginTitle(plugin);
             const logo = resolvePluginAssetURL(plugin.logo || plugin.metadata?.logo || '', apiBase);
             return {
-              id: plugin.id,
+              id: resolvePluginOAuthProviderId(plugin),
               title,
               hint: t('auth_login.plugin_oauth_hint', { plugin: title }),
               urlLabel: t('auth_login.plugin_oauth_url_label'),

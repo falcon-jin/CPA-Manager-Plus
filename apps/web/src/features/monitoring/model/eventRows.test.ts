@@ -29,7 +29,7 @@ const buildRows = (overrides: Partial<UsageDetailWithEndpoint> = {}) =>
     ],
     new Map(),
     new Map(),
-    { byAuthIndex: new Map(), bySource: new Map() },
+    { byAuthIndex: new Map(), bySource: new Map(), byIdentityKey: new Map() },
     new Map(),
     {},
     new Map()
@@ -76,6 +76,72 @@ describe('buildEventRows', () => {
     expect(row.searchText).toContain('codex');
     expect(row.searchText).toContain('priority');
     expect(row.searchText).toContain('medium');
+  });
+
+  it('keeps response header diagnostics searchable', () => {
+    const [row] = buildRows({
+      failed: true,
+      fail_status_code: 429,
+      response_metadata: {
+        quota: {
+          plan_type: 'plus',
+          used_percent: 87,
+          recover_at_ms: 1780000060000,
+        },
+        errors: {
+          kind: 'rate_limit',
+          code: 'retry_after',
+        },
+        trace: {
+          primary_trace_id: 'req-header',
+        },
+      },
+      header_quota_recover_at_ms: 1780000060000,
+      header_quota_used_percent: 87,
+      header_quota_plan_type: 'plus',
+      header_error_kind: 'rate_limit',
+      header_error_code: 'retry_after',
+      header_trace_id: 'req-header',
+    });
+
+    expect(row.responseMetadata?.quota?.plan_type).toBe('plus');
+    expect(row.headerQuotaUsedPercent).toBe(87);
+    expect(row.headerTraceId).toBe('req-header');
+    expect(row.searchText).toContain('rate_limit');
+    expect(row.searchText).toContain('retry_after');
+    expect(row.searchText).toContain('req-header');
+    expect(row.searchText).toContain('plus');
+  });
+
+  it('derives response header diagnostics from metadata-only usage details', () => {
+    const [row] = buildRows({
+      failed: true,
+      fail_status_code: 429,
+      response_metadata: {
+        quota: {
+          active_limit: 'premium',
+          used_percent: 92,
+          recover_at_ms: 1780000120000,
+        },
+        errors: {
+          kind: 'rate_limit',
+          ide_error_code: 'usage_limit_reached',
+        },
+        trace: {
+          primary_trace_id: 'req-metadata-only',
+        },
+      },
+    });
+
+    expect(row.headerQuotaPlanType).toBe('premium');
+    expect(row.headerQuotaUsedPercent).toBe(92);
+    expect(row.headerQuotaRecoverAtMs).toBe(1780000120000);
+    expect(row.headerErrorKind).toBe('rate_limit');
+    expect(row.headerErrorCode).toBe('usage_limit_reached');
+    expect(row.headerTraceId).toBe('req-metadata-only');
+    expect(row.searchText).toContain('usage_limit_reached');
+    expect(row.searchText).toContain('req-metadata-only');
+    expect(row.searchText).toContain('premium');
   });
 
   it('keeps shared provider display names available to realtime source cells', () => {

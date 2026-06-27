@@ -91,6 +91,7 @@ const createPresentationSnapshot = (id: string): MonitoringPresentationSnapshot 
       providers: [row.provider],
       models: [row.model],
       channels: [row.channel],
+      headerTraceIds: [],
     },
     filteredRows: [row],
     eventsHasMore: id.includes('more'),
@@ -245,11 +246,13 @@ describe('buildAccountRows', () => {
         timestampMs: Date.parse('2026-05-09T02:12:43.000Z'),
         authIndex: 'auth-999999',
         authIndexMasked: 'auth...9999',
+        sourceKey: 'source:beta',
       }),
     ]);
 
     expect(rows).toHaveLength(1);
     expect(rows[0].authIndices).toEqual(['auth-123456', 'auth-999999']);
+    expect(rows[0].sourceKeys).toEqual(['source:alpha', 'source:beta']);
   });
 });
 
@@ -453,9 +456,10 @@ describe('buildScopeFilteredRows', () => {
       }),
     ];
 
-    expect(
-      buildScopeFilteredRows(rows, { minLatencyMs: 10_000 }).map((row) => row.id)
-    ).toEqual(['slow-cache-hit', 'slow-cache-miss']);
+    expect(buildScopeFilteredRows(rows, { minLatencyMs: 10_000 }).map((row) => row.id)).toEqual([
+      'slow-cache-hit',
+      'slow-cache-miss',
+    ]);
     expect(buildScopeFilteredRows(rows, { cacheStatus: 'hit' }).map((row) => row.id)).toEqual([
       'fast-cache-hit',
       'slow-cache-hit',

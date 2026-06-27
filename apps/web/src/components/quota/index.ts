@@ -11,5 +11,8 @@ export {
   CODEX_CONFIG,
   KIMI_CONFIG,
   XAI_CONFIG,
+  buildObservedCodexQuotaState,
+  getQuotaStoreKey,
+  resolveQuotaDisplayState,
 } from './quotaConfigs';
 export type { QuotaConfig } from './quotaConfigs';

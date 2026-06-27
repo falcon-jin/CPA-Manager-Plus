@@ -3,6 +3,7 @@
  */
 
 import { create } from 'zustand';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import type {
   AntigravityQuotaState,
   ClaudeQuotaState,
@@ -10,6 +11,8 @@ import type {
   KimiQuotaState,
   XaiQuotaState,
 } from '@/types';
+import { obfuscatedStorage } from '@/services/storage/secureStorage';
+import { STORAGE_KEY_QUOTA_CACHE } from '@/utils/constants';
 
 type QuotaUpdater<T> = T | ((prev: T) => T);
 
@@ -34,38 +37,79 @@ const resolveUpdater = <T,>(updater: QuotaUpdater<T>, prev: T): T => {
   return updater;
 };
 
-export const useQuotaStore = create<QuotaStoreState>((set) => ({
+const emptyQuotaState = {
   antigravityQuota: {},
   claudeQuota: {},
   codexQuota: {},
   kimiQuota: {},
   xaiQuota: {},
-  setAntigravityQuota: (updater) =>
-    set((state) => ({
-      antigravityQuota: resolveUpdater(updater, state.antigravityQuota)
-    })),
-  setClaudeQuota: (updater) =>
-    set((state) => ({
-      claudeQuota: resolveUpdater(updater, state.claudeQuota)
-    })),
-  setCodexQuota: (updater) =>
-    set((state) => ({
-      codexQuota: resolveUpdater(updater, state.codexQuota)
-    })),
-  setKimiQuota: (updater) =>
-    set((state) => ({
-      kimiQuota: resolveUpdater(updater, state.kimiQuota)
-    })),
-  setXaiQuota: (updater) =>
-    set((state) => ({
-      xaiQuota: resolveUpdater(updater, state.xaiQuota)
-    })),
-  clearQuotaCache: () =>
-    set({
-      antigravityQuota: {},
-      claudeQuota: {},
-      codexQuota: {},
-      kimiQuota: {},
-      xaiQuota: {}
+};
+
+const filterPersistableCodexQuota = (
+  quota: Record<string, CodexQuotaState> | undefined
+): Record<string, CodexQuotaState> => {
+  if (!quota) return {};
+
+  return Object.fromEntries(
+    Object.entries(quota).filter(([, item]) => {
+      return item?.status === 'success' && item.observedFromUsageHeaders !== true;
     })
-}));
+  );
+};
+
+export const useQuotaStore = create<QuotaStoreState>()(
+  persist(
+    (set) => ({
+      ...emptyQuotaState,
+      setAntigravityQuota: (updater) =>
+        set((state) => ({
+          antigravityQuota: resolveUpdater(updater, state.antigravityQuota),
+        })),
+      setClaudeQuota: (updater) =>
+        set((state) => ({
+          claudeQuota: resolveUpdater(updater, state.claudeQuota),
+        })),
+      setCodexQuota: (updater) =>
+        set((state) => ({
+          codexQuota: resolveUpdater(updater, state.codexQuota),
+        })),
+      setKimiQuota: (updater) =>
+        set((state) => ({
+          kimiQuota: resolveUpdater(updater, state.kimiQuota),
+        })),
+      setXaiQuota: (updater) =>
+        set((state) => ({
+          xaiQuota: resolveUpdater(updater, state.xaiQuota),
+        })),
+      clearQuotaCache: () => set(emptyQuotaState),
+    }),
+    {
+      name: STORAGE_KEY_QUOTA_CACHE,
+      storage: createJSONStorage(() => ({
+        getItem: (name) => {
+          if (typeof localStorage === 'undefined') return null;
+          const data = obfuscatedStorage.getItem<Partial<QuotaStoreState>>(name);
+          return data ? JSON.stringify(data) : null;
+        },
+        setItem: (name, value) => {
+          if (typeof localStorage === 'undefined') return;
+          obfuscatedStorage.setItem(name, JSON.parse(value));
+        },
+        removeItem: (name) => {
+          if (typeof localStorage === 'undefined') return;
+          obfuscatedStorage.removeItem(name);
+        },
+      })),
+      partialize: (state) => ({
+        codexQuota: filterPersistableCodexQuota(state.codexQuota),
+      }),
+      merge: (persistedState, currentState) => {
+        const persisted = persistedState as Partial<QuotaStoreState> | undefined;
+        return {
+          ...currentState,
+          codexQuota: filterPersistableCodexQuota(persisted?.codexQuota),
+        };
+      },
+    }
+  )
+);

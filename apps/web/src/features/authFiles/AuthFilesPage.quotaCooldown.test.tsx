@@ -21,6 +21,7 @@ const { mocks } = vi.hoisted(() => {
       listCodexInspectionRuns: vi.fn(),
       getCodexInspectionRun: vi.fn(),
       getActiveQuotaCooldowns: vi.fn(),
+      getHeaderSnapshots: vi.fn(),
       panelFeatureAvailability: {
         checking: false,
         panelHostMode: 'manager_embedded' as const,
@@ -90,6 +91,9 @@ vi.mock('@/services/api/usageService', () => ({
     listCodexInspectionRuns: mocks.listCodexInspectionRuns,
     getCodexInspectionRun: mocks.getCodexInspectionRun,
     getActiveQuotaCooldowns: mocks.getActiveQuotaCooldowns,
+  },
+  monitoringAnalyticsApi: {
+    getHeaderSnapshots: mocks.getHeaderSnapshots,
   },
 }));
 
@@ -225,11 +229,38 @@ vi.mock('@/features/authFiles/components/AuthFileCard', () => ({
   AuthFileCard: (props: {
     file: { name: string };
     quotaCooldown?: { authFileName: string; recoverAtMs: number } | null;
+    codexDisplayQuota?: {
+      status?: string;
+      planType?: string | null;
+      observedFromUsageHeaders?: boolean;
+      windows?: Array<{ usedPercent?: number | null; limitWindowSeconds?: number | null }>;
+    };
   }) => {
     const cooldown = props.quotaCooldown
       ? `${props.quotaCooldown.authFileName}@${props.quotaCooldown.recoverAtMs}`
       : '';
-    return <div data-auth-card={props.file.name} data-quota-cooldown={cooldown} />;
+    const window = props.codexDisplayQuota?.windows?.[0];
+    return (
+      <div
+        data-auth-card={props.file.name}
+        data-quota-cooldown={cooldown}
+        data-codex-quota-status={props.codexDisplayQuota?.status ?? ''}
+        data-codex-quota-plan={props.codexDisplayQuota?.planType ?? ''}
+        data-codex-quota-observed={String(
+          props.codexDisplayQuota?.observedFromUsageHeaders ?? false
+        )}
+        data-codex-quota-window-percent={
+          window?.usedPercent === undefined || window.usedPercent === null
+            ? ''
+            : String(window.usedPercent)
+        }
+        data-codex-quota-window-seconds={
+          window?.limitWindowSeconds === undefined || window.limitWindowSeconds === null
+            ? ''
+            : String(window.limitWindowSeconds)
+        }
+      />
+    );
   },
 }));
 
@@ -298,6 +329,7 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
     mocks.getActiveQuotaCooldowns.mockReset();
     mocks.listCodexInspectionRuns.mockReset();
     mocks.getCodexInspectionRun.mockReset();
+    mocks.getHeaderSnapshots.mockReset();
     mocks.connectionStatus = 'connected';
     mocks.managementKey = 'test-key';
     mocks.pageTransitionStatus = 'current';
@@ -308,6 +340,12 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
     ]);
     mocks.listCodexInspectionRuns.mockResolvedValue({ items: [] });
     mocks.getCodexInspectionRun.mockResolvedValue({ run: { id: 1 }, results: [], logs: [] });
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 1_700_000_000_000,
+      from_ms: 1_700_000_000_000,
+      to_ms: 1_700_000_000_000,
+      items: [],
+    });
 
     setManagerServiceBase('http://manager.local:18317');
   });
@@ -340,6 +378,54 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
         'data-quota-cooldown'
       ]
     ).toBe('');
+  });
+
+  it('passes observed Codex quota from usage response headers to auth file cards', async () => {
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 1_700_000_000_000,
+      from_ms: 1_700_000_000_000,
+      to_ms: 1_700_000_000_000,
+      items: [
+        {
+          event_hash: 'event-1',
+          timestamp_ms: 1_700_000_000_000,
+          auth_file_snapshot: 'codex-one.json',
+          auth_provider_snapshot: 'codex',
+          response_metadata: {
+            quota: {
+              plan_type: 'free',
+              active_limit: 'premium',
+              primary: {
+                used_percent: 20,
+                reset_at_ms: 1_784_805_897_000,
+                window_minutes: 43_200,
+              },
+              credits_has_credits: false,
+              credits_unlimited: false,
+            },
+          },
+        },
+      ],
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        renderer!.root.findByProps({ 'data-auth-card': 'codex-one.json' }).props[
+          'data-codex-quota-status'
+        ]
+      ).toBe('success');
+    });
+
+    const card = renderer!.root.findByProps({ 'data-auth-card': 'codex-one.json' });
+    expect(card.props['data-codex-quota-plan']).toBe('free');
+    expect(card.props['data-codex-quota-observed']).toBe('true');
+    expect(card.props['data-codex-quota-window-percent']).toBe('20');
+    expect(card.props['data-codex-quota-window-seconds']).toBe('2592000');
   });
 
   it('clears stale cooldowns when managerServiceBase becomes empty', async () => {

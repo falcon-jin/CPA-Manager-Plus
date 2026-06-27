@@ -19,6 +19,7 @@ import { apiClient } from '@/services/api/client';
 import { usageServiceApi } from '@/services/api/usageService';
 import { useConfigStore } from './useConfigStore';
 import { useModelsStore } from './useModelsStore';
+import { useQuotaStore } from './useQuotaStore';
 import { useUsageServiceStore } from './useUsageServiceStore';
 import { detectApiBaseFromLocation, normalizeApiBase } from '@/utils/connection';
 
@@ -162,8 +163,16 @@ export const useAuthStore = create<AuthStoreState>()(
         const rememberPassword = credentials.rememberPassword ?? get().rememberPassword ?? false;
         const sessionMode = credentials.sessionMode ?? get().sessionMode;
         const sessionPanelBase = normalizeApiBase(credentials.sessionPanelBase || get().sessionPanelBase);
+        const previousApiBase = get().apiBase;
+        const previousManagementKey = get().managementKey;
+        const shouldClearQuotaCache =
+          Boolean(previousApiBase || previousManagementKey) &&
+          (previousApiBase !== apiBase || previousManagementKey !== managementKey);
 
         const markAuthenticated = (result: LoginResult = {}) => {
+          if (shouldClearQuotaCache) {
+            useQuotaStore.getState().clearQuotaCache();
+          }
           apiClient.setConfig({ apiBase, managementKey });
           set({
             isAuthenticated: true,
@@ -238,6 +247,7 @@ export const useAuthStore = create<AuthStoreState>()(
         restoreSessionPromise = null;
         useConfigStore.getState().clearCache();
         useModelsStore.getState().clearCache();
+        useQuotaStore.getState().clearQuotaCache();
         useUsageServiceStore.getState().clearUsageServiceConfig();
         apiClient.setConfig({ apiBase: '', managementKey: '' });
         set({

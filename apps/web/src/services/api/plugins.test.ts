@@ -76,6 +76,7 @@ describe('plugin API normalizers', () => {
     expect(result.plugins).toHaveLength(1);
     expect(result.plugins[0]).toMatchObject({
       id: 'demo',
+      oauthProvider: 'demo',
       enabled: false,
       effectiveEnabled: true,
       supportsOAuth: true,
@@ -86,6 +87,33 @@ describe('plugin API normalizers', () => {
     });
     expect(result.plugins[0]?.configFields[0]?.enumValues).toEqual(['fast', 'safe']);
     expect(result.plugins[0]?.menus[0]?.path).toBe('/plugins/demo/page');
+  });
+
+  it('normalizes explicit plugin OAuth providers without legacy fallback override', () => {
+    const result = normalizePluginList({
+      plugins: [
+        {
+          id: 'legacy-plugin',
+          supports_oauth: true,
+          oauth_provider: 'custom-oauth-provider',
+        },
+        {
+          id: 'no-provider',
+          supports_oauth: true,
+          oauth_provider: '',
+        },
+      ],
+    });
+
+    expect(result.plugins[0]).toMatchObject({
+      id: 'legacy-plugin',
+      oauthProvider: 'custom-oauth-provider',
+    });
+    expect(result.plugins[1]).toMatchObject({
+      id: 'no-provider',
+      supportsOAuth: true,
+    });
+    expect(result.plugins[1]?.oauthProvider).toBeUndefined();
   });
 
   it('normalizes plugin delete results', () => {

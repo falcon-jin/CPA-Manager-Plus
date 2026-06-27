@@ -745,6 +745,12 @@ describe('usage analytics adapters', () => {
           total_tokens: 100,
           latency_ms: 250,
           failed: false,
+          header_error_kind: 'rate_limit',
+          header_error_code: 'retry_after',
+          header_trace_id: 'req-header',
+          header_quota_plan_type: 'plus',
+          header_quota_used_percent: 87,
+          header_quota_recover_at_ms: 1780000060000,
         },
       ],
       [],
@@ -971,6 +977,12 @@ describe('usage analytics adapters', () => {
           total_tokens: 100,
           latency_ms: 250,
           failed: false,
+          header_error_kind: 'rate_limit',
+          header_error_code: 'retry_after',
+          header_trace_id: 'req-header',
+          header_quota_plan_type: 'plus',
+          header_quota_used_percent: 87,
+          header_quota_recover_at_ms: 1780000060000,
         },
       ],
       [
@@ -999,6 +1011,12 @@ describe('usage analytics adapters', () => {
       eventHash: 'event-a',
       model: 'gpt-4o',
       estimatedCost: 0.2,
+      headerErrorKind: 'rate_limit',
+      headerErrorCode: 'retry_after',
+      headerTraceId: 'req-header',
+      headerQuotaPlanType: 'plus',
+      headerQuotaUsedPercent: 87,
+      headerQuotaRecoverAtMs: 1780000060000,
     });
   });
 });

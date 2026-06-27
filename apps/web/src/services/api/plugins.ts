@@ -22,6 +22,14 @@ const asString = (value: unknown): string => {
 
 const asBoolean = (value: unknown): boolean => value === true;
 
+const hasOwn = (source: Record<string, unknown>, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(source, key);
+
+const normalizePluginOAuthProvider = (value: unknown): string | undefined => {
+  const provider = asString(value).trim();
+  return provider || undefined;
+};
+
 const normalizeConfigField = (value: unknown): PluginConfigField | null => {
   if (!isRecord(value)) return null;
   const name = asString(value.name).trim();
@@ -94,15 +102,22 @@ const normalizePluginEntry = (value: unknown): PluginListEntry | null => {
 
   const metadata = normalizeMetadata(value.metadata);
   const configFields = normalizeConfigFields(value.config_fields ?? value.configFields);
+  const supportsOAuth = asBoolean(value.supports_oauth ?? value.supportsOAuth);
+  const oauthProvider = normalizePluginOAuthProvider(value.oauth_provider ?? value.oauthProvider);
+  const legacyOAuthProvider =
+    supportsOAuth && !hasOwn(value, 'oauth_provider') && !hasOwn(value, 'oauthProvider')
+      ? normalizePluginOAuthProvider(id)
+      : undefined;
 
   return {
     id,
+    oauthProvider: oauthProvider ?? legacyOAuthProvider,
     path: asString(value.path).trim(),
     configured: asBoolean(value.configured),
     registered: asBoolean(value.registered),
     enabled: value.enabled !== false,
     effectiveEnabled: asBoolean(value.effective_enabled ?? value.effectiveEnabled),
-    supportsOAuth: asBoolean(value.supports_oauth ?? value.supportsOAuth),
+    supportsOAuth,
     logo: asString(value.logo || metadata?.logo).trim(),
     configFields: configFields.length > 0 ? configFields : (metadata?.configFields ?? []),
     menus: normalizeMenus(value.menus),

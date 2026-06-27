@@ -21,6 +21,7 @@ import { InspectionConfigDrawer } from '@/features/monitoring/components/Inspect
 import { InspectionConfigFields } from '@/features/monitoring/components/InspectionConfigFields';
 import { CodexReauthDialog } from '@/features/oauth/CodexReauthDialog';
 import type { CodexReauthTarget } from '@/features/oauth/codexReauthModel';
+import { formatPercent } from '@/features/monitoring/components/accountOverviewPresentation';
 import {
   type CodexInspectionAction,
   type CodexInspectionResultItem,
@@ -49,6 +50,7 @@ import {
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import {
   getUsageServiceErrorCode,
+  monitoringAnalyticsApi,
   usageServiceApi,
   type CodexInspectionLog,
   type CodexInspectionResult,
@@ -57,8 +59,19 @@ import {
   type ManagerCodexInspectionConfig,
   type ManagerCodexInspectionScheduleMode,
   type ManagerConfig,
+  type UsageHeaderSnapshot,
 } from '@/services/api/usageService';
 import { useAuthStore, useNotificationStore } from '@/stores';
+import {
+  buildUsageHeaderSnapshotLookup,
+  getHeaderSnapshotErrorCode,
+  getHeaderSnapshotErrorKind,
+  getHeaderSnapshotPlanType,
+  getHeaderSnapshotRecoverAtMs,
+  getHeaderSnapshotTraceId,
+  getHeaderSnapshotUsedPercent,
+  getUsageHeaderSnapshotForIdentity,
+} from '@/utils/usageHeaderSnapshots';
 import styles from './CodexInspectionPage.module.scss';
 
 type ServerCodexInspectionDraft = {
@@ -164,15 +177,20 @@ const resolveServerCodexConfig = (
           ? schedule.intervalMinutes
           : DEFAULT_SERVER_CODEX_CONFIG.schedule.intervalMinutes,
       timePoints: schedule.timePoints ?? DEFAULT_SERVER_CODEX_CONFIG.schedule.timePoints,
-      timeZone: typeof schedule.timeZone === 'string' ? schedule.timeZone : DEFAULT_SERVER_CODEX_CONFIG.schedule.timeZone,
+      timeZone:
+        typeof schedule.timeZone === 'string'
+          ? schedule.timeZone
+          : DEFAULT_SERVER_CODEX_CONFIG.schedule.timeZone,
     },
     targetType: config?.targetType || DEFAULT_SERVER_CODEX_CONFIG.targetType,
-    workers: config?.workers && config.workers > 0 ? config.workers : DEFAULT_SERVER_CODEX_CONFIG.workers,
+    workers:
+      config?.workers && config.workers > 0 ? config.workers : DEFAULT_SERVER_CODEX_CONFIG.workers,
     deleteWorkers:
       config?.deleteWorkers && config.deleteWorkers > 0
         ? config.deleteWorkers
         : DEFAULT_SERVER_CODEX_CONFIG.deleteWorkers,
-    timeout: config?.timeout && config.timeout > 0 ? config.timeout : DEFAULT_SERVER_CODEX_CONFIG.timeout,
+    timeout:
+      config?.timeout && config.timeout > 0 ? config.timeout : DEFAULT_SERVER_CODEX_CONFIG.timeout,
     retries:
       config?.retries !== undefined && config.retries >= 0
         ? config.retries
@@ -237,11 +255,7 @@ const parseTimePoints = (raw: string): string[] =>
 
 const normalizeTimePointList = (values: string[]): string[] =>
   Array.from(
-    new Set(
-      values
-        .map(normalizeTimePoint)
-        .filter((value): value is string => Boolean(value))
-    )
+    new Set(values.map(normalizeTimePoint).filter((value): value is string => Boolean(value)))
   ).sort();
 
 const readScheduleInteger = (raw: string, min: number): number | null => {
@@ -267,9 +281,7 @@ const createConfigFromDraft = (
     splitTimePointTokens(draft.timePoints).some((value) => normalizeTimePoint(value) === null);
   const timePoints = parseTimePoints(draft.timePoints);
 
-  if (
-    draft.scheduleMode === 'interval' && parsedIntervalMinutes === null
-  ) {
+  if (draft.scheduleMode === 'interval' && parsedIntervalMinutes === null) {
     return null;
   }
 
@@ -342,7 +354,10 @@ function getRunTone(run?: CodexInspectionRun | null): StatusTone {
   }
 }
 
-function getRunStatusLabel(run: CodexInspectionRun | null | undefined, t: ReturnType<typeof useTranslation>['t']) {
+function getRunStatusLabel(
+  run: CodexInspectionRun | null | undefined,
+  t: ReturnType<typeof useTranslation>['t']
+) {
   switch (run?.status) {
     case 'completed':
       return t('monitoring.codex_inspection_status_success');
@@ -355,15 +370,22 @@ function getRunStatusLabel(run: CodexInspectionRun | null | undefined, t: Return
   }
 }
 
-function formatDuration(run: CodexInspectionRun | null | undefined, t: ReturnType<typeof useTranslation>['t']) {
+function formatDuration(
+  run: CodexInspectionRun | null | undefined,
+  t: ReturnType<typeof useTranslation>['t']
+) {
   if (!run?.startedAtMs || !run.finishedAtMs) return t('common.not_set');
   const seconds = Math.max(0, Math.round((run.finishedAtMs - run.startedAtMs) / 1000));
   return t('monitoring.server_codex_inspection_duration_value', { seconds });
 }
 
-function formatTrigger(run: CodexInspectionRun | null | undefined, t: ReturnType<typeof useTranslation>['t']) {
+function formatTrigger(
+  run: CodexInspectionRun | null | undefined,
+  t: ReturnType<typeof useTranslation>['t']
+) {
   if (!run) return t('common.not_set');
-  if (run.triggerType === 'scheduled') return t('monitoring.server_codex_inspection_trigger_scheduled');
+  if (run.triggerType === 'scheduled')
+    return t('monitoring.server_codex_inspection_trigger_scheduled');
   return t('monitoring.server_codex_inspection_trigger_manual');
 }
 
@@ -395,7 +417,10 @@ function formatResultsDescription(
   return t('monitoring.server_codex_inspection_results_desc');
 }
 
-function formatSchedule(config: NormalizedServerCodexInspectionConfig, t: ReturnType<typeof useTranslation>['t']) {
+function formatSchedule(
+  config: NormalizedServerCodexInspectionConfig,
+  t: ReturnType<typeof useTranslation>['t']
+) {
   if (config.schedule.mode === 'time_points') {
     const base = t('monitoring.server_codex_inspection_schedule_time_points_value', {
       points: config.schedule.timePoints.join(', '),
@@ -512,12 +537,68 @@ function normalizeServerResultAction(action: string): CodexInspectionAction {
   return 'keep';
 }
 
+function formatObservedHeaderRecoverAt(value: number | null, locale: string) {
+  if (!value || !Number.isFinite(value)) return '';
+  return new Date(value).toLocaleString(locale, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function buildObservedHeaderEvidence(
+  snapshot: UsageHeaderSnapshot | undefined,
+  locale: string,
+  t: ReturnType<typeof useTranslation>['t']
+) {
+  if (!snapshot) return [];
+  const evidence: string[] = [];
+  const quotaParts = [
+    getHeaderSnapshotPlanType(snapshot),
+    (() => {
+      const usedPercent = getHeaderSnapshotUsedPercent(snapshot);
+      return typeof usedPercent === 'number' && Number.isFinite(usedPercent)
+        ? formatPercent(usedPercent / 100)
+        : '';
+    })(),
+    (() => {
+      const recoverAt = formatObservedHeaderRecoverAt(
+        getHeaderSnapshotRecoverAtMs(snapshot),
+        locale
+      );
+      return recoverAt ? `${t('monitoring.header_recover_at')} ${recoverAt}` : '';
+    })(),
+  ].filter(Boolean);
+  if (quotaParts.length > 0) {
+    evidence.push(`${t('monitoring.header_quota')}: ${quotaParts.join(' / ')}`);
+  }
+
+  const errorParts = [
+    getHeaderSnapshotErrorKind(snapshot),
+    getHeaderSnapshotErrorCode(snapshot),
+  ].filter(Boolean);
+  if (errorParts.length > 0) {
+    evidence.push(`${t('monitoring.header_error')}: ${errorParts.join(' / ')}`);
+  }
+
+  const traceId = getHeaderSnapshotTraceId(snapshot);
+  if (traceId) {
+    evidence.push(`${t('monitoring.header_trace')}: ${traceId}`);
+  }
+  return evidence;
+}
+
 function toServerResultItem(
   item: CodexInspectionResult,
-  t: ReturnType<typeof useTranslation>['t']
+  t: ReturnType<typeof useTranslation>['t'],
+  snapshot: UsageHeaderSnapshot | undefined,
+  locale: string
 ): CodexInspectionResultItem {
   const actionStatusLabel = formatServerActionStatusLabel(item, t);
   const reasonParts = [item.actionReason, actionStatusLabel].filter(Boolean);
+  const observedHeaderEvidence = buildObservedHeaderEvidence(snapshot, locale, t);
   return {
     key: `server-${item.id || item.accountKey}`,
     fileName: item.fileName,
@@ -546,6 +627,8 @@ function toServerResultItem(
     })),
     errorKind: item.errorKind,
     errorDetail: item.actionError || item.errorDetail || '',
+    observedHeaderEvidence,
+    observedHeaderAtMs: snapshot?.timestamp_ms ?? null,
   };
 }
 
@@ -602,6 +685,7 @@ export function ServerCodexInspectionPage() {
   const [draft, setDraft] = useState<ServerCodexInspectionDraft>(() => toDraft(null));
   const [runs, setRuns] = useState<CodexInspectionRun[]>([]);
   const [detail, setDetail] = useState<CodexInspectionRunDetail | null>(null);
+  const [headerSnapshots, setHeaderSnapshots] = useState<UsageHeaderSnapshot[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -614,7 +698,9 @@ export function ServerCodexInspectionPage() {
   const [resultPageSize, setResultPageSize] = useState<number>(
     CODEX_INSPECTION_RESULT_PAGE_SIZE_OPTIONS[0]
   );
-  const [logLevelFilter, setLogLevelFilter] = useState<'all' | 'info' | 'success' | 'warning' | 'error'>('all');
+  const [logLevelFilter, setLogLevelFilter] = useState<
+    'all' | 'info' | 'success' | 'warning' | 'error'
+  >('all');
   const [executingResultIds, setExecutingResultIds] = useState<Set<number>>(() => new Set());
   const [executingAllActions, setExecutingAllActions] = useState(false);
   const [configDrawerOpen, setConfigDrawerOpen] = useState(false);
@@ -653,6 +739,10 @@ export function ServerCodexInspectionPage() {
         managementKey,
         RUNS_LIMIT
       );
+      const snapshotsResponse = await monitoringAnalyticsApi
+        .getHeaderSnapshots(resolvedBase, managementKey, { days: 30, limit: 1000 })
+        .catch(() => ({ items: [] as UsageHeaderSnapshot[] }));
+      setHeaderSnapshots(snapshotsResponse.items ?? []);
       setRuns(runsResponse.items);
       const nextSelectedId = runsResponse.items[0]?.id;
       if (nextSelectedId) {
@@ -665,6 +755,7 @@ export function ServerCodexInspectionPage() {
       setError(getUsageServiceDisplayError(error, t));
       setRuns([]);
       setDetail(null);
+      setHeaderSnapshots([]);
       setSelectedRunId(null);
     } finally {
       setLoading(false);
@@ -710,10 +801,12 @@ export function ServerCodexInspectionPage() {
     [draftConfig]
   );
   const hasUnsavedChanges = Boolean(
-    managerConfig && (!normalizedDraftConfig || !configsEquivalent(selectedConfig, normalizedDraftConfig))
+    managerConfig &&
+    (!normalizedDraftConfig || !configsEquivalent(selectedConfig, normalizedDraftConfig))
   );
   const savedScheduleLabel = formatSchedule(selectedConfig, t);
-  const hasRunningRun = runs.some((run) => run.status === 'running') || detail?.run.status === 'running';
+  const hasRunningRun =
+    runs.some((run) => run.status === 'running') || detail?.run.status === 'running';
   const latestRun = runs[0] ?? null;
   const activeRun = detail?.run ?? latestRun;
   const activeTone = getRunTone(activeRun);
@@ -725,9 +818,25 @@ export function ServerCodexInspectionPage() {
     : 0;
 
   const resultRows = useMemo(() => detail?.results ?? [], [detail?.results]);
+  const headerSnapshotLookup = useMemo(
+    () => buildUsageHeaderSnapshotLookup(headerSnapshots),
+    [headerSnapshots]
+  );
   const resultItems = useMemo(
-    () => resultRows.map((item) => toServerResultItem(item, t)),
-    [resultRows, t]
+    () =>
+      resultRows.map((item) =>
+        toServerResultItem(
+          item,
+          t,
+          getUsageHeaderSnapshotForIdentity(headerSnapshotLookup, {
+            fileName: item.fileName,
+            authIndex: item.authIndex,
+            account: item.accountId || item.displayAccount,
+          }),
+          i18n.language
+        )
+      ),
+    [headerSnapshotLookup, i18n.language, resultRows, t]
   );
   const resultByKey = useMemo(() => {
     const map = new Map<string, CodexInspectionResult>();
@@ -798,54 +907,57 @@ export function ServerCodexInspectionPage() {
     setDraft((previous) => ({ ...previous, [key]: value }));
   };
 
-  const refreshRuns = useCallback(async (options?: { silent?: boolean }) => {
-    if (refreshInFlightRef.current) return;
-    refreshInFlightRef.current = true;
-    const silent = options?.silent ?? false;
-    if (!serviceBase) {
+  const refreshRuns = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (refreshInFlightRef.current) return;
+      refreshInFlightRef.current = true;
+      const silent = options?.silent ?? false;
+      if (!serviceBase) {
+        try {
+          await loadPageData();
+        } finally {
+          refreshInFlightRef.current = false;
+        }
+        return;
+      }
+      if (!silent) {
+        setLoading(true);
+        setError('');
+      }
       try {
-        await loadPageData();
+        const response = await usageServiceApi.listCodexInspectionRuns(
+          serviceBase,
+          managementKey,
+          RUNS_LIMIT
+        );
+        setRuns(response.items);
+        const selectionStillValid =
+          selectedRunId != null && response.items.some((run) => run.id === selectedRunId);
+        if (selectionStillValid) {
+          // 静默轮询时保留用户正在查看的历史详情,避免每 30s 重建详情导致结果表/日志
+          // 重渲染、打断操作;但正在运行的巡检或尚无详情时仍需刷新以获取最新进度。
+          const watchingRunning = detail?.run.status === 'running';
+          if (!silent || !detail || watchingRunning) {
+            await loadRunDetail(serviceBase, selectedRunId);
+          }
+        } else {
+          const fallbackId = response.items[0]?.id;
+          if (fallbackId) {
+            await loadRunDetail(serviceBase, fallbackId);
+          } else {
+            setDetail(null);
+            setSelectedRunId(null);
+          }
+        }
+      } catch (error: unknown) {
+        if (!silent) setError(getUsageServiceDisplayError(error, t));
       } finally {
+        if (!silent) setLoading(false);
         refreshInFlightRef.current = false;
       }
-      return;
-    }
-    if (!silent) {
-      setLoading(true);
-      setError('');
-    }
-    try {
-      const response = await usageServiceApi.listCodexInspectionRuns(
-        serviceBase,
-        managementKey,
-        RUNS_LIMIT
-      );
-      setRuns(response.items);
-      const selectionStillValid =
-        selectedRunId != null && response.items.some((run) => run.id === selectedRunId);
-      if (selectionStillValid) {
-        // 静默轮询时保留用户正在查看的历史详情,避免每 30s 重建详情导致结果表/日志
-        // 重渲染、打断操作;但正在运行的巡检或尚无详情时仍需刷新以获取最新进度。
-        const watchingRunning = detail?.run.status === 'running';
-        if (!silent || !detail || watchingRunning) {
-          await loadRunDetail(serviceBase, selectedRunId);
-        }
-      } else {
-        const fallbackId = response.items[0]?.id;
-        if (fallbackId) {
-          await loadRunDetail(serviceBase, fallbackId);
-        } else {
-          setDetail(null);
-          setSelectedRunId(null);
-        }
-      }
-    } catch (error: unknown) {
-      if (!silent) setError(getUsageServiceDisplayError(error, t));
-    } finally {
-      if (!silent) setLoading(false);
-      refreshInFlightRef.current = false;
-    }
-  }, [detail, loadPageData, loadRunDetail, managementKey, selectedRunId, serviceBase, t]);
+    },
+    [detail, loadPageData, loadRunDetail, managementKey, selectedRunId, serviceBase, t]
+  );
 
   useEffect(() => {
     if (!serviceBase || (!selectedConfig.enabled && !hasRunningRun)) return;
@@ -934,7 +1046,10 @@ export function ServerCodexInspectionPage() {
       showNotification(t('monitoring.server_codex_inspection_run_success'), 'success');
     } catch (error: unknown) {
       const message = getUsageServiceDisplayError(error, t);
-      showNotification(`${t('monitoring.server_codex_inspection_run_failed')}: ${message}`, 'error');
+      showNotification(
+        `${t('monitoring.server_codex_inspection_run_failed')}: ${message}`,
+        'error'
+      );
       await refreshRuns();
     } finally {
       setRunning(false);
@@ -1085,9 +1200,7 @@ export function ServerCodexInspectionPage() {
     });
 
     return (
-      <Panel
-        className={styles.statusPanel}
-      >
+      <Panel className={styles.statusPanel}>
         <div className={styles.statusBar}>
           <div className={styles.statusInfo}>
             <span className={`${styles.statusBadge} ${statusToneClass[activeTone]}`}>
@@ -1117,10 +1230,20 @@ export function ServerCodexInspectionPage() {
             </div>
           </div>
           <div className={styles.statusActions}>
-            <Button variant="secondary" size="sm" onClick={() => void refreshRuns()} loading={loading}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void refreshRuns()}
+              loading={loading}
+            >
               {t('common.refresh')}
             </Button>
-            <Button size="sm" onClick={handleRunNow} loading={running} disabled={!serviceBase || running}>
+            <Button
+              size="sm"
+              onClick={handleRunNow}
+              loading={running}
+              disabled={!serviceBase || running}
+            >
               {t('monitoring.server_codex_inspection_run_now')}
             </Button>
           </div>
@@ -1176,7 +1299,9 @@ export function ServerCodexInspectionPage() {
               key: 'delete',
               label: t('monitoring.codex_inspection_delete_count'),
               value: activeRun ? String(activeRun.deleteCount) : summaryBlankValue,
-              meta: t('monitoring.server_codex_inspection_action_total_value', { count: actionCounts }),
+              meta: t('monitoring.server_codex_inspection_action_total_value', {
+                count: actionCounts,
+              }),
               tone: 'bad',
               Icon: IconTrash2,
               accent: 'red' as const,
@@ -1310,7 +1435,11 @@ export function ServerCodexInspectionPage() {
               <span className={styles.serverFieldLabel}>
                 {t('monitoring.server_codex_inspection_schedule_mode')}
               </span>
-              <div className={styles.scheduleSegmented} role="tablist" aria-label={t('monitoring.server_codex_inspection_schedule_mode')}>
+              <div
+                className={styles.scheduleSegmented}
+                role="tablist"
+                aria-label={t('monitoring.server_codex_inspection_schedule_mode')}
+              >
                 {scheduleOptions.map((opt) => {
                   const active = draft.scheduleMode === opt.value;
                   return (
@@ -1392,7 +1521,11 @@ export function ServerCodexInspectionPage() {
       subtitle={t('monitoring.server_codex_inspection_history_desc')}
     >
       {runs.length > 0 ? (
-        <div className={styles.runHistoryList} role="tablist" aria-label={t('monitoring.server_codex_inspection_history_title')}>
+        <div
+          className={styles.runHistoryList}
+          role="tablist"
+          aria-label={t('monitoring.server_codex_inspection_history_title')}
+        >
           {runs.map((run) => {
             const tone = getRunTone(run);
             const selected = run.id === selectedRunId;
@@ -1416,31 +1549,44 @@ export function ServerCodexInspectionPage() {
                 </div>
                 <div className={styles.runHistoryCardMeta}>
                   <span>{formatTimestamp(run.startedAtMs, i18n.language)}</span>
-                  <span>{formatTrigger(run, t)} · {t('monitoring.codex_inspection_sampled_accounts')}: {run.sampledCount}</span>
+                  <span>
+                    {formatTrigger(run, t)} · {t('monitoring.codex_inspection_sampled_accounts')}:{' '}
+                    {run.sampledCount}
+                  </span>
                 </div>
                 <div className={styles.runHistoryCardActionPills}>
                   {run.deleteCount > 0 ? (
-                    <span className={`${styles.runHistoryCardPill} ${styles.runHistoryCardPillDelete}`}>
+                    <span
+                      className={`${styles.runHistoryCardPill} ${styles.runHistoryCardPillDelete}`}
+                    >
                       {t('monitoring.codex_inspection_action_delete')} {run.deleteCount}
                     </span>
                   ) : null}
                   {run.disableCount > 0 ? (
-                    <span className={`${styles.runHistoryCardPill} ${styles.runHistoryCardPillDisable}`}>
+                    <span
+                      className={`${styles.runHistoryCardPill} ${styles.runHistoryCardPillDisable}`}
+                    >
                       {t('monitoring.codex_inspection_action_disable')} {run.disableCount}
                     </span>
                   ) : null}
                   {run.enableCount > 0 ? (
-                    <span className={`${styles.runHistoryCardPill} ${styles.runHistoryCardPillEnable}`}>
+                    <span
+                      className={`${styles.runHistoryCardPill} ${styles.runHistoryCardPillEnable}`}
+                    >
                       {t('monitoring.codex_inspection_action_enable')} {run.enableCount}
                     </span>
                   ) : null}
                   {run.reauthCount > 0 ? (
-                    <span className={`${styles.runHistoryCardPill} ${styles.runHistoryCardPillReauth}`}>
+                    <span
+                      className={`${styles.runHistoryCardPill} ${styles.runHistoryCardPillReauth}`}
+                    >
                       {t('monitoring.codex_inspection_action_reauth')} {run.reauthCount}
                     </span>
                   ) : null}
                   {run.keepCount > 0 ? (
-                    <span className={`${styles.runHistoryCardPill} ${styles.runHistoryCardPillKeep}`}>
+                    <span
+                      className={`${styles.runHistoryCardPill} ${styles.runHistoryCardPillKeep}`}
+                    >
                       {t('monitoring.codex_inspection_action_keep')} {run.keepCount}
                     </span>
                   ) : null}
@@ -1450,7 +1596,9 @@ export function ServerCodexInspectionPage() {
           })}
         </div>
       ) : (
-        <div className={styles.emptyBlock}>{t('monitoring.server_codex_inspection_history_empty')}</div>
+        <div className={styles.emptyBlock}>
+          {t('monitoring.server_codex_inspection_history_empty')}
+        </div>
       )}
     </Panel>
   );
@@ -1532,7 +1680,9 @@ export function ServerCodexInspectionPage() {
     const renderOperation = (item: CodexInspectionResultItem) => {
       const source = resultByKey.get(item.key);
       if (!source) {
-        return <span className={styles.primaryReason}>{t('monitoring.codex_inspection_no_action')}</span>;
+        return (
+          <span className={styles.primaryReason}>{t('monitoring.codex_inspection_no_action')}</span>
+        );
       }
 
       const actionStatus = normalizeServerCodexInspectionActionStatus(source);
@@ -1655,7 +1805,12 @@ export function ServerCodexInspectionPage() {
       error: 0,
     };
     for (const entry of logs) {
-      if (entry.level === 'info' || entry.level === 'success' || entry.level === 'warning' || entry.level === 'error') {
+      if (
+        entry.level === 'info' ||
+        entry.level === 'success' ||
+        entry.level === 'warning' ||
+        entry.level === 'error'
+      ) {
         counts[entry.level] += 1;
       }
     }
@@ -1666,7 +1821,8 @@ export function ServerCodexInspectionPage() {
       { value: 'warning', label: t('monitoring.server_codex_inspection_log_level_warning') },
       { value: 'error', label: t('monitoring.server_codex_inspection_log_level_error') },
     ];
-    const filtered = logLevelFilter === 'all' ? logs : logs.filter((entry) => entry.level === logLevelFilter);
+    const filtered =
+      logLevelFilter === 'all' ? logs : logs.filter((entry) => entry.level === logLevelFilter);
     return (
       <Panel
         title={t('monitoring.codex_inspection_logs_title')}
@@ -1674,7 +1830,11 @@ export function ServerCodexInspectionPage() {
         extra={
           <div className={styles.logToolbar}>
             {logs.length > 0 ? (
-              <div className={styles.logFilterGroup} role="tablist" aria-label={t('monitoring.codex_inspection_logs_title')}>
+              <div
+                className={styles.logFilterGroup}
+                role="tablist"
+                aria-label={t('monitoring.codex_inspection_logs_title')}
+              >
                 <div className={styles.segmentedControl}>
                   {filterOptions.map((opt) => {
                     const active = logLevelFilter === opt.value;
@@ -1694,7 +1854,9 @@ export function ServerCodexInspectionPage() {
                   })}
                 </div>
               </div>
-            ) : <span />}
+            ) : (
+              <span />
+            )}
             <div className={styles.logToolbarRight}>
               <Button
                 variant="secondary"
@@ -1727,7 +1889,9 @@ export function ServerCodexInspectionPage() {
                   key={entry.id}
                   className={`${styles.logRow} ${logLevelClass[entry.level] ?? styles.logInfo}`}
                 >
-                  <span className={styles.logTime}>{formatTimestamp(entry.createdAtMs, i18n.language)}</span>
+                  <span className={styles.logTime}>
+                    {formatTimestamp(entry.createdAtMs, i18n.language)}
+                  </span>
                   <span className={styles.logMessage}>
                     {entry.message}
                     {entry.detail ? (
@@ -1741,7 +1905,9 @@ export function ServerCodexInspectionPage() {
                 </div>
               ))
             ) : (
-              <div className={styles.emptyBlockSmall}>{t('monitoring.codex_inspection_logs_empty')}</div>
+              <div className={styles.emptyBlockSmall}>
+                {t('monitoring.codex_inspection_logs_empty')}
+              </div>
             )}
           </div>
         ) : (
@@ -1761,7 +1927,12 @@ export function ServerCodexInspectionPage() {
         <div className={styles.topErrorBar} role="alert" aria-live="polite">
           <span>{error}</span>
           <div className={styles.topErrorActions}>
-            <Button variant="secondary" size="sm" onClick={() => void refreshRuns()} loading={loading}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void refreshRuns()}
+              loading={loading}
+            >
               {t('common.retry')}
             </Button>
           </div>
@@ -1771,7 +1942,11 @@ export function ServerCodexInspectionPage() {
       <div className={styles.serverDetailGrid}>
         {renderRunsPanel()}
         <div className={styles.serverDetailPanels}>
-          {detail?.run.error ? <div className={styles.serverError} role="alert">{detail.run.error}</div> : null}
+          {detail?.run.error ? (
+            <div className={styles.serverError} role="alert">
+              {detail.run.error}
+            </div>
+          ) : null}
           {renderResultsPanel()}
           {renderLogsPanel(detail?.logs ?? [])}
         </div>

@@ -33,6 +33,7 @@ import {
   useLanguageStore,
   useNotificationStore,
   useThemeStore,
+  useVisualEffectsStore,
 } from '@/stores';
 import { pluginsApi } from '@/services/api';
 import {
@@ -48,7 +49,7 @@ import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability
 import { isFileLogsAvailable } from '@/features/logs/logFeatureAvailability';
 import { LANGUAGE_LABEL_KEYS, LANGUAGE_ORDER, STORAGE_KEY_SIDEBAR } from '@/utils/constants';
 import { isSupportedLanguage } from '@/utils/language';
-import type { Theme } from '@/types';
+import type { Theme, VisualEffectsMode } from '@/types';
 
 const SIDEBAR_ICON_SIZE = 20;
 
@@ -151,6 +152,23 @@ const headerIcons = {
       <path d="M9.5 15v-2h2" />
     </svg>
   ),
+  visualEffectsFull: (
+    <svg {...headerIconProps}>
+      <path d="m12 3 1.85 5.15L19 10l-5.15 1.85L12 17l-1.85-5.15L5 10l5.15-1.85L12 3z" />
+      <path d="M5 3v4" />
+      <path d="M3 5h4" />
+      <path d="M19 17v4" />
+      <path d="M17 19h4" />
+    </svg>
+  ),
+  visualEffectsReduced: (
+    <svg {...headerIconProps}>
+      <path d="M4 14a8 8 0 0 1 16 0" />
+      <path d="M12 14l4-5" />
+      <path d="M8 14h8" />
+      <path d="M5 19h14" />
+    </svg>
+  ),
   logout: (
     <svg {...headerIconProps}>
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -168,6 +186,19 @@ const THEME_OPTIONS: Array<{
   { key: 'auto', labelKey: 'theme.auto', icon: headerIcons.autoTheme },
   { key: 'white', labelKey: 'theme.white', icon: headerIcons.sun },
   { key: 'dark', labelKey: 'theme.dark', icon: headerIcons.moon },
+];
+
+const VISUAL_EFFECTS_OPTIONS: Array<{
+  key: VisualEffectsMode;
+  labelKey: string;
+  icon: ReactNode;
+}> = [
+  { key: 'full', labelKey: 'visual_effects.full', icon: headerIcons.visualEffectsFull },
+  {
+    key: 'reduced',
+    labelKey: 'visual_effects.reduced',
+    icon: headerIcons.visualEffectsReduced,
+  },
 ];
 
 function PluginSidebarIcon({ src }: { src: string }) {
@@ -206,6 +237,8 @@ export function MainLayout() {
 
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
+  const visualEffectsMode = useVisualEffectsStore((state) => state.mode);
+  const setVisualEffectsMode = useVisualEffectsStore((state) => state.setMode);
   const language = useLanguageStore((state) => state.language);
   const setLanguage = useLanguageStore((state) => state.setLanguage);
 
@@ -219,10 +252,12 @@ export function MainLayout() {
   });
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const [visualEffectsMenuOpen, setVisualEffectsMenuOpen] = useState(false);
   const [pluginResources, setPluginResources] = useState<PluginResourceEntry[]>([]);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const languageMenuRef = useRef<HTMLDivElement | null>(null);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
+  const visualEffectsMenuRef = useRef<HTMLDivElement | null>(null);
   const headerRef = useRef<HTMLElement | null>(null);
 
   const fullBrandName = 'CPA Manager Plus';
@@ -346,14 +381,48 @@ export function MainLayout() {
     };
   }, [themeMenuOpen]);
 
+  useEffect(() => {
+    if (!visualEffectsMenuOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!visualEffectsMenuRef.current?.contains(event.target as Node)) {
+        setVisualEffectsMenuOpen(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setVisualEffectsMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [visualEffectsMenuOpen]);
+
   const toggleLanguageMenu = useCallback(() => {
     setLanguageMenuOpen((prev) => !prev);
     setThemeMenuOpen(false);
+    setVisualEffectsMenuOpen(false);
   }, []);
 
   const toggleThemeMenu = useCallback(() => {
     setThemeMenuOpen((prev) => !prev);
     setLanguageMenuOpen(false);
+    setVisualEffectsMenuOpen(false);
+  }, []);
+
+  const toggleVisualEffectsMenu = useCallback(() => {
+    setVisualEffectsMenuOpen((prev) => !prev);
+    setLanguageMenuOpen(false);
+    setThemeMenuOpen(false);
   }, []);
 
   const handleThemeSelect = useCallback(
@@ -362,6 +431,14 @@ export function MainLayout() {
       setThemeMenuOpen(false);
     },
     [setTheme]
+  );
+
+  const handleVisualEffectsSelect = useCallback(
+    (nextMode: VisualEffectsMode) => {
+      setVisualEffectsMode(nextMode);
+      setVisualEffectsMenuOpen(false);
+    },
+    [setVisualEffectsMode]
   );
 
   const handleLanguageSelect = useCallback(
@@ -469,9 +546,7 @@ export function MainLayout() {
         path: resource.route,
         label: resource.label,
         shortLabel: resource.label,
-        icon: (
-          <PluginSidebarIcon src={resolvePluginAssetURL(resource.pluginLogo, apiBase)} />
-        ),
+        icon: <PluginSidebarIcon src={resolvePluginAssetURL(resource.pluginLogo, apiBase)} />,
       }))
     : [];
   const navSections: NavItem[][] = [
@@ -763,6 +838,50 @@ export function MainLayout() {
               )}
             </div>
 
+            <div
+              className={`visual-effects-menu ${visualEffectsMenuOpen ? 'open' : ''}`}
+              ref={visualEffectsMenuRef}
+            >
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={toggleVisualEffectsMenu}
+                title={t('visual_effects.switch')}
+                aria-label={t('visual_effects.switch')}
+                aria-haspopup="menu"
+                aria-expanded={visualEffectsMenuOpen}
+              >
+                {visualEffectsMode === 'full'
+                  ? headerIcons.visualEffectsFull
+                  : headerIcons.visualEffectsReduced}
+              </Button>
+              {visualEffectsMenuOpen && (
+                <div
+                  className="notification entering visual-effects-menu-popover"
+                  role="menu"
+                  aria-label={t('visual_effects.switch')}
+                >
+                  {VISUAL_EFFECTS_OPTIONS.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      className={`visual-effects-option ${
+                        visualEffectsMode === option.key ? 'active' : ''
+                      }`}
+                      onClick={() => handleVisualEffectsSelect(option.key)}
+                      role="menuitemradio"
+                      aria-checked={visualEffectsMode === option.key}
+                      title={t(option.labelKey)}
+                      aria-label={t(option.labelKey)}
+                    >
+                      <span className="visual-effects-option-icon">{option.icon}</span>
+                      <span className="visual-effects-option-label">{t(option.labelKey)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <Button
               variant="ghost"
               size="sm"
@@ -809,9 +928,7 @@ export function MainLayout() {
                     to={item.path}
                     end={item.path === '/' || item.exact}
                     className={({ isActive }) =>
-                      `nav-item ${
-                        isActive || matchesNavPath(item, currentPath) ? 'active' : ''
-                      }`
+                      `nav-item ${isActive || matchesNavPath(item, currentPath) ? 'active' : ''}`
                     }
                     onClick={() => setSidebarOpen(false)}
                     title={item.label}

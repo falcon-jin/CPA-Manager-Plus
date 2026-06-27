@@ -53,6 +53,54 @@ func TestAccountActionCandidateFromEventUsesSafeEvidence(t *testing.T) {
 	}
 }
 
+func TestAccountActionCandidateFromEventUsesHeaderErrorCode(t *testing.T) {
+	event := usage.Event{
+		Failed:           true,
+		FailStatusCode:   http.StatusUnauthorized,
+		EventHash:        "evt-header-auth",
+		Provider:         "codex",
+		AuthFileSnapshot: "codex-auth.json",
+		AuthIndex:        "auth-1",
+		AccountSnapshot:  "user@example.com",
+		HeaderErrorKind:  "auth",
+		HeaderErrorCode:  "token_invalidated",
+		HeaderTraceID:    "req-header-auth",
+	}
+	candidate, ok := accountActionCandidateFromEvent(event, time.Now())
+	if !ok {
+		t.Fatal("candidate not detected")
+	}
+	if candidate.ActionType != model.AccountActionTypeReauth {
+		t.Fatalf("action type = %q", candidate.ActionType)
+	}
+	var evidence map[string]any
+	if err := json.Unmarshal([]byte(candidate.EvidenceJSON), &evidence); err != nil {
+		t.Fatalf("decode evidence: %v", err)
+	}
+	if evidence["headerErrorCode"] != "token_invalidated" || evidence["headerTraceId"] != "req-header-auth" {
+		t.Fatalf("evidence = %#v", evidence)
+	}
+}
+
+func TestAccountActionCandidateFromEventDeletesAccountDeactivatedHeader(t *testing.T) {
+	event := usage.Event{
+		Failed:           true,
+		FailStatusCode:   http.StatusUnauthorized,
+		EventHash:        "evt-header-deactivated",
+		Provider:         "codex",
+		AuthFileSnapshot: "codex-auth.json",
+		HeaderErrorKind:  "auth",
+		HeaderErrorCode:  "account_deactivated",
+	}
+	candidate, ok := accountActionCandidateFromEvent(event, time.Now())
+	if !ok {
+		t.Fatal("candidate not detected")
+	}
+	if candidate.ActionType != model.AccountActionTypeDelete {
+		t.Fatalf("action type = %q", candidate.ActionType)
+	}
+}
+
 func TestAccountActionCandidateWorkerSavesQueueOnly(t *testing.T) {
 	st, err := store.Open(t.TempDir() + "/usage.sqlite")
 	if err != nil {

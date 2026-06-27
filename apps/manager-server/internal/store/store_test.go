@@ -92,6 +92,120 @@ func TestStorePersistsAccountSnapshot(t *testing.T) {
 	}
 }
 
+func TestStoreBackfillsUsageResponseMetadata(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	rawJSON := `{"response_headers":{"Retry-After":["45"],"X-Codex-Plan-Type":["plus"],"X-OAI-Request-ID":["req-backfill"],"Set-Cookie":["session=secret"]}}`
+	if _, err := db.db.ExecContext(context.Background(), `insert into usage_events (
+		event_hash, timestamp_ms, timestamp, model, failed, fail_status_code, raw_json, created_at_ms
+	) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"event-backfill",
+		int64(1_778_000_000_000),
+		"2026-05-06T00:00:00Z",
+		"gpt-test",
+		1,
+		429,
+		rawJSON,
+		int64(1_778_000_000_100),
+	); err != nil {
+		t.Fatalf("insert legacy usage event: %v", err)
+	}
+
+	updated, err := db.BackfillUsageResponseMetadata(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("backfill response metadata: %v", err)
+	}
+	if updated != 1 {
+		t.Fatalf("updated = %d, want 1", updated)
+	}
+	updated, err = db.BackfillUsageResponseMetadata(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("second backfill response metadata: %v", err)
+	}
+	if updated != 0 {
+		t.Fatalf("second updated = %d, want 0", updated)
+	}
+
+	events, err := db.RecentEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("recent events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.ResponseMetadata == nil || event.ResponseMetadata.Errors == nil || event.ResponseMetadata.Quota == nil || event.ResponseMetadata.Trace == nil {
+		t.Fatalf("response metadata = %#v", event.ResponseMetadata)
+	}
+	if event.HeaderErrorKind != "rate_limit" || event.HeaderErrorCode != "retry_after" {
+		t.Fatalf("header error = %q/%q", event.HeaderErrorKind, event.HeaderErrorCode)
+	}
+	if event.HeaderQuotaPlanType != "plus" || event.HeaderTraceID != "req-backfill" {
+		t.Fatalf("header quota/trace = %q/%q", event.HeaderQuotaPlanType, event.HeaderTraceID)
+	}
+	if event.ResponseMetadata.Trace.PrimaryTraceID == "session=secret" {
+		t.Fatalf("response metadata leaked filtered cookie header: %#v", event.ResponseMetadata.Trace)
+	}
+}
+
+func TestStoreBackfillsCamelCaseUsageResponseMetadata(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	rawJSON := `{"responseHeaders":{"Retry-After":["30"],"X-Codex-Plan-Type":["team"],"X-OAI-Request-ID":["req-camel-backfill"]}}`
+	if _, err := db.db.ExecContext(context.Background(), `insert into usage_events (
+		event_hash, timestamp_ms, timestamp, model, failed, fail_status_code, raw_json, created_at_ms
+	) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"event-camel-backfill",
+		int64(1_778_000_000_000),
+		"2026-05-06T00:00:00Z",
+		"gpt-test",
+		1,
+		429,
+		rawJSON,
+		int64(1_778_000_000_100),
+	); err != nil {
+		t.Fatalf("insert camelCase legacy usage event: %v", err)
+	}
+
+	updated, err := db.BackfillUsageResponseMetadata(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("backfill camelCase response metadata: %v", err)
+	}
+	if updated != 1 {
+		t.Fatalf("updated = %d, want 1", updated)
+	}
+
+	events, err := db.RecentEvents(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("recent events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.ResponseMetadata == nil || event.ResponseMetadata.Errors == nil || event.ResponseMetadata.Quota == nil || event.ResponseMetadata.Trace == nil {
+		t.Fatalf("response metadata = %#v", event.ResponseMetadata)
+	}
+	if event.HeaderErrorKind != "rate_limit" || event.HeaderErrorCode != "retry_after" {
+		t.Fatalf("header error = %q/%q", event.HeaderErrorKind, event.HeaderErrorCode)
+	}
+	if event.HeaderQuotaPlanType != "team" || event.HeaderTraceID != "req-camel-backfill" {
+		t.Fatalf("header quota/trace = %q/%q", event.HeaderQuotaPlanType, event.HeaderTraceID)
+	}
+}
+
 func TestStorePersistsRequestedAndResolvedModels(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "usage.sqlite"))
 	if err != nil {

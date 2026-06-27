@@ -223,7 +223,7 @@
 }
 
 .statusMeta .statusMetaHost {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   color: var(--inspect-ink);
   background: transparent;
   border: 1px solid color-mix(in srgb, var(--inspect-line) 75%, transparent);
@@ -902,6 +902,13 @@
 
 .primaryReason {
   color: var(--inspect-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.primaryEvidence {
+  color: var(--inspect-accent-strong);
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;

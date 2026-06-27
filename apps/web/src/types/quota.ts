@@ -173,6 +173,19 @@ export interface CodexRateLimitResetCreditsInfo {
   availableCount?: number | string;
 }
 
+export interface CodexRateLimitResetCredit {
+  id: string;
+  status: string;
+  grantedAt: string;
+  expiresAt: string;
+}
+
+export interface CodexResetCreditsSummary {
+  availableCount: number | null;
+  credits: CodexRateLimitResetCredit[];
+  invalidPayload: boolean;
+}
+
 export interface CodexUsagePayload {
   user_id?: string;
   userId?: string;
@@ -304,10 +317,28 @@ export interface CodexQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   windows: CodexQuotaWindow[];
   planType?: string | null;
+  activeLimit?: string | null;
+  creditsHasCredits?: boolean | null;
+  creditsUnlimited?: boolean | null;
+  creditsBalance?: string | null;
+  rateLimitReachedType?: string | null;
+  primaryOverSecondaryLimitPercent?: number | null;
   subscriptionActiveUntil?: string | null;
   rateLimitResetCreditsAvailableCount?: number | null;
+  rateLimitResetCredits?: CodexRateLimitResetCredit[];
+  rateLimitResetCreditsError?: string | null;
+  authFileKey?: string;
+  authFileName?: string;
+  authIndex?: string | null;
+  fetchedAtMs?: number;
   error?: string;
   errorStatus?: number;
+  observedFromUsageHeaders?: boolean;
+  observedResetCreditsUnknown?: boolean;
+  observedAtMs?: number;
+  observedTraceId?: string;
+  observedErrorKind?: string;
+  observedErrorCode?: string;
 }
 
 // Kimi API payload types

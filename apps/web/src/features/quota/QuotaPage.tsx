@@ -5,8 +5,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
+import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { useAuthStore } from '@/stores';
 import { authFilesApi, configFileApi } from '@/services/api';
+import {
+  monitoringAnalyticsApi,
+  type UsageHeaderSnapshot,
+} from '@/services/api/usageService';
+import { buildUsageHeaderSnapshotLookup } from '@/utils/usageHeaderSnapshots';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { IconSearch } from '@/components/ui/icons';
@@ -38,6 +44,9 @@ import styles from './QuotaPage.module.scss';
 export function QuotaPage() {
   const { t } = useTranslation();
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
+  const managementKey = useAuthStore((state) => state.managementKey);
+  const featureAvailability = usePanelFeatureAvailability();
+  const managerServiceBase = featureAvailability.managerServiceBase;
   const initialUiState = useRef(readQuotaPageUiState());
 
   const [files, setFiles] = useState<AuthFileItem[]>([]);
@@ -49,6 +58,7 @@ export function QuotaPage() {
     ...initialUiState.current.sectionViewModes,
   }));
   const [codexReauthTarget, setCodexReauthTarget] = useState<CodexReauthTarget | null>(null);
+  const [headerSnapshots, setHeaderSnapshots] = useState<UsageHeaderSnapshot[]>([]);
   const [accountDisplayModes, setAccountDisplayModes] = useState(() => ({
     ...initialUiState.current.accountDisplayModes,
   }));
@@ -87,16 +97,38 @@ export function QuotaPage() {
     }
   }, [t]);
 
+  const loadHeaderSnapshots = useCallback(async () => {
+    if (!managerServiceBase) {
+      setHeaderSnapshots([]);
+      return;
+    }
+    try {
+      const response = await monitoringAnalyticsApi.getHeaderSnapshots(managerServiceBase, managementKey, {
+        days: 30,
+        limit: 1000,
+      });
+      setHeaderSnapshots(response.items ?? []);
+    } catch {
+      setHeaderSnapshots((current) => current);
+    }
+  }, [managementKey, managerServiceBase]);
+
   const handleHeaderRefresh = useCallback(async () => {
-    await Promise.all([loadConfig(), loadFiles()]);
-  }, [loadConfig, loadFiles]);
+    await Promise.all([loadConfig(), loadFiles(), loadHeaderSnapshots()]);
+  }, [loadConfig, loadFiles, loadHeaderSnapshots]);
 
   useHeaderRefresh(handleHeaderRefresh);
 
   useEffect(() => {
     loadFiles();
     loadConfig();
-  }, [loadFiles, loadConfig]);
+    loadHeaderSnapshots();
+  }, [loadFiles, loadConfig, loadHeaderSnapshots]);
+
+  const headerSnapshotLookup = useMemo(
+    () => buildUsageHeaderSnapshotLookup(headerSnapshots),
+    [headerSnapshots]
+  );
 
   useEffect(() => {
     writeQuotaPageUiState({
@@ -185,6 +217,7 @@ export function QuotaPage() {
         onReauthAccount={(file) => setCodexReauthTarget(createCodexReauthTargetFromAuthFile(file))}
         accountDisplayMode={getAccountDisplayMode(CODEX_CONFIG.type)}
         onAccountDisplayModeChange={(mode) => setAccountDisplayMode(CODEX_CONFIG.type, mode)}
+        headerSnapshotLookup={headerSnapshotLookup}
       />
       <QuotaSection
         config={CLAUDE_CONFIG}

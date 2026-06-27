@@ -51,6 +51,13 @@ func Migrate(db *sql.DB) error {
 			failed integer not null default 0,
 			fail_status_code integer,
 			fail_summary text,
+			response_metadata_json text,
+			header_quota_recover_at_ms integer,
+			header_quota_used_percent real,
+			header_quota_plan_type text,
+			header_error_kind text,
+			header_error_code text,
+			header_trace_id text,
 			fail_body text,
 			raw_json text,
 			created_at_ms integer not null
@@ -404,6 +411,13 @@ func ensureUsageEventSnapshotColumns(db *sql.DB) error {
 		{name: "ttft_ms", definition: "integer"},
 		{name: "fail_status_code", definition: "integer"},
 		{name: "fail_summary", definition: "text"},
+		{name: "response_metadata_json", definition: "text"},
+		{name: "header_quota_recover_at_ms", definition: "integer"},
+		{name: "header_quota_used_percent", definition: "real"},
+		{name: "header_quota_plan_type", definition: "text"},
+		{name: "header_error_kind", definition: "text"},
+		{name: "header_error_code", definition: "text"},
+		{name: "header_trace_id", definition: "text"},
 		{name: "fail_body", definition: "text"},
 	}
 	for _, column := range columns {
@@ -415,6 +429,15 @@ func ensureUsageEventSnapshotColumns(db *sql.DB) error {
 			column.name,
 			column.definition,
 		)); err != nil {
+			return err
+		}
+	}
+	for _, statement := range []string{
+		`create index if not exists idx_usage_events_header_quota_recover on usage_events(header_quota_recover_at_ms)`,
+		`create index if not exists idx_usage_events_header_error_kind on usage_events(header_error_kind)`,
+		`create index if not exists idx_usage_events_header_trace_id on usage_events(header_trace_id)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
 			return err
 		}
 	}

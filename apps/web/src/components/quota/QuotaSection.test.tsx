@@ -1,9 +1,10 @@
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthFileItem } from '@/types';
 import type { QuotaConfig } from './quotaConfigs';
 import { QuotaSection } from './QuotaSection';
+import { useQuotaLoader } from './useQuotaLoader';
 
 type TestQuotaState = {
   status: 'idle' | 'loading' | 'success' | 'error';
@@ -11,6 +12,7 @@ type TestQuotaState = {
   error?: string;
   errorStatus?: number;
   rateLimitResetCreditsAvailableCount?: number | null;
+  authFileKey?: string;
 };
 
 type TestQuotaData = {
@@ -75,6 +77,13 @@ const successQuota: TestQuotaState = {
   rateLimitResetCreditsAvailableCount: 2,
 };
 
+const authScopedSuccessQuota: TestQuotaState & { authFileKey: string } = {
+  ...successQuota,
+  authFileKey: `${FULL_FILE_NAME}::0`,
+};
+
+const getTestAuthFileKey = (file: AuthFileItem): string => `${file.name}::${file.authIndex ?? '-'}`;
+
 const testConfig: QuotaConfig<TestQuotaState, TestQuotaData> = {
   type: 'codex',
   i18nPrefix: 'codex_quota',
@@ -104,6 +113,34 @@ const testConfig: QuotaConfig<TestQuotaState, TestQuotaData> = {
   renderQuotaItems: () => <div>quota loaded</div>,
 };
 
+const createScopedTestConfig = (): QuotaConfig<TestQuotaState, TestQuotaData> => ({
+  ...testConfig,
+  getStoreKey: getTestAuthFileKey,
+  buildLoadingState: (file) => ({
+    status: 'loading',
+    windows: [],
+    authFileKey: file ? getTestAuthFileKey(file) : undefined,
+  }),
+  buildSuccessState: (data, file) => ({
+    status: 'success',
+    windows: [],
+    rateLimitResetCreditsAvailableCount: data.resetCredits,
+    authFileKey: file ? getTestAuthFileKey(file) : undefined,
+  }),
+  buildErrorState: (message, status, file) => ({
+    status: 'error',
+    windows: [],
+    error: message,
+    errorStatus: status,
+    authFileKey: file ? getTestAuthFileKey(file) : undefined,
+  }),
+  scopeState: (file, quota) => {
+    if (!quota) return undefined;
+    if (!quota.authFileKey) return quota;
+    return quota.authFileKey === getTestAuthFileKey(file) ? quota : undefined;
+  },
+});
+
 const getText = (node: ReactTestInstance): string =>
   node.children
     .map((child) => {
@@ -112,13 +149,18 @@ const getText = (node: ReactTestInstance): string =>
     })
     .join('');
 
-const renderSection = () => {
+const renderSection = (
+  options: {
+    config?: QuotaConfig<TestQuotaState, TestQuotaData>;
+    files?: AuthFileItem[];
+  } = {}
+) => {
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
       <QuotaSection
-        config={testConfig}
-        files={[testFile]}
+        config={options.config ?? testConfig}
+        files={options.files ?? [testFile]}
         loading={false}
         disabled={false}
         accountDisplayMode="masked"
@@ -133,6 +175,28 @@ const findButtonByText = (renderer: ReactTestRenderer, text: string) => {
   if (!button) throw new Error(`Button not found: ${text}`);
   return button;
 };
+
+const findButtonsByText = (renderer: ReactTestRenderer, text: string) =>
+  renderer.root.findAllByType('button').filter((node) => getText(node).includes(text));
+
+let runLoadQuota:
+  | ((targets: AuthFileItem[], setLoading?: (loading: boolean) => void) => Promise<void>)
+  | undefined;
+
+function QuotaLoaderHarness({
+  config,
+  onLoadQuota,
+}: {
+  config: QuotaConfig<TestQuotaState, TestQuotaData>;
+  onLoadQuota: (loadQuota: typeof runLoadQuota) => void;
+}) {
+  const { loadQuota } = useQuotaLoader(config);
+  useEffect(() => {
+    onLoadQuota((targets, setLoading = vi.fn()) => loadQuota(targets, 'all', setLoading));
+    return () => onLoadQuota(undefined);
+  }, [loadQuota, onLoadQuota]);
+  return null;
+}
 
 describe('QuotaSection account display mode', () => {
   beforeEach(() => {
@@ -217,5 +281,72 @@ describe('QuotaSection account display mode', () => {
     const message = String(mocks.showNotification.mock.calls[0]?.[0] ?? '');
     expect(message).toContain(MASKED_FILE_NAME);
     expect(message).not.toContain(FULL_FILE_NAME);
+  });
+
+  it('scopes same-name quota cache by auth file identity', () => {
+    const scopedConfig = createScopedTestConfig();
+    const files: AuthFileItem[] = [
+      { ...testFile, authIndex: 0 },
+      { ...testFile, authIndex: 1 },
+    ];
+    mocks.quotaStoreState.codexQuota = {
+      [getTestAuthFileKey(files[0])]: authScopedSuccessQuota,
+    };
+
+    const renderer = renderSection({ config: scopedConfig, files });
+
+    const quotaItems = renderer.root
+      .findAllByType('div')
+      .filter((node) => getText(node) === 'quota loaded');
+    expect(quotaItems).toHaveLength(1);
+    expect(findButtonsByText(renderer, 'codex_quota.reset_action_button')).toHaveLength(1);
+  });
+
+  it('stores bulk same-name quota results by auth file identity', async () => {
+    const scopedConfig = createScopedTestConfig();
+    const files: AuthFileItem[] = [
+      { ...testFile, authIndex: 0 },
+      { ...testFile, authIndex: 1 },
+    ];
+    mocks.quotaStoreState.codexQuota = {};
+    mocks.fetchQuota.mockImplementation(async (file: AuthFileItem) => ({
+      resetCredits: file.authIndex === 0 ? 1 : 2,
+    }));
+
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <QuotaLoaderHarness
+          config={scopedConfig}
+          onLoadQuota={(nextLoadQuota) => {
+            runLoadQuota = nextLoadQuota;
+          }}
+        />
+      );
+    });
+
+    await act(async () => {
+      await runLoadQuota?.(files);
+    });
+
+    expect(mocks.quotaStoreState.codexQuota).toMatchObject({
+      [getTestAuthFileKey(files[0])]: {
+        status: 'success',
+        rateLimitResetCreditsAvailableCount: 1,
+        authFileKey: getTestAuthFileKey(files[0]),
+      },
+      [getTestAuthFileKey(files[1])]: {
+        status: 'success',
+        rateLimitResetCreditsAvailableCount: 2,
+        authFileKey: getTestAuthFileKey(files[1]),
+      },
+    });
+    expect(
+      (mocks.quotaStoreState.codexQuota as Record<string, unknown>)[FULL_FILE_NAME]
+    ).toBeUndefined();
+
+    act(() => {
+      renderer.unmount();
+    });
   });
 });

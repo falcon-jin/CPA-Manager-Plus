@@ -10,14 +10,19 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/pricing"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
 const (
-	defaultEventsLimit    = 100
-	defaultDrilldownLimit = 20
-	maxEventsLimit        = 50000
-	maxDrilldownLimit     = 100
-	recentWindowMS        = 30 * 60 * 1000
+	defaultEventsLimit         = 100
+	defaultDrilldownLimit      = 20
+	defaultHeaderSnapshotDays  = 30
+	defaultHeaderSnapshotLimit = 1000
+	maxEventsLimit             = 50000
+	maxDrilldownLimit          = 100
+	maxHeaderSnapshotDays      = 365
+	maxHeaderSnapshotLimit     = 5000
+	recentWindowMS             = 30 * 60 * 1000
 )
 
 type Service struct {
@@ -40,19 +45,23 @@ type Request struct {
 }
 
 type Filters struct {
-	Models        []string `json:"models"`
-	Providers     []string `json:"providers"`
-	Accounts      []string `json:"accounts"`
-	AuthFiles     []string `json:"auth_files"`
-	AuthIndices   []string `json:"auth_indices"`
-	APIKeyHashes  []string `json:"api_key_hashes"`
-	SourceHashes  []string `json:"source_hashes"`
-	ProjectIDs    []string `json:"project_ids"`
-	RequestTypes  []string `json:"request_types"`
-	IncludeFailed *bool    `json:"include_failed"`
-	FailedOnly    bool     `json:"failed_only"`
-	MinLatencyMS  int64    `json:"min_latency_ms"`
-	CacheStatus   string   `json:"cache_status"`
+	Models           []string `json:"models"`
+	Providers        []string `json:"providers"`
+	Accounts         []string `json:"accounts"`
+	AuthFiles        []string `json:"auth_files"`
+	AuthIndices      []string `json:"auth_indices"`
+	APIKeyHashes     []string `json:"api_key_hashes"`
+	SourceHashes     []string `json:"source_hashes"`
+	ProjectIDs       []string `json:"project_ids"`
+	RequestTypes     []string `json:"request_types"`
+	HeaderErrorKinds []string `json:"header_error_kinds"`
+	HeaderErrorCodes []string `json:"header_error_codes"`
+	HeaderQuotaPlans []string `json:"header_quota_plans"`
+	HeaderTraceIDs   []string `json:"header_trace_ids"`
+	IncludeFailed    *bool    `json:"include_failed"`
+	FailedOnly       bool     `json:"failed_only"`
+	MinLatencyMS     int64    `json:"min_latency_ms"`
+	CacheStatus      string   `json:"cache_status"`
 }
 
 type Include struct {
@@ -112,6 +121,18 @@ type Response struct {
 	RecentFailures     []RecentFailure           `json:"recent_failures,omitempty"`
 	Events             *EventsResponse           `json:"events,omitempty"`
 	DrilldownPreview   *EventsResponse           `json:"drilldown_preview,omitempty"`
+}
+
+type HeaderSnapshotsRequest struct {
+	Days  int
+	Limit int
+}
+
+type HeaderSnapshotsResponse struct {
+	GeneratedAtMS int64            `json:"generated_at_ms"`
+	FromMS        int64            `json:"from_ms"`
+	ToMS          int64            `json:"to_ms"`
+	Items         []HeaderSnapshot `json:"items"`
 }
 
 type Summary struct {
@@ -420,14 +441,18 @@ type APIKeyContextRow struct {
 }
 
 type FilterOptions struct {
-	AccountStats []AccountStatRow  `json:"account_stats,omitempty"`
-	APIKeyStats  []APIKeyStatRow   `json:"api_key_stats,omitempty"`
-	ChannelShare []ChannelShareRow `json:"channel_share,omitempty"`
-	ModelStats   []ModelStat       `json:"model_stats,omitempty"`
-	Providers    []string          `json:"providers,omitempty"`
-	AuthFiles    []string          `json:"auth_files,omitempty"`
-	ProjectIDs   []string          `json:"project_ids,omitempty"`
-	RequestTypes []string          `json:"request_types,omitempty"`
+	AccountStats     []AccountStatRow  `json:"account_stats,omitempty"`
+	APIKeyStats      []APIKeyStatRow   `json:"api_key_stats,omitempty"`
+	ChannelShare     []ChannelShareRow `json:"channel_share,omitempty"`
+	ModelStats       []ModelStat       `json:"model_stats,omitempty"`
+	Providers        []string          `json:"providers,omitempty"`
+	AuthFiles        []string          `json:"auth_files,omitempty"`
+	ProjectIDs       []string          `json:"project_ids,omitempty"`
+	RequestTypes     []string          `json:"request_types,omitempty"`
+	HeaderErrorKinds []string          `json:"header_error_kinds,omitempty"`
+	HeaderErrorCodes []string          `json:"header_error_codes,omitempty"`
+	HeaderQuotaPlans []string          `json:"header_quota_plans,omitempty"`
+	HeaderTraceIDs   []string          `json:"header_trace_ids,omitempty"`
 }
 
 type TaskBucketRow struct {
@@ -453,20 +478,47 @@ type TaskBucketRow struct {
 }
 
 type RecentFailure struct {
-	TimestampMS           int64  `json:"timestamp_ms"`
-	Model                 string `json:"model"`
-	APIKeyHash            string `json:"api_key_hash"`
-	Source                string `json:"source,omitempty"`
-	SourceHash            string `json:"source_hash"`
-	AuthIndex             string `json:"auth_index"`
-	AccountSnapshot       string `json:"account_snapshot,omitempty"`
-	AuthLabelSnapshot     string `json:"auth_label_snapshot,omitempty"`
-	AuthProviderSnapshot  string `json:"auth_provider_snapshot,omitempty"`
-	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
-	Endpoint              string `json:"endpoint"`
-	DurationMS            *int64 `json:"duration_ms"`
-	FailStatusCode        *int64 `json:"fail_status_code,omitempty"`
-	FailSummary           string `json:"fail_summary,omitempty"`
+	TimestampMS            int64                         `json:"timestamp_ms"`
+	Model                  string                        `json:"model"`
+	APIKeyHash             string                        `json:"api_key_hash"`
+	Source                 string                        `json:"source,omitempty"`
+	SourceHash             string                        `json:"source_hash"`
+	AuthIndex              string                        `json:"auth_index"`
+	AccountSnapshot        string                        `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot      string                        `json:"auth_label_snapshot,omitempty"`
+	AuthProviderSnapshot   string                        `json:"auth_provider_snapshot,omitempty"`
+	AuthProjectIDSnapshot  string                        `json:"auth_project_id_snapshot,omitempty"`
+	Endpoint               string                        `json:"endpoint"`
+	DurationMS             *int64                        `json:"duration_ms"`
+	FailStatusCode         *int64                        `json:"fail_status_code,omitempty"`
+	FailSummary            string                        `json:"fail_summary,omitempty"`
+	ResponseMetadata       *usage.ResponseHeaderMetadata `json:"response_metadata,omitempty"`
+	HeaderQuotaRecoverAtMS *int64                        `json:"header_quota_recover_at_ms,omitempty"`
+	HeaderQuotaUsedPercent *float64                      `json:"header_quota_used_percent,omitempty"`
+	HeaderQuotaPlanType    string                        `json:"header_quota_plan_type,omitempty"`
+	HeaderErrorKind        string                        `json:"header_error_kind,omitempty"`
+	HeaderErrorCode        string                        `json:"header_error_code,omitempty"`
+	HeaderTraceID          string                        `json:"header_trace_id,omitempty"`
+}
+
+type HeaderSnapshot struct {
+	EventHash              string                        `json:"event_hash"`
+	TimestampMS            int64                         `json:"timestamp_ms"`
+	AuthFileSnapshot       string                        `json:"auth_file_snapshot,omitempty"`
+	AuthIndex              string                        `json:"auth_index,omitempty"`
+	AccountSnapshot        string                        `json:"account_snapshot,omitempty"`
+	AuthLabelSnapshot      string                        `json:"auth_label_snapshot,omitempty"`
+	AuthProviderSnapshot   string                        `json:"auth_provider_snapshot,omitempty"`
+	AuthProjectIDSnapshot  string                        `json:"auth_project_id_snapshot,omitempty"`
+	Source                 string                        `json:"source,omitempty"`
+	SourceHash             string                        `json:"source_hash,omitempty"`
+	ResponseMetadata       *usage.ResponseHeaderMetadata `json:"response_metadata,omitempty"`
+	HeaderQuotaRecoverAtMS *int64                        `json:"header_quota_recover_at_ms,omitempty"`
+	HeaderQuotaUsedPercent *float64                      `json:"header_quota_used_percent,omitempty"`
+	HeaderQuotaPlanType    string                        `json:"header_quota_plan_type,omitempty"`
+	HeaderErrorKind        string                        `json:"header_error_kind,omitempty"`
+	HeaderErrorCode        string                        `json:"header_error_code,omitempty"`
+	HeaderTraceID          string                        `json:"header_trace_id,omitempty"`
 }
 
 type EventsResponse struct {
@@ -478,38 +530,45 @@ type EventsResponse struct {
 }
 
 type EventRow struct {
-	RequestID             string `json:"request_id,omitempty"`
-	EventHash             string `json:"event_hash"`
-	TimestampMS           int64  `json:"timestamp_ms"`
-	Model                 string `json:"model"`
-	ResolvedModel         string `json:"resolved_model,omitempty"`
-	Endpoint              string `json:"endpoint"`
-	Method                string `json:"method"`
-	Path                  string `json:"path"`
-	AuthIndex             string `json:"auth_index"`
-	Source                string `json:"source"`
-	SourceHash            string `json:"source_hash"`
-	APIKeyHash            string `json:"api_key_hash"`
-	AccountSnapshot       string `json:"account_snapshot"`
-	AuthLabelSnapshot     string `json:"auth_label_snapshot"`
-	AuthFileSnapshot      string `json:"auth_file_snapshot,omitempty"`
-	AuthProviderSnapshot  string `json:"auth_provider_snapshot"`
-	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
-	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
-	ServiceTier           string `json:"service_tier,omitempty"`
-	ExecutorType          string `json:"executor_type,omitempty"`
-	InputTokens           int64  `json:"input_tokens"`
-	OutputTokens          int64  `json:"output_tokens"`
-	CachedTokens          int64  `json:"cached_tokens"`
-	CacheReadTokens       int64  `json:"cache_read_tokens"`
-	CacheCreationTokens   int64  `json:"cache_creation_tokens"`
-	ReasoningTokens       int64  `json:"reasoning_tokens"`
-	TotalTokens           int64  `json:"total_tokens"`
-	LatencyMS             *int64 `json:"latency_ms"`
-	TTFTMS                *int64 `json:"ttft_ms"`
-	Failed                bool   `json:"failed"`
-	FailStatusCode        *int64 `json:"fail_status_code,omitempty"`
-	FailSummary           string `json:"fail_summary,omitempty"`
+	RequestID              string                        `json:"request_id,omitempty"`
+	EventHash              string                        `json:"event_hash"`
+	TimestampMS            int64                         `json:"timestamp_ms"`
+	Model                  string                        `json:"model"`
+	ResolvedModel          string                        `json:"resolved_model,omitempty"`
+	Endpoint               string                        `json:"endpoint"`
+	Method                 string                        `json:"method"`
+	Path                   string                        `json:"path"`
+	AuthIndex              string                        `json:"auth_index"`
+	Source                 string                        `json:"source"`
+	SourceHash             string                        `json:"source_hash"`
+	APIKeyHash             string                        `json:"api_key_hash"`
+	AccountSnapshot        string                        `json:"account_snapshot"`
+	AuthLabelSnapshot      string                        `json:"auth_label_snapshot"`
+	AuthFileSnapshot       string                        `json:"auth_file_snapshot,omitempty"`
+	AuthProviderSnapshot   string                        `json:"auth_provider_snapshot"`
+	AuthProjectIDSnapshot  string                        `json:"auth_project_id_snapshot,omitempty"`
+	ReasoningEffort        string                        `json:"reasoning_effort,omitempty"`
+	ServiceTier            string                        `json:"service_tier,omitempty"`
+	ExecutorType           string                        `json:"executor_type,omitempty"`
+	InputTokens            int64                         `json:"input_tokens"`
+	OutputTokens           int64                         `json:"output_tokens"`
+	CachedTokens           int64                         `json:"cached_tokens"`
+	CacheReadTokens        int64                         `json:"cache_read_tokens"`
+	CacheCreationTokens    int64                         `json:"cache_creation_tokens"`
+	ReasoningTokens        int64                         `json:"reasoning_tokens"`
+	TotalTokens            int64                         `json:"total_tokens"`
+	LatencyMS              *int64                        `json:"latency_ms"`
+	TTFTMS                 *int64                        `json:"ttft_ms"`
+	Failed                 bool                          `json:"failed"`
+	FailStatusCode         *int64                        `json:"fail_status_code,omitempty"`
+	FailSummary            string                        `json:"fail_summary,omitempty"`
+	ResponseMetadata       *usage.ResponseHeaderMetadata `json:"response_metadata,omitempty"`
+	HeaderQuotaRecoverAtMS *int64                        `json:"header_quota_recover_at_ms,omitempty"`
+	HeaderQuotaUsedPercent *float64                      `json:"header_quota_used_percent,omitempty"`
+	HeaderQuotaPlanType    string                        `json:"header_quota_plan_type,omitempty"`
+	HeaderErrorKind        string                        `json:"header_error_kind,omitempty"`
+	HeaderErrorCode        string                        `json:"header_error_code,omitempty"`
+	HeaderTraceID          string                        `json:"header_trace_id,omitempty"`
 }
 
 func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) {
@@ -772,6 +831,35 @@ func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) 
 	return response, nil
 }
 
+func (s *Service) HeaderSnapshots(ctx context.Context, req HeaderSnapshotsRequest) (HeaderSnapshotsResponse, error) {
+	days := req.Days
+	if days <= 0 {
+		days = defaultHeaderSnapshotDays
+	}
+	if days > maxHeaderSnapshotDays {
+		days = maxHeaderSnapshotDays
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = defaultHeaderSnapshotLimit
+	}
+	if limit > maxHeaderSnapshotLimit {
+		limit = maxHeaderSnapshotLimit
+	}
+	nowMS := time.Now().UnixMilli()
+	fromMS := nowMS - int64(days)*24*60*60*1000
+	items, err := s.store.LatestHeaderSnapshots(ctx, fromMS, limit)
+	if err != nil {
+		return HeaderSnapshotsResponse{}, err
+	}
+	return HeaderSnapshotsResponse{
+		GeneratedAtMS: nowMS,
+		FromMS:        fromMS,
+		ToMS:          nowMS,
+		Items:         buildHeaderSnapshots(items),
+	}, nil
+}
+
 func buildFilter(req Request) store.AnalyticsFilter {
 	includeFailed := true
 	if req.Filters.IncludeFailed != nil {
@@ -791,6 +879,10 @@ func buildFilter(req Request) store.AnalyticsFilter {
 		SourceHashes:     req.Filters.SourceHashes,
 		ProjectIDs:       req.Filters.ProjectIDs,
 		RequestTypes:     req.Filters.RequestTypes,
+		HeaderErrorKinds: req.Filters.HeaderErrorKinds,
+		HeaderErrorCodes: req.Filters.HeaderErrorCodes,
+		HeaderQuotaPlans: req.Filters.HeaderQuotaPlans,
+		HeaderTraceIDs:   req.Filters.HeaderTraceIDs,
 		IncludeFailed:    includeFailed,
 		FailedOnly:       req.Filters.FailedOnly,
 		MinLatencyMS:     req.Filters.MinLatencyMS,
@@ -809,6 +901,10 @@ func (s *Service) filterOptions(ctx context.Context, filter store.AnalyticsFilte
 	optionFilter.SourceHashes = nil
 	optionFilter.ProjectIDs = nil
 	optionFilter.RequestTypes = nil
+	optionFilter.HeaderErrorKinds = nil
+	optionFilter.HeaderErrorCodes = nil
+	optionFilter.HeaderQuotaPlans = nil
+	optionFilter.HeaderTraceIDs = nil
 	optionFilter.IncludeFailed = true
 	optionFilter.FailedOnly = false
 	optionFilter.MinLatencyMS = 0
@@ -836,14 +932,18 @@ func (s *Service) filterOptions(ctx context.Context, filter store.AnalyticsFilte
 	}
 
 	return &FilterOptions{
-		AccountStats: buildAccountStats(accountStats, prices),
-		APIKeyStats:  buildAPIKeyStats(apiKeyStats, prices),
-		ChannelShare: buildChannelShare(channelStats, prices),
-		ModelStats:   buildModelStats(modelStats, prices),
-		Providers:    optionValues.Providers,
-		AuthFiles:    optionValues.AuthFiles,
-		ProjectIDs:   optionValues.ProjectIDs,
-		RequestTypes: optionValues.RequestTypes,
+		AccountStats:     buildAccountStats(accountStats, prices),
+		APIKeyStats:      buildAPIKeyStats(apiKeyStats, prices),
+		ChannelShare:     buildChannelShare(channelStats, prices),
+		ModelStats:       buildModelStats(modelStats, prices),
+		Providers:        optionValues.Providers,
+		AuthFiles:        optionValues.AuthFiles,
+		ProjectIDs:       optionValues.ProjectIDs,
+		RequestTypes:     optionValues.RequestTypes,
+		HeaderErrorKinds: optionValues.HeaderErrorKinds,
+		HeaderErrorCodes: optionValues.HeaderErrorCodes,
+		HeaderQuotaPlans: optionValues.HeaderQuotaPlans,
+		HeaderTraceIDs:   optionValues.HeaderTraceIDs,
 	}, nil
 }
 
@@ -2017,20 +2117,27 @@ func buildRecentFailures(failures []store.RecentFailure) []RecentFailure {
 	result := make([]RecentFailure, 0, len(failures))
 	for _, failure := range failures {
 		result = append(result, RecentFailure{
-			TimestampMS:           failure.TimestampMS,
-			Model:                 failure.Model,
-			APIKeyHash:            failure.APIKeyHash,
-			Source:                failure.Source,
-			SourceHash:            failure.SourceHash,
-			AuthIndex:             failure.AuthIndex,
-			AccountSnapshot:       failure.AccountSnapshot,
-			AuthLabelSnapshot:     failure.AuthLabelSnapshot,
-			AuthProviderSnapshot:  failure.AuthProviderSnapshot,
-			AuthProjectIDSnapshot: failure.AuthProjectIDSnapshot,
-			Endpoint:              failure.Endpoint,
-			DurationMS:            nullableInt(failure.LatencyMS.Valid, failure.LatencyMS.Int64),
-			FailStatusCode:        nullableInt(failure.FailStatusCode.Valid, failure.FailStatusCode.Int64),
-			FailSummary:           failure.FailSummary,
+			TimestampMS:            failure.TimestampMS,
+			Model:                  failure.Model,
+			APIKeyHash:             failure.APIKeyHash,
+			Source:                 failure.Source,
+			SourceHash:             failure.SourceHash,
+			AuthIndex:              failure.AuthIndex,
+			AccountSnapshot:        failure.AccountSnapshot,
+			AuthLabelSnapshot:      failure.AuthLabelSnapshot,
+			AuthProviderSnapshot:   failure.AuthProviderSnapshot,
+			AuthProjectIDSnapshot:  failure.AuthProjectIDSnapshot,
+			Endpoint:               failure.Endpoint,
+			DurationMS:             nullableInt(failure.LatencyMS.Valid, failure.LatencyMS.Int64),
+			FailStatusCode:         nullableInt(failure.FailStatusCode.Valid, failure.FailStatusCode.Int64),
+			FailSummary:            failure.FailSummary,
+			ResponseMetadata:       failure.ResponseMetadata,
+			HeaderQuotaRecoverAtMS: nullableInt(failure.HeaderQuotaRecoverAtMS.Valid, failure.HeaderQuotaRecoverAtMS.Int64),
+			HeaderQuotaUsedPercent: nullableFloat(failure.HeaderQuotaUsedPercent.Valid, failure.HeaderQuotaUsedPercent.Float64),
+			HeaderQuotaPlanType:    failure.HeaderQuotaPlanType,
+			HeaderErrorKind:        failure.HeaderErrorKind,
+			HeaderErrorCode:        failure.HeaderErrorCode,
+			HeaderTraceID:          failure.HeaderTraceID,
 		})
 	}
 	return result
@@ -2040,41 +2147,74 @@ func buildEvents(page store.EventsPage, totalCount int64) *EventsResponse {
 	items := make([]EventRow, 0, len(page.Items))
 	for _, item := range page.Items {
 		items = append(items, EventRow{
-			RequestID:             item.RequestID,
-			EventHash:             item.EventHash,
-			TimestampMS:           item.TimestampMS,
-			Model:                 item.Model,
-			ResolvedModel:         item.ResolvedModel,
-			Endpoint:              item.Endpoint,
-			Method:                item.Method,
-			Path:                  item.Path,
-			AuthIndex:             item.AuthIndex,
-			Source:                item.Source,
-			SourceHash:            item.SourceHash,
-			APIKeyHash:            item.APIKeyHash,
-			AccountSnapshot:       item.AccountSnapshot,
-			AuthLabelSnapshot:     item.AuthLabelSnapshot,
-			AuthFileSnapshot:      item.AuthFileSnapshot,
-			AuthProviderSnapshot:  item.AuthProviderSnapshot,
-			AuthProjectIDSnapshot: item.AuthProjectIDSnapshot,
-			ReasoningEffort:       item.ReasoningEffort,
-			ServiceTier:           item.ServiceTier,
-			ExecutorType:          item.ExecutorType,
-			InputTokens:           item.InputTokens,
-			OutputTokens:          item.OutputTokens,
-			CachedTokens:          item.CachedTokens,
-			CacheReadTokens:       item.CacheReadTokens,
-			CacheCreationTokens:   item.CacheCreationTokens,
-			ReasoningTokens:       item.ReasoningTokens,
-			TotalTokens:           item.TotalTokens,
-			LatencyMS:             nullableInt(item.LatencyMS.Valid, item.LatencyMS.Int64),
-			TTFTMS:                nullableInt(item.TTFTMS.Valid, item.TTFTMS.Int64),
-			Failed:                item.Failed,
-			FailStatusCode:        nullableInt(item.FailStatusCode.Valid, item.FailStatusCode.Int64),
-			FailSummary:           item.FailSummary,
+			RequestID:              item.RequestID,
+			EventHash:              item.EventHash,
+			TimestampMS:            item.TimestampMS,
+			Model:                  item.Model,
+			ResolvedModel:          item.ResolvedModel,
+			Endpoint:               item.Endpoint,
+			Method:                 item.Method,
+			Path:                   item.Path,
+			AuthIndex:              item.AuthIndex,
+			Source:                 item.Source,
+			SourceHash:             item.SourceHash,
+			APIKeyHash:             item.APIKeyHash,
+			AccountSnapshot:        item.AccountSnapshot,
+			AuthLabelSnapshot:      item.AuthLabelSnapshot,
+			AuthFileSnapshot:       item.AuthFileSnapshot,
+			AuthProviderSnapshot:   item.AuthProviderSnapshot,
+			AuthProjectIDSnapshot:  item.AuthProjectIDSnapshot,
+			ReasoningEffort:        item.ReasoningEffort,
+			ServiceTier:            item.ServiceTier,
+			ExecutorType:           item.ExecutorType,
+			InputTokens:            item.InputTokens,
+			OutputTokens:           item.OutputTokens,
+			CachedTokens:           item.CachedTokens,
+			CacheReadTokens:        item.CacheReadTokens,
+			CacheCreationTokens:    item.CacheCreationTokens,
+			ReasoningTokens:        item.ReasoningTokens,
+			TotalTokens:            item.TotalTokens,
+			LatencyMS:              nullableInt(item.LatencyMS.Valid, item.LatencyMS.Int64),
+			TTFTMS:                 nullableInt(item.TTFTMS.Valid, item.TTFTMS.Int64),
+			Failed:                 item.Failed,
+			FailStatusCode:         nullableInt(item.FailStatusCode.Valid, item.FailStatusCode.Int64),
+			FailSummary:            item.FailSummary,
+			ResponseMetadata:       item.ResponseMetadata,
+			HeaderQuotaRecoverAtMS: nullableInt(item.HeaderQuotaRecoverAtMS.Valid, item.HeaderQuotaRecoverAtMS.Int64),
+			HeaderQuotaUsedPercent: nullableFloat(item.HeaderQuotaUsedPercent.Valid, item.HeaderQuotaUsedPercent.Float64),
+			HeaderQuotaPlanType:    item.HeaderQuotaPlanType,
+			HeaderErrorKind:        item.HeaderErrorKind,
+			HeaderErrorCode:        item.HeaderErrorCode,
+			HeaderTraceID:          item.HeaderTraceID,
 		})
 	}
 	return &EventsResponse{Items: items, NextBeforeMS: page.NextBeforeMS, NextBeforeID: page.NextBeforeID, HasMore: page.HasMore, TotalCount: totalCount}
+}
+
+func buildHeaderSnapshots(items []store.HeaderSnapshot) []HeaderSnapshot {
+	result := make([]HeaderSnapshot, 0, len(items))
+	for _, item := range items {
+		result = append(result, HeaderSnapshot{
+			EventHash:              item.EventHash,
+			TimestampMS:            item.TimestampMS,
+			AuthFileSnapshot:       item.AuthFileSnapshot,
+			AuthIndex:              item.AuthIndex,
+			AccountSnapshot:        item.AccountSnapshot,
+			AuthLabelSnapshot:      item.AuthLabelSnapshot,
+			AuthProviderSnapshot:   item.AuthProviderSnapshot,
+			AuthProjectIDSnapshot:  item.AuthProjectIDSnapshot,
+			Source:                 item.Source,
+			SourceHash:             item.SourceHash,
+			ResponseMetadata:       item.ResponseMetadata,
+			HeaderQuotaRecoverAtMS: nullableInt(item.HeaderQuotaRecoverAtMS.Valid, item.HeaderQuotaRecoverAtMS.Int64),
+			HeaderQuotaUsedPercent: nullableFloat(item.HeaderQuotaUsedPercent.Valid, item.HeaderQuotaUsedPercent.Float64),
+			HeaderQuotaPlanType:    item.HeaderQuotaPlanType,
+			HeaderErrorKind:        item.HeaderErrorKind,
+			HeaderErrorCode:        item.HeaderErrorCode,
+			HeaderTraceID:          item.HeaderTraceID,
+		})
+	}
+	return result
 }
 
 func sumCost(stats []store.ModelStat, prices map[string]store.ModelPrice) float64 {

@@ -13,6 +13,7 @@ import (
 type Repository interface {
 	InsertBatch(ctx context.Context, events []model.UsageEvent) (model.InsertResult, error)
 	ListRecent(ctx context.Context, limit int) ([]model.UsageEvent, error)
+	BackfillResponseMetadata(ctx context.Context, batchLimit int) (int, error)
 	Count(ctx context.Context) (int64, error)
 	ExportJSONL(ctx context.Context) ([]byte, error)
 	AggregateBetween(ctx context.Context, fromMs, toMs int64) (Aggregate, error)
@@ -39,6 +40,7 @@ type Repository interface {
 	RecentFailuresWithFilter(ctx context.Context, filter AnalyticsFilter, limit int) ([]RecentFailure, error)
 	EventsPageWithFilter(ctx context.Context, filter AnalyticsFilter, beforeMS int64, beforeID int64, limit int) (EventsPage, error)
 	EventsCountWithFilter(ctx context.Context, filter AnalyticsFilter) (int64, error)
+	LatestHeaderSnapshots(ctx context.Context, sinceMS int64, limit int) ([]HeaderSnapshot, error)
 	ActiveDaysWithFilter(ctx context.Context, filter AnalyticsFilter, location *time.Location) (int64, error)
 	ZeroTokenModelsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]string, error)
 }
@@ -69,8 +71,10 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 		account_snapshot, auth_label_snapshot, auth_file_snapshot, auth_provider_snapshot, auth_project_id_snapshot, auth_snapshot_at_ms,
 		requested_model, resolved_model, reasoning_effort, service_tier,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_tokens, cache_read_tokens, cache_creation_tokens, total_tokens,
-		latency_ms, ttft_ms, failed, fail_status_code, fail_summary, fail_body, raw_json, created_at_ms
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		latency_ms, ttft_ms, failed, fail_status_code, fail_summary,
+		response_metadata_json, header_quota_recover_at_ms, header_quota_used_percent, header_quota_plan_type, header_error_kind, header_error_code, header_trace_id,
+		fail_body, raw_json, created_at_ms
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return model.InsertResult{}, err
 	}
@@ -82,6 +86,7 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 		if event.Failed {
 			failed = 1
 		}
+		metadataJSON, quotaRecoverAtMS, quotaUsedPercent, quotaPlanType, errorKind, errorCode, traceID := responseHeaderDerivedForInsert(event)
 		failSummarySource := event.FailSummary
 		if failSummarySource == "" {
 			failSummarySource = event.FailBody
@@ -128,6 +133,13 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 			failed,
 			nullPositiveInt64(int64(event.FailStatusCode)),
 			nullString(failSummary),
+			nullString(metadataJSON),
+			nullPositiveInt64(quotaRecoverAtMS),
+			nullFloat(quotaUsedPercent),
+			nullString(quotaPlanType),
+			nullString(errorKind),
+			nullString(errorCode),
+			nullString(traceID),
 			nullString(event.FailBody),
 			nullString(rawJSON),
 			event.CreatedAtMS,
@@ -159,7 +171,9 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 		account_snapshot, auth_label_snapshot, auth_file_snapshot, auth_provider_snapshot, auth_project_id_snapshot, auth_snapshot_at_ms,
 		requested_model, resolved_model, reasoning_effort, service_tier,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_tokens, cache_read_tokens, cache_creation_tokens, total_tokens,
-		latency_ms, ttft_ms, failed, fail_status_code, fail_summary, created_at_ms
+		latency_ms, ttft_ms, failed, fail_status_code, fail_summary,
+		coalesce(response_metadata_json, ''), header_quota_recover_at_ms, header_quota_used_percent, coalesce(header_quota_plan_type, ''), coalesce(header_error_kind, ''), coalesce(header_error_code, ''), coalesce(header_trace_id, ''),
+		created_at_ms
 		from usage_events
 		order by timestamp_ms desc, id desc
 		limit ?`, limit)
@@ -172,9 +186,12 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 	for rows.Next() {
 		var event model.UsageEvent
 		var requestID, provider, executorType, endpoint, method, path, authType, authIndex, source, sourceHash, apiKeyHash, accountSnapshot, authLabelSnapshot, authFileSnapshot, authProviderSnapshot, authProjectIDSnapshot, requestedModel, resolvedModel, reasoningEffort, serviceTier, failSummary sql.NullString
+		var responseMetadataJSON, quotaPlanType, errorKind, errorCode, traceID string
 		var authSnapshotAt sql.NullInt64
 		var latency, ttft sql.NullInt64
 		var failStatusCode sql.NullInt64
+		var quotaRecoverAt sql.NullInt64
+		var quotaUsedPercent sql.NullFloat64
 		var failed int
 		if err := rows.Scan(
 			&requestID,
@@ -215,6 +232,13 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 			&failed,
 			&failStatusCode,
 			&failSummary,
+			&responseMetadataJSON,
+			&quotaRecoverAt,
+			&quotaUsedPercent,
+			&quotaPlanType,
+			&errorKind,
+			&errorCode,
+			&traceID,
 			&event.CreatedAtMS,
 		); err != nil {
 			return nil, err
@@ -246,6 +270,19 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 			event.FailStatusCode = int(failStatusCode.Int64)
 		}
 		event.FailSummary = failSummary.String
+		event.ResponseMetadataJSON = responseMetadataJSON
+		event.ResponseMetadata = usage.ResponseHeaderMetadataFromJSON(responseMetadataJSON)
+		if quotaRecoverAt.Valid {
+			event.HeaderQuotaRecoverAtMS = quotaRecoverAt.Int64
+		}
+		if quotaUsedPercent.Valid {
+			value := quotaUsedPercent.Float64
+			event.HeaderQuotaUsedPercent = &value
+		}
+		event.HeaderQuotaPlanType = quotaPlanType
+		event.HeaderErrorKind = errorKind
+		event.HeaderErrorCode = errorCode
+		event.HeaderTraceID = traceID
 		event.Failed = failed != 0
 		if latency.Valid {
 			value := latency.Int64
@@ -304,9 +341,50 @@ func nullInt(value *int64) any {
 	return *value
 }
 
+func nullFloat(value *float64) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
 func nullPositiveInt64(value int64) any {
 	if value <= 0 {
 		return nil
 	}
 	return value
+}
+
+func responseHeaderDerivedForInsert(event model.UsageEvent) (string, int64, *float64, string, string, string, string) {
+	metadataJSON := event.ResponseMetadataJSON
+	quotaRecoverAtMS := event.HeaderQuotaRecoverAtMS
+	quotaUsedPercent := event.HeaderQuotaUsedPercent
+	quotaPlanType := event.HeaderQuotaPlanType
+	errorKind := event.HeaderErrorKind
+	errorCode := event.HeaderErrorCode
+	traceID := event.HeaderTraceID
+
+	derived := usage.DeriveResponseHeaderMetadata(event.ResponseMetadata)
+	if metadataJSON == "" {
+		metadataJSON = derived.MetadataJSON
+	}
+	if quotaRecoverAtMS == 0 {
+		quotaRecoverAtMS = derived.QuotaRecoverAtMS
+	}
+	if quotaUsedPercent == nil {
+		quotaUsedPercent = derived.QuotaUsedPercent
+	}
+	if quotaPlanType == "" {
+		quotaPlanType = derived.QuotaPlanType
+	}
+	if errorKind == "" {
+		errorKind = derived.ErrorKind
+	}
+	if errorCode == "" {
+		errorCode = derived.ErrorCode
+	}
+	if traceID == "" {
+		traceID = derived.TraceID
+	}
+	return metadataJSON, quotaRecoverAtMS, quotaUsedPercent, quotaPlanType, errorKind, errorCode, traceID
 }

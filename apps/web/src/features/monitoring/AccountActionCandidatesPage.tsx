@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
-import { IconCheck, IconEye, IconRefreshCw, IconTrash2 } from '@/components/ui/icons';
+import { IconCheck, IconEye, IconRefreshCw, IconSearch, IconTrash2 } from '@/components/ui/icons';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import {
   usageServiceApi,
@@ -36,6 +37,24 @@ const stringifyEvidence = (candidate: AccountActionCandidate | null) => {
   }
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === 'object' && !Array.isArray(value));
+
+const readEvidenceString = (candidate: AccountActionCandidate, key: string) => {
+  const evidence = candidate.evidence;
+  if (!isRecord(evidence)) return '';
+  const value = evidence[key];
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '';
+};
+
+const getHeaderEvidence = (candidate: AccountActionCandidate) => ({
+  errorKind: readEvidenceString(candidate, 'headerErrorKind'),
+  errorCode: readEvidenceString(candidate, 'headerErrorCode'),
+  traceId: readEvidenceString(candidate, 'headerTraceId'),
+});
+
 export function AccountActionCandidatesPage() {
   const { t } = useTranslation();
   const managementKey = useAuthStore((state) => state.managementKey);
@@ -44,6 +63,7 @@ export function AccountActionCandidatesPage() {
   const [items, setItems] = useState<AccountActionCandidate[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [filter, setFilter] = useState<StatusFilter>('pending');
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [actingId, setActingId] = useState<number | null>(null);
@@ -86,6 +106,31 @@ export function AccountActionCandidatesPage() {
     for (const item of items) counts[item.status] = (counts[item.status] || 0) + 1;
     return counts;
   }, [items, pendingCount]);
+
+  const visibleItems = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return items;
+    return items.filter((item) => {
+      const header = getHeaderEvidence(item);
+      return [
+        item.accountSnapshot,
+        item.authLabel,
+        item.accountIdSnapshot,
+        item.provider,
+        item.authFileName,
+        item.authIndex,
+        item.actionType,
+        item.reason,
+        item.status,
+        item.lastError,
+        header.errorKind,
+        header.errorCode,
+        header.traceId,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(term));
+    });
+  }, [items, search]);
 
   const runAction = useCallback(
     async (candidate: AccountActionCandidate, action: CandidateAction) => {
@@ -182,7 +227,7 @@ export function AccountActionCandidatesPage() {
             <span className={styles.statLabel}>{t('account_actions.pending_count')}</span>
           </div>
           <div className={styles.statCard}>
-            <span className={styles.statValue}>{items.length}</span>
+            <span className={styles.statValue}>{visibleItems.length}</span>
             <span className={styles.statLabel}>{t('account_actions.visible_count')}</span>
           </div>
         </div>
@@ -204,6 +249,17 @@ export function AccountActionCandidatesPage() {
             </button>
           ))}
         </div>
+        <Input
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder={t('account_actions.search_placeholder', {
+            defaultValue: 'Search account, file, error or trace',
+          })}
+          rightElement={<IconSearch size={15} />}
+          aria-label={t('account_actions.search_placeholder', {
+            defaultValue: 'Search account, file, error or trace',
+          })}
+        />
         <div className={styles.actions}>
           <Button variant="secondary" size="sm" onClick={loadCandidates} loading={loading}>
             <IconRefreshCw size={15} />
@@ -218,7 +274,7 @@ export function AccountActionCandidatesPage() {
             <strong>{t('account_actions.load_failed_title')}</strong>
             <span>{error}</span>
           </div>
-        ) : items.length === 0 && !loading ? (
+        ) : visibleItems.length === 0 && !loading ? (
           <div className={styles.emptyState}>
             <strong>{t('account_actions.empty_title')}</strong>
             <span>{t('account_actions.empty_desc')}</span>
@@ -239,8 +295,9 @@ export function AccountActionCandidatesPage() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((candidate) => {
+                {visibleItems.map((candidate) => {
                   const busy = actingId === candidate.id;
+                  const header = getHeaderEvidence(candidate);
                   return (
                     <tr key={candidate.id}>
                       <td>
@@ -275,6 +332,12 @@ export function AccountActionCandidatesPage() {
                           {candidate.lastError ? (
                             <small className={styles.errorText}>{candidate.lastError}</small>
                           ) : null}
+                          {header.errorKind || header.errorCode ? (
+                            <small>
+                              {[header.errorKind, header.errorCode].filter(Boolean).join(' / ')}
+                            </small>
+                          ) : null}
+                          {header.traceId ? <small>{`Trace: ${header.traceId}`}</small> : null}
                           <small>{t('account_actions.last_updated', { time: formatMs(candidate.updatedAtMs) })}</small>
                         </div>
                       </td>
