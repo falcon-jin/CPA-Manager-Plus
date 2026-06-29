@@ -8,6 +8,8 @@ import { HeaderInputList } from '@/components/ui/HeaderInputList';
 import { ModelInputList } from '@/components/ui/ModelInputList';
 import { Modal } from '@/components/ui/Modal';
 import { SelectionCheckbox } from '@/components/ui/SelectionCheckbox';
+import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
+import { OpenAIKeyTestStatusIndicator } from '@/components/providers';
 import { apiCallApi, getApiCallErrorMessage, modelsApi, providersApi } from '@/services/api';
 import { useConfigStore, useNotificationStore } from '@/stores';
 import type { ApiKeyEntry, OpenAIProviderConfig } from '@/types';
@@ -94,6 +96,7 @@ const buildOpenAIBaseline = (form: OpenAIFormState) => ({
       : null,
   prefix: String(form.prefix ?? '').trim(),
   baseUrl: String(form.baseUrl ?? '').trim(),
+  disableCooling: Boolean(form.disableCooling),
   headers: normalizeHeaderEntries(form.headers),
   apiKeyEntries: normalizeApiKeyEntries(form.apiKeyEntries),
   models: normalizeModelEntries(form.modelEntries),
@@ -130,61 +133,6 @@ const hasHeader = (headers: Record<string, string>, name: string) => {
   const target = name.toLowerCase();
   return Object.keys(headers).some((key) => key.toLowerCase() === target);
 };
-
-function StatusIcon({ status }: { status: string }) {
-  switch (status) {
-    case 'loading':
-      return (
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 16 16"
-          fill="none"
-          className={styles.statusIconSpin}
-        >
-          <circle cx="8" cy="8" r="7" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
-          <path
-            d="M8 1A7 7 0 0 1 8 15"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-        </svg>
-      );
-    case 'success':
-      return (
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <circle cx="8" cy="8" r="8" fill="var(--success-color, #22c55e)" />
-          <path
-            d="M4.5 8L7 10.5L11.5 6"
-            stroke="white"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      );
-    case 'error':
-      return (
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <circle cx="8" cy="8" r="8" fill="var(--danger-color, #f56c6c)" />
-          <path
-            d="M5 5L11 11M11 5L5 11"
-            stroke="white"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      );
-    default:
-      return (
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <circle cx="8" cy="8" r="7" stroke="var(--text-tertiary, #9ca3af)" strokeWidth="2" />
-        </svg>
-      );
-  }
-}
 
 export function OpenAIEditDrawer({
   open,
@@ -328,6 +276,7 @@ export function OpenAIEditDrawer({
       baseline.priority !== normalizedPriority ||
       baseline.prefix !== form.prefix.trim() ||
       baseline.baseUrl !== form.baseUrl.trim() ||
+      baseline.disableCooling !== Boolean(form.disableCooling) ||
       !areKeyValueEntriesEqual(baseline.headers, normalizeHeaderEntries(form.headers)) ||
       !areNormalizedApiKeyEntriesEqual(
         baseline.apiKeyEntries,
@@ -389,6 +338,31 @@ export function OpenAIEditDrawer({
     });
   }, [discoveredModels, modelDiscoverySearch]);
 
+  const configuredModelNames = useMemo(
+    () =>
+      new Set(
+        form.modelEntries
+          .map((entry) => entry.name.trim().toLowerCase())
+          .filter(Boolean)
+      ),
+    [form.modelEntries]
+  );
+
+  const visibleDiscoverableModelNames = useMemo(
+    () =>
+      discoveredModelsFiltered
+        .map((model) => String(model.name ?? '').trim())
+        .filter((name) => name && !configuredModelNames.has(name.toLowerCase())),
+    [configuredModelNames, discoveredModelsFiltered]
+  );
+
+  const allVisibleSelected = useMemo(
+    () =>
+      visibleDiscoverableModelNames.length > 0 &&
+      visibleDiscoverableModelNames.every((name) => modelDiscoverySelected.has(name)),
+    [modelDiscoverySelected, visibleDiscoverableModelNames]
+  );
+
   const mergeDiscoveredModels = useCallback(
     (selectedModels: ModelInfo[]) => {
       if (!selectedModels.length) return;
@@ -398,12 +372,17 @@ export function OpenAIEditDrawer({
         prev.modelEntries.forEach((entry) => {
           const name = entry.name.trim();
           if (!name) return;
-          mergedMap.set(name, { ...entry, name, alias: entry.alias?.trim() || '' });
+          mergedMap.set(name.toLowerCase(), {
+            ...entry,
+            name,
+            alias: entry.alias?.trim() || '',
+          });
         });
         selectedModels.forEach((model) => {
           const name = model.name.trim();
-          if (!name || mergedMap.has(name)) return;
-          mergedMap.set(name, { name, alias: model.alias ?? '' });
+          const key = name.toLowerCase();
+          if (!name || mergedMap.has(key)) return;
+          mergedMap.set(key, { name, alias: model.alias ?? '' });
           addedCount += 1;
         });
         const mergedEntries = Array.from(mergedMap.values());
@@ -420,6 +399,47 @@ export function OpenAIEditDrawer({
     },
     [showNotification, t]
   );
+
+  useEffect(() => {
+    const availableNames = new Set(discoveredModels.map((model) => String(model.name ?? '').trim()));
+    setModelDiscoverySelected((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((name) => {
+        if (availableNames.has(name) && !configuredModelNames.has(name.toLowerCase())) {
+          next.add(name);
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [configuredModelNames, discoveredModels]);
+
+  const toggleModelDiscoverySelection = useCallback(
+    (name: string) => {
+      if (configuredModelNames.has(name.toLowerCase())) return;
+      setModelDiscoverySelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(name)) next.delete(name);
+        else next.add(name);
+        return next;
+      });
+    },
+    [configuredModelNames]
+  );
+
+  const handleSelectVisibleModels = useCallback(() => {
+    setModelDiscoverySelected((prev) => {
+      const next = new Set(prev);
+      visibleDiscoverableModelNames.forEach((name) => next.add(name));
+      return next;
+    });
+  }, [visibleDiscoverableModelNames]);
+
+  const handleClearModelDiscoverySelection = useCallback(() => {
+    setModelDiscoverySelected(new Set());
+  }, []);
 
   // Key testing
   const runSingleKeyTest = useCallback(
@@ -732,11 +752,11 @@ export function OpenAIEditDrawer({
             return (
               <div key={index} className={styles.keyTableRow}>
                 <div className={styles.keyTableColIndex}>{index + 1}</div>
-                <div
-                  className={styles.keyTableColStatus}
-                  title={keyTestStatuses[index]?.message || ''}
-                >
-                  <StatusIcon status={keyStatus} />
+                <div className={styles.keyTableColStatus}>
+                  <OpenAIKeyTestStatusIndicator
+                    status={keyStatus as 'idle' | 'loading' | 'success' | 'error'}
+                    message={keyTestStatuses[index]?.message || ''}
+                  />
                 </div>
                 <div className={styles.keyTableColKey}>
                   <input
@@ -864,6 +884,16 @@ export function OpenAIEditDrawer({
               removeButtonAriaLabel={t('common.delete')}
               disabled={saving || disabled || isTestingKeys}
             />
+            <div className="form-group">
+              <label>{t('ai_providers.disable_cooling_label')}</label>
+              <ToggleSwitch
+                checked={Boolean(form.disableCooling)}
+                onChange={(value) => setForm((prev) => ({ ...prev, disableCooling: value }))}
+                disabled={saving || disabled || isTestingKeys}
+                ariaLabel={t('ai_providers.disable_cooling_label')}
+              />
+              <div className="hint">{t('ai_providers.disable_cooling_hint')}</div>
+            </div>
 
             <div className={styles.keyEntriesSection}>
               <div className={styles.keyEntriesHeader}>
@@ -1022,6 +1052,44 @@ export function OpenAIEditDrawer({
                   onChange={(e) => setModelDiscoverySearch(e.target.value)}
                   disabled={modelDiscoveryFetching}
                 />
+                {discoveredModels.length > 0 && (
+                  <div className={styles.modelDiscoveryToolbar}>
+                    <div className={styles.modelDiscoveryToolbarActions}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={handleSelectVisibleModels}
+                        disabled={
+                          disabled ||
+                          saving ||
+                          modelDiscoveryFetching ||
+                          visibleDiscoverableModelNames.length === 0 ||
+                          allVisibleSelected
+                        }
+                      >
+                        {t('ai_providers.model_discovery_select_visible')}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleClearModelDiscoverySelection}
+                        disabled={
+                          disabled ||
+                          saving ||
+                          modelDiscoveryFetching ||
+                          modelDiscoverySelected.size === 0
+                        }
+                      >
+                        {t('ai_providers.model_discovery_clear_selection')}
+                      </Button>
+                    </div>
+                    <div className={styles.modelDiscoverySelectionSummary}>
+                      {t('ai_providers.model_discovery_selected_count', {
+                        count: modelDiscoverySelected.size,
+                      })}
+                    </div>
+                  </div>
+                )}
                 {modelDiscoveryError && <div className="error-box">{modelDiscoveryError}</div>}
                 {modelDiscoveryFetching ? (
                   <div className={styles.sectionHint}>
@@ -1031,32 +1099,43 @@ export function OpenAIEditDrawer({
                   <div className={styles.sectionHint}>
                     {t('ai_providers.openai_models_fetch_empty')}
                   </div>
+                ) : discoveredModelsFiltered.length === 0 ? (
+                  <div className={styles.sectionHint}>
+                    {t('ai_providers.openai_models_search_empty')}
+                  </div>
                 ) : (
                   <div className={styles.modelDiscoveryList}>
                     {discoveredModelsFiltered.map((model) => {
                       const checked = modelDiscoverySelected.has(model.name);
+                      const alreadyConfigured = configuredModelNames.has(
+                        model.name.trim().toLowerCase()
+                      );
                       return (
                         <SelectionCheckbox
                           key={model.name}
                           checked={checked}
-                          onChange={() =>
-                            setModelDiscoverySelected((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(model.name)) next.delete(model.name);
-                              else next.add(model.name);
-                              return next;
-                            })
+                          onChange={() => toggleModelDiscoverySelection(model.name)}
+                          disabled={
+                            saving || disabled || modelDiscoveryFetching || alreadyConfigured
                           }
-                          disabled={saving || disabled || modelDiscoveryFetching}
                           ariaLabel={model.name}
                           className={`${styles.modelDiscoveryRow} ${checked ? styles.modelDiscoveryRowSelected : ''}`}
                           labelClassName={styles.modelDiscoverySelectionLabel}
                           label={
                             <div className={styles.modelDiscoveryMeta}>
                               <div className={styles.modelDiscoveryName}>
-                                {model.name}
-                                {model.alias && (
-                                  <span className={styles.modelDiscoveryAlias}>{model.alias}</span>
+                                <div className={styles.modelDiscoveryNameText}>
+                                  {model.name}
+                                  {model.alias && (
+                                    <span className={styles.modelDiscoveryAlias}>
+                                      {model.alias}
+                                    </span>
+                                  )}
+                                </div>
+                                {alreadyConfigured && (
+                                  <span className={styles.modelDiscoveryAddedBadge}>
+                                    {t('ai_providers.model_discovery_already_added')}
+                                  </span>
                                 )}
                               </div>
                               {model.description && (

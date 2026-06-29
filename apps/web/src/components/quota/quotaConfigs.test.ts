@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveQuotaDisplayState } from './quotaConfigs';
+import { getSortedCodexResetCreditExpiries, resolveQuotaDisplayState } from './quotaConfigs';
 
 type TestQuotaState = {
   status: 'idle' | 'loading' | 'success' | 'error';
@@ -9,6 +9,46 @@ type TestQuotaState = {
   observedFromUsageHeaders?: boolean;
   windows?: unknown[];
 };
+
+describe('getSortedCodexResetCreditExpiries', () => {
+  it('filters expired or invalid reset credits and sorts by expiry time', () => {
+    const expiries = getSortedCodexResetCreditExpiries(
+      [
+        {
+          id: 'late',
+          status: 'available',
+          grantedAt: '2026-06-29T00:00:00Z',
+          expiresAt: '2026-07-19T00:42:09Z',
+        },
+        {
+          id: 'expired',
+          status: 'available',
+          grantedAt: '2026-06-29T00:00:00Z',
+          expiresAt: '2026-07-17T08:31:33Z',
+        },
+        {
+          id: 'invalid',
+          status: 'available',
+          grantedAt: '2026-06-29T00:00:00Z',
+          expiresAt: 'not-a-date',
+        },
+        {
+          id: 'early',
+          status: 'available',
+          grantedAt: '2026-06-29T00:00:00Z',
+          expiresAt: '2026-07-18T08:31:33Z',
+        },
+      ],
+      new Date('2026-07-18T00:00:00Z').getTime()
+    );
+
+    expect(expiries.map((item) => item.id)).toEqual(['early', 'late']);
+    expect(expiries.map((item) => item.expiresAtMs)).toEqual([
+      new Date('2026-07-18T08:31:33Z').getTime(),
+      new Date('2026-07-19T00:42:09Z').getTime(),
+    ]);
+  });
+});
 
 describe('resolveQuotaDisplayState', () => {
   it('keeps a newer manual quota refresh over an older header snapshot', () => {

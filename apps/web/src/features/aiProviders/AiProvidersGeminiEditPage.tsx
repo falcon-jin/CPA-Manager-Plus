@@ -8,6 +8,7 @@ import { HeaderInputList } from '@/components/ui/HeaderInputList';
 import { ModelInputList } from '@/components/ui/ModelInputList';
 import { Modal } from '@/components/ui/Modal';
 import { SelectionCheckbox } from '@/components/ui/SelectionCheckbox';
+import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { useEdgeSwipeBack } from '@/hooks/useEdgeSwipeBack';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { SecondaryScreenShell } from '@/components/common/SecondaryScreenShell';
@@ -68,6 +69,7 @@ type GeminiFormBaseline = {
   prefix: string;
   baseUrl: string;
   proxyUrl: string;
+  disableCooling: boolean;
   headers: ReturnType<typeof normalizeHeaderEntries>;
   models: ReturnType<typeof normalizeModelEntries>;
   excludedModels: string[];
@@ -83,6 +85,7 @@ const buildGeminiBaseline = (form: GeminiFormState): GeminiFormBaseline => ({
   prefix: String(form.prefix ?? '').trim(),
   baseUrl: String(form.baseUrl ?? '').trim(),
   proxyUrl: String(form.proxyUrl ?? '').trim(),
+  disableCooling: Boolean(form.disableCooling),
   headers: normalizeHeaderEntries(form.headers),
   models: normalizeModelEntries(form.modelEntries),
   excludedModels: parseExcludedModels(form.excludedText ?? ''),
@@ -205,6 +208,20 @@ export function AiProvidersGeminiEditPage() {
   }, [initialData, loading]);
 
   const canSave = !disableControls && !saving && !loading && !invalidIndexParam && !invalidIndex;
+  const normalizedHeaders = useMemo(() => normalizeHeaderEntries(form.headers), [form.headers]);
+  const normalizedModels = useMemo(
+    () => normalizeModelEntries(form.modelEntries),
+    [form.modelEntries]
+  );
+  const normalizedExcludedModels = useMemo(
+    () => parseExcludedModels(form.excludedText ?? ''),
+    [form.excludedText]
+  );
+  const normalizedPriority = useMemo(() => {
+    return form.priority !== undefined && Number.isFinite(form.priority)
+      ? Math.trunc(form.priority)
+      : null;
+  }, [form.priority]);
 
   const discoveredModelsFiltered = useMemo(() => {
     const filter = modelDiscoverySearch.trim().toLowerCase();
@@ -216,9 +233,19 @@ export function AiProvidersGeminiEditPage() {
       return name.includes(filter) || alias.includes(filter) || description.includes(filter);
     });
   }, [discoveredModels, modelDiscoverySearch]);
+  const configuredModelNames = useMemo(
+    () =>
+      new Set(
+        normalizedModels.map((entry) => entry.name.trim().toLowerCase()).filter(Boolean)
+      ),
+    [normalizedModels]
+  );
   const visibleDiscoveredModelNames = useMemo(
-    () => discoveredModelsFiltered.map((model) => model.name),
-    [discoveredModelsFiltered]
+    () =>
+      discoveredModelsFiltered
+        .map((model) => stripGeminiModelResourceName(model.name).trim())
+        .filter((name) => name && !configuredModelNames.has(name.toLowerCase())),
+    [configuredModelNames, discoveredModelsFiltered]
   );
   const allVisibleDiscoveredSelected = useMemo(
     () =>
@@ -237,13 +264,14 @@ export function AiProvidersGeminiEditPage() {
         prev.modelEntries.forEach((entry) => {
           const name = stripGeminiModelResourceName(entry.name);
           if (!name) return;
-          mergedMap.set(name, { ...entry, name, alias: entry.alias?.trim() || '' });
+          mergedMap.set(name.toLowerCase(), { ...entry, name, alias: entry.alias?.trim() || '' });
         });
 
         selectedModels.forEach((model) => {
           const name = stripGeminiModelResourceName(model.name);
-          if (!name || mergedMap.has(name)) return;
-          mergedMap.set(name, { name, alias: model.alias ?? '' });
+          const key = name.toLowerCase();
+          if (!name || mergedMap.has(key)) return;
+          mergedMap.set(key, { name, alias: model.alias ?? '' });
           addedCount += 1;
         });
 
@@ -349,12 +377,14 @@ export function AiProvidersGeminiEditPage() {
   ]);
 
   useEffect(() => {
-    const availableNames = new Set(discoveredModels.map((model) => model.name));
+    const availableNames = new Set(
+      discoveredModels.map((model) => stripGeminiModelResourceName(model.name).trim())
+    );
     setModelDiscoverySelected((prev) => {
       let changed = false;
       const next = new Set<string>();
       prev.forEach((name) => {
-        if (availableNames.has(name)) {
+        if (availableNames.has(name) && !configuredModelNames.has(name.toLowerCase())) {
           next.add(name);
         } else {
           changed = true;
@@ -362,15 +392,17 @@ export function AiProvidersGeminiEditPage() {
       });
       return changed ? next : prev;
     });
-  }, [discoveredModels]);
+  }, [configuredModelNames, discoveredModels]);
 
   const toggleModelDiscoverySelection = (name: string) => {
+    const normalizedName = stripGeminiModelResourceName(name).trim();
+    if (configuredModelNames.has(normalizedName.toLowerCase())) return;
     setModelDiscoverySelected((prev) => {
       const next = new Set(prev);
-      if (next.has(name)) {
-        next.delete(name);
+      if (next.has(normalizedName)) {
+        next.delete(normalizedName);
       } else {
-        next.add(name);
+        next.add(normalizedName);
       }
       return next;
     });
@@ -390,28 +422,13 @@ export function AiProvidersGeminiEditPage() {
 
   const handleApplyDiscoveredModels = () => {
     const selectedModels = discoveredModels.filter((model) =>
-      modelDiscoverySelected.has(model.name)
+      modelDiscoverySelected.has(stripGeminiModelResourceName(model.name).trim())
     );
     if (selectedModels.length) {
       mergeDiscoveredModels(selectedModels);
     }
     setModelDiscoveryOpen(false);
   };
-
-  const normalizedHeaders = useMemo(() => normalizeHeaderEntries(form.headers), [form.headers]);
-  const normalizedModels = useMemo(
-    () => normalizeModelEntries(form.modelEntries),
-    [form.modelEntries]
-  );
-  const normalizedExcludedModels = useMemo(
-    () => parseExcludedModels(form.excludedText ?? ''),
-    [form.excludedText]
-  );
-  const normalizedPriority = useMemo(() => {
-    return form.priority !== undefined && Number.isFinite(form.priority)
-      ? Math.trunc(form.priority)
-      : null;
-  }, [form.priority]);
   const isHeadersDirty = useMemo(
     () => !areKeyValueEntriesEqual(baseline.headers, normalizedHeaders),
     [baseline.headers, normalizedHeaders]
@@ -431,6 +448,7 @@ export function AiProvidersGeminiEditPage() {
     baseline.prefix !== String(form.prefix ?? '').trim() ||
     baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
     baseline.proxyUrl !== String(form.proxyUrl ?? '').trim() ||
+    baseline.disableCooling !== Boolean(form.disableCooling) ||
     isHeadersDirty ||
     isModelsDirty ||
     isExcludedModelsDirty;
@@ -610,6 +628,16 @@ export function AiProvidersGeminiEditPage() {
               removeButtonAriaLabel={t('common.delete')}
               disabled={disableControls || saving}
             />
+            <div className="form-group">
+              <label>{t('ai_providers.disable_cooling_label')}</label>
+              <ToggleSwitch
+                checked={Boolean(form.disableCooling)}
+                onChange={(value) => setForm((prev) => ({ ...prev, disableCooling: value }))}
+                disabled={disableControls || saving}
+                ariaLabel={t('ai_providers.disable_cooling_label')}
+              />
+              <div className="hint">{t('ai_providers.disable_cooling_hint')}</div>
+            </div>
 
             <div className={styles.modelConfigSection}>
               <div className={styles.modelConfigHeader}>
@@ -782,13 +810,19 @@ export function AiProvidersGeminiEditPage() {
                 ) : (
                   <div className={styles.modelDiscoveryList}>
                     {discoveredModelsFiltered.map((model) => {
-                      const checked = modelDiscoverySelected.has(model.name);
+                      const normalizedName = stripGeminiModelResourceName(model.name).trim();
+                      const checked = modelDiscoverySelected.has(normalizedName);
+                      const alreadyConfigured = configuredModelNames.has(
+                        normalizedName.toLowerCase()
+                      );
                       return (
                         <SelectionCheckbox
                           key={model.name}
                           checked={checked}
                           onChange={() => toggleModelDiscoverySelection(model.name)}
-                          disabled={disableControls || saving || modelDiscoveryFetching}
+                          disabled={
+                            disableControls || saving || modelDiscoveryFetching || alreadyConfigured
+                          }
                           ariaLabel={model.name}
                           className={`${styles.modelDiscoveryRow} ${
                             checked ? styles.modelDiscoveryRowSelected : ''
@@ -797,9 +831,18 @@ export function AiProvidersGeminiEditPage() {
                           label={
                             <div className={styles.modelDiscoveryMeta}>
                               <div className={styles.modelDiscoveryName}>
-                                {model.name}
-                                {model.alias && (
-                                  <span className={styles.modelDiscoveryAlias}>{model.alias}</span>
+                                <div className={styles.modelDiscoveryNameText}>
+                                  {model.name}
+                                  {model.alias && (
+                                    <span className={styles.modelDiscoveryAlias}>
+                                      {model.alias}
+                                    </span>
+                                  )}
+                                </div>
+                                {alreadyConfigured && (
+                                  <span className={styles.modelDiscoveryAddedBadge}>
+                                    {t('ai_providers.model_discovery_already_added')}
+                                  </span>
                                 )}
                               </div>
                               {model.description && (

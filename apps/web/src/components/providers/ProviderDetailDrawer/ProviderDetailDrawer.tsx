@@ -28,6 +28,7 @@ interface ProviderDetailDrawerProps {
   onToggle: (row: ProviderRow, enabled: boolean) => void;
   onToggleWebsockets: (row: ProviderRow, enabled: boolean) => void;
   onToggleCloak: (row: ProviderRow, enabled: boolean) => void;
+  onToggleDisableCooling: (row: ProviderRow, enabled: boolean) => void;
 }
 
 interface FieldRowProps {
@@ -58,6 +59,7 @@ export function ProviderDetailDrawer({
   onToggle,
   onToggleWebsockets,
   onToggleCloak,
+  onToggleDisableCooling,
 }: ProviderDetailDrawerProps) {
   const { t } = useTranslation();
 
@@ -68,7 +70,8 @@ export function ProviderDetailDrawer({
       supportsProviderKeySwitches && (row.kind === 'codex' || row.raw.websockets !== undefined);
     const showCloak =
       supportsProviderKeySwitches && (row.kind === 'claude' || row.raw.cloak !== undefined);
-    if (!showWebsockets && !showCloak) return null;
+    const showDisableCooling = row.kind !== 'vertex';
+    if (!showWebsockets && !showCloak && !showDisableCooling) return null;
 
     return (
       <section className={styles.section}>
@@ -107,6 +110,24 @@ export function ProviderDetailDrawer({
                 disabled={toggleDisabled}
                 onChange={(value) => onToggleCloak(row, value)}
                 ariaLabel={t('ai_providers.claude_cloak_toggle_aria')}
+              />
+            </div>
+          )}
+          {showDisableCooling && (
+            <div className={styles.quickSwitchRow}>
+              <div className={styles.quickSwitchText}>
+                <span className={styles.quickSwitchLabel}>
+                  {t('ai_providers.disable_cooling_label')}
+                </span>
+                <span className={styles.quickSwitchHint}>
+                  {t('ai_providers.disable_cooling_hint')}
+                </span>
+              </div>
+              <ToggleSwitch
+                checked={Boolean(row.raw.disableCooling)}
+                disabled={toggleDisabled}
+                onChange={(value) => onToggleDisableCooling(row, value)}
+                ariaLabel={t('ai_providers.disable_cooling_label')}
               />
             </div>
           )}

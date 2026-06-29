@@ -12,6 +12,7 @@ import type {
   ClaudeQuotaState,
   ClaudeQuotaWindow,
   CodexQuotaState,
+  CodexRateLimitResetCredit,
   CodexQuotaWindow,
   KimiQuotaRow,
   KimiQuotaState,
@@ -349,8 +350,100 @@ type CodexQuotaTooltipRow = {
   value: string;
 };
 
+export type CodexResetCreditExpiryInfo = {
+  id: string;
+  expiresAt: string;
+  expiresAtMs: number;
+};
+
+export const getSortedCodexResetCreditExpiries = (
+  credits: CodexRateLimitResetCredit[] | undefined,
+  nowMs = Date.now()
+): CodexResetCreditExpiryInfo[] =>
+  (credits ?? [])
+    .map((credit, index) => {
+      const expiresAt = String(credit.expiresAt ?? '').trim();
+      const expiresAtMs = expiresAt ? new Date(expiresAt).getTime() : Number.NaN;
+      if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) return null;
+      return {
+        id: String(credit.id || index),
+        expiresAt,
+        expiresAtMs,
+      };
+    })
+    .filter((credit): credit is CodexResetCreditExpiryInfo => Boolean(credit))
+    .sort((left, right) => left.expiresAtMs - right.expiresAtMs || left.id.localeCompare(right.id));
+
+const formatCodexResetCreditExpiryTime = (expiresAt: string): string => {
+  const expiresAtMs = new Date(expiresAt).getTime();
+  if (!Number.isFinite(expiresAtMs)) return '-';
+  return new Date(expiresAtMs).toLocaleString(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+};
+
 const formatCodexTooltipPercent = (value: number | null): string | null =>
   value === null ? null : `${Math.round(value)}%`;
+
+const renderCodexResetCreditExpiryInfo = (
+  quota: CodexQuotaState,
+  t: TFunction,
+  styleMap: QuotaRenderHelpers['styles']
+): ReactNode => {
+  const creditExpiries = getSortedCodexResetCreditExpiries(quota.rateLimitResetCredits);
+  if (creditExpiries.length === 0) return null;
+
+  const { createElement: h, Fragment } = React;
+  const earliestExpiryLabel = formatCodexResetCreditExpiryTime(creditExpiries[0].expiresAt);
+  const rows = creditExpiries.map((credit, index) => ({
+    key: `${credit.id}-${credit.expiresAt}`,
+    label: t('codex_quota.reset_credit_expiry_item', { index: index + 1 }),
+    value: formatCodexResetCreditExpiryTime(credit.expiresAt),
+  }));
+
+  return h(
+    Fragment,
+    null,
+    h(
+      'span',
+      { key: 'reset-expiry-summary', className: styleMap.codexResetCreditExpiry },
+      t('codex_quota.reset_credits_earliest_expiry', { time: earliestExpiryLabel })
+    ),
+    h(
+      'span',
+      {
+        key: 'reset-expiry-info',
+        className: styleMap.quotaInfoTrigger,
+        tabIndex: 0,
+        'aria-label': t('codex_quota.reset_credits_expiry_label'),
+      },
+      h(IconInfo, {
+        key: 'icon',
+        size: 14,
+        className: styleMap.quotaInfoIcon,
+        'aria-hidden': true,
+        focusable: false,
+      }),
+      h(
+        'span',
+        { key: 'tooltip', className: styleMap.quotaInfoTooltip, role: 'tooltip' },
+        ...rows.map((row) =>
+          h(
+            'span',
+            { key: row.key, className: styleMap.quotaInfoTooltipRow },
+            h('span', { className: styleMap.quotaInfoTooltipLabel }, row.label),
+            h('span', { className: styleMap.quotaInfoTooltipValue }, row.value)
+          )
+        )
+      )
+    )
+  );
+};
 
 const buildCodexWindowTooltipRows = (
   quota: CodexQuotaState,
@@ -528,7 +621,8 @@ const renderCodexItems = (
           hasResetCreditsAvailableCount
             ? String(resetCreditsAvailableCount)
             : t('codex_quota.reset_credits_unknown')
-        )
+        ),
+        renderCodexResetCreditExpiryInfo(quota, t, styleMap)
       );
     }
 

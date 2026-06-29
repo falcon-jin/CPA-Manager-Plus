@@ -25,6 +25,7 @@ export type OpenAIEditBaseline = {
   priority: number | null;
   prefix: string;
   baseUrl: string;
+  disableCooling: boolean;
   headers: Array<{ key: string; value: string }>;
   apiKeyEntries: Array<{
     apiKey: string;

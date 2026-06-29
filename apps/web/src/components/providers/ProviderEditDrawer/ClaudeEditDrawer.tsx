@@ -102,6 +102,7 @@ const buildClaudeBaseline = (form: ProviderFormState) => ({
   prefix: String(form.prefix ?? '').trim(),
   baseUrl: String(form.baseUrl ?? '').trim(),
   proxyUrl: String(form.proxyUrl ?? '').trim(),
+  disableCooling: Boolean(form.disableCooling),
   headers: normalizeHeaderEntries(form.headers),
   models: normalizeClaudeModelEntries(form.modelEntries),
   excludedModels: parseExcludedModels(form.excludedText ?? ''),
@@ -242,6 +243,7 @@ export function ClaudeEditDrawer({
       baseline.prefix !== String(form.prefix ?? '').trim() ||
       baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
       baseline.proxyUrl !== String(form.proxyUrl ?? '').trim() ||
+      baseline.disableCooling !== Boolean(form.disableCooling) ||
       !areKeyValueEntriesEqual(baseline.headers, normalizeHeaderEntries(form.headers)) ||
       !areModelEntriesEqual(baseline.models, normalizeClaudeModelEntries(form.modelEntries)) ||
       !areStringArraysEqual(
@@ -280,9 +282,22 @@ export function ClaudeEditDrawer({
     });
   }, [discoveredModels, modelDiscoverySearch]);
 
+  const configuredModelNames = useMemo(
+    () =>
+      new Set(
+        form.modelEntries
+          .map((entry) => entry.name.trim().toLowerCase())
+          .filter(Boolean)
+      ),
+    [form.modelEntries]
+  );
+
   const visibleModelNames = useMemo(
-    () => discoveredModelsFiltered.map((model) => model.name),
-    [discoveredModelsFiltered]
+    () =>
+      discoveredModelsFiltered
+        .map((model) => model.name)
+        .filter((name) => !configuredModelNames.has(name.trim().toLowerCase())),
+    [configuredModelNames, discoveredModelsFiltered]
   );
 
   const allVisibleSelected = useMemo(
@@ -400,7 +415,7 @@ export function ClaudeEditDrawer({
       let changed = false;
       const next = new Set<string>();
       prev.forEach((name) => {
-        if (availableNames.has(name)) {
+        if (availableNames.has(name) && !configuredModelNames.has(name.toLowerCase())) {
           next.add(name);
         } else {
           changed = true;
@@ -408,16 +423,17 @@ export function ClaudeEditDrawer({
       });
       return changed ? next : prev;
     });
-  }, [discoveredModels]);
+  }, [configuredModelNames, discoveredModels]);
 
   const toggleModelDiscoverySelection = useCallback((name: string) => {
+    if (configuredModelNames.has(name.toLowerCase())) return;
     setModelDiscoverySelected((prev) => {
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
       else next.add(name);
       return next;
     });
-  }, []);
+  }, [configuredModelNames]);
 
   const handleSelectVisibleModels = useCallback(() => {
     setModelDiscoverySelected((prev) => {
@@ -669,6 +685,16 @@ export function ClaudeEditDrawer({
               onChange={(e) => setForm((prev) => ({ ...prev, proxyUrl: e.target.value }))}
               disabled={saving || disabled || isTesting}
             />
+            <div className="form-group">
+              <label>{t('ai_providers.disable_cooling_label')}</label>
+              <ToggleSwitch
+                checked={Boolean(form.disableCooling)}
+                onChange={(value) => setForm((prev) => ({ ...prev, disableCooling: value }))}
+                disabled={saving || disabled || isTesting}
+                ariaLabel={t('ai_providers.disable_cooling_label')}
+              />
+              <div className="hint">{t('ai_providers.disable_cooling_hint')}</div>
+            </div>
             <HeaderInputList
               entries={form.headers}
               onChange={(entries) => setForm((prev) => ({ ...prev, headers: entries }))}
@@ -914,12 +940,17 @@ export function ClaudeEditDrawer({
                   <div className={styles.modelDiscoveryList}>
                     {discoveredModelsFiltered.map((model) => {
                       const checked = modelDiscoverySelected.has(model.name);
+                      const alreadyConfigured = configuredModelNames.has(
+                        model.name.trim().toLowerCase()
+                      );
                       return (
                         <SelectionCheckbox
                           key={model.name}
                           checked={checked}
                           onChange={() => toggleModelDiscoverySelection(model.name)}
-                          disabled={disabled || saving || modelDiscoveryFetching}
+                          disabled={
+                            disabled || saving || modelDiscoveryFetching || alreadyConfigured
+                          }
                           ariaLabel={model.name}
                           className={`${styles.modelDiscoveryRow} ${
                             checked ? styles.modelDiscoveryRowSelected : ''
@@ -928,9 +959,18 @@ export function ClaudeEditDrawer({
                           label={
                             <div className={styles.modelDiscoveryMeta}>
                               <div className={styles.modelDiscoveryName}>
-                                {model.name}
-                                {model.alias && (
-                                  <span className={styles.modelDiscoveryAlias}>{model.alias}</span>
+                                <div className={styles.modelDiscoveryNameText}>
+                                  {model.name}
+                                  {model.alias && (
+                                    <span className={styles.modelDiscoveryAlias}>
+                                      {model.alias}
+                                    </span>
+                                  )}
+                                </div>
+                                {alreadyConfigured && (
+                                  <span className={styles.modelDiscoveryAddedBadge}>
+                                    {t('ai_providers.model_discovery_already_added')}
+                                  </span>
                                 )}
                               </div>
                               {model.description && (

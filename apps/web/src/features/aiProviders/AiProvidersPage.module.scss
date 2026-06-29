@@ -210,14 +210,36 @@
 }
 
 .modelDiscoveryName {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.modelDiscoveryNameText {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
 }
 
 .modelDiscoveryAlias {
   margin-left: 6px;
   color: var(--text-tertiary);
   font-style: italic;
+}
+
+.modelDiscoveryAddedBadge {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--text-secondary);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
 }
 
 .modelDiscoveryDesc {
@@ -764,10 +786,43 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
 
   svg {
     display: block;
   }
+}
+
+.keyStatusTrigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  outline: none;
+}
+
+.keyStatusTriggerInteractive {
+  cursor: help;
+
+  &:focus-visible {
+    border-radius: $radius-sm;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 35%, transparent);
+  }
+}
+
+.keyStatusTooltip {
+  bottom: calc(100% + 10px);
+  width: max-content;
+  max-width: min(280px, 42vw);
+  white-space: normal;
+  text-align: left;
+}
+
+.keyStatusTooltipText {
+  display: block;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .keyTableColKey,

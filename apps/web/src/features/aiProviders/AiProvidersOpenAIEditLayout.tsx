@@ -119,6 +119,7 @@ const buildOpenAIBaseline = (form: OpenAIFormState, testModel: string): OpenAIEd
       : null,
   prefix: String(form.prefix ?? '').trim(),
   baseUrl: String(form.baseUrl ?? '').trim(),
+  disableCooling: Boolean(form.disableCooling),
   headers: normalizeHeaderEntries(form.headers),
   apiKeyEntries: normalizeApiKeyEntries(form.apiKeyEntries),
   models: normalizeModelEntries(form.modelEntries),
@@ -386,13 +387,18 @@ export function AiProvidersOpenAIEditLayout() {
         prev.modelEntries.forEach((entry) => {
           const name = entry.name.trim();
           if (!name) return;
-          mergedMap.set(name, { ...entry, name, alias: entry.alias?.trim() || '' });
+          mergedMap.set(name.toLowerCase(), {
+            ...entry,
+            name,
+            alias: entry.alias?.trim() || '',
+          });
         });
 
         selectedModels.forEach((model) => {
           const name = model.name.trim();
-          if (!name || mergedMap.has(name)) return;
-          mergedMap.set(name, { name, alias: model.alias ?? '' });
+          const key = name.toLowerCase();
+          if (!name || mergedMap.has(key)) return;
+          mergedMap.set(key, { name, alias: model.alias ?? '' });
           addedCount += 1;
         });
 
@@ -449,6 +455,7 @@ export function AiProvidersOpenAIEditLayout() {
       baseline.priority !== normalizedPriority ||
       baseline.prefix !== form.prefix.trim() ||
       baseline.baseUrl !== form.baseUrl.trim() ||
+      baseline.disableCooling !== Boolean(form.disableCooling) ||
       baseline.testModel !== normalizedTestModel ||
       isHeadersDirty ||
       isApiKeyEntriesDirty ||

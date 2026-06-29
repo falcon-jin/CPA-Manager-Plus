@@ -27,6 +27,7 @@ export type ClaudeEditBaseline = {
   prefix: string;
   baseUrl: string;
   proxyUrl: string;
+  disableCooling: boolean;
   headers: Array<{ key: string; value: string }>;
   models: Array<{ name: string; alias: string }>;
   excludedModels: string[];

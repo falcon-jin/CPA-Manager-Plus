@@ -358,6 +358,52 @@ const extractArrayPayload = (data: unknown, key: string): unknown[] => {
   return Array.isArray(candidate) ? candidate : [];
 };
 
+const getOpenAIProviderKey = (provider: Pick<OpenAIProviderConfig, 'name' | 'baseUrl'>) =>
+  `${String(provider.name ?? '')
+    .trim()
+    .toLowerCase()}\u0000${String(provider.baseUrl ?? '')
+    .trim()
+    .toLowerCase()}`;
+
+// CPA upstream currently omits some OpenAI provider fields from GET /openai-compatibility,
+// so we rehydrate them from /config when they are missing.
+// This is a temporary workaround until upstream fixes the issue.
+const hydrateOpenAIProvidersDisableCooling = async (providers: OpenAIProviderConfig[]) => {
+  if (!providers.some((provider) => provider.disableCooling === undefined)) {
+    return providers;
+  }
+
+  let rawConfig: unknown;
+  try {
+    rawConfig = await apiClient.get('/config');
+  } catch {
+    return providers;
+  }
+
+  const fallbackProviders = extractArrayPayload(rawConfig, 'openai-compatibility')
+    .map((item) => normalizeOpenAIProvider(item))
+    .filter(Boolean) as OpenAIProviderConfig[];
+
+  if (!fallbackProviders.length) {
+    return providers;
+  }
+
+  const fallbackByKey = new Map(
+    fallbackProviders.map((provider) => [getOpenAIProviderKey(provider), provider])
+  );
+
+  return providers.map((provider) => {
+    if (provider.disableCooling !== undefined) {
+      return provider;
+    }
+    const fallback = fallbackByKey.get(getOpenAIProviderKey(provider));
+    if (!fallback || fallback.disableCooling === undefined) {
+      return provider;
+    }
+    return { ...provider, disableCooling: fallback.disableCooling };
+  });
+};
+
 const buildProviderDeleteQuery = (apiKey: string, baseUrl?: string) => {
   const params = new URLSearchParams();
   params.set('api-key', apiKey.trim());
@@ -630,9 +676,10 @@ export const providersApi = {
   async getOpenAIProviders(): Promise<OpenAIProviderConfig[]> {
     const data = await apiClient.get('/openai-compatibility');
     const list = extractArrayPayload(data, 'openai-compatibility');
-    return list
+    const providers = list
       .map((item) => normalizeOpenAIProvider(item))
       .filter(Boolean) as OpenAIProviderConfig[];
+    return hydrateOpenAIProvidersDisableCooling(providers);
   },
 
   saveOpenAIProviders: async (providers: OpenAIProviderConfig[]) =>

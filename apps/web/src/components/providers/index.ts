@@ -1,4 +1,5 @@
 export { ProviderStatusBar } from './ProviderStatusBar';
+export { OpenAIKeyTestStatusIndicator } from './OpenAIKeyTestStatusIndicator';
 export * from './ProviderTable';
 export { ProviderToolbar } from './ProviderToolbar';
 export { ProviderDetailDrawer } from './ProviderDetailDrawer';

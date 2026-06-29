@@ -83,6 +83,7 @@ type CodexFormBaseline = {
   prefix: string;
   baseUrl: string;
   websockets: boolean;
+  disableCooling: boolean;
   proxyUrl: string;
   headers: ReturnType<typeof normalizeHeaderEntries>;
   models: ReturnType<typeof normalizeModelEntries>;
@@ -99,6 +100,7 @@ const buildCodexBaseline = (form: ProviderFormState): CodexFormBaseline => ({
   prefix: String(form.prefix ?? '').trim(),
   baseUrl: String(form.baseUrl ?? '').trim(),
   websockets: Boolean(form.websockets),
+  disableCooling: Boolean(form.disableCooling),
   proxyUrl: String(form.proxyUrl ?? '').trim(),
   headers: normalizeHeaderEntries(form.headers),
   models: normalizeModelEntries(form.modelEntries),
@@ -273,6 +275,7 @@ export function AiProvidersCodexEditPage() {
     baseline.prefix !== String(form.prefix ?? '').trim() ||
     baseline.baseUrl !== String(form.baseUrl ?? '').trim() ||
     baseline.websockets !== Boolean(form.websockets) ||
+    baseline.disableCooling !== Boolean(form.disableCooling) ||
     baseline.proxyUrl !== String(form.proxyUrl ?? '').trim() ||
     isHeadersDirty ||
     isModelsDirty ||
@@ -305,9 +308,16 @@ export function AiProvidersCodexEditPage() {
       return name.includes(filter) || alias.includes(filter) || description.includes(filter);
     });
   }, [discoveredModels, modelDiscoverySearch]);
+  const configuredModelNames = useMemo(
+    () => new Set(normalizedModels.map((entry) => entry.name.trim().toLowerCase()).filter(Boolean)),
+    [normalizedModels]
+  );
   const visibleDiscoveredModelNames = useMemo(
-    () => discoveredModelsFiltered.map((model) => model.name),
-    [discoveredModelsFiltered]
+    () =>
+      discoveredModelsFiltered
+        .map((model) => model.name)
+        .filter((name) => !configuredModelNames.has(name.trim().toLowerCase())),
+    [configuredModelNames, discoveredModelsFiltered]
   );
   const allVisibleDiscoveredSelected = useMemo(
     () =>
@@ -552,7 +562,7 @@ export function AiProvidersCodexEditPage() {
       let changed = false;
       const next = new Set<string>();
       prev.forEach((name) => {
-        if (availableNames.has(name)) {
+        if (availableNames.has(name) && !configuredModelNames.has(name.toLowerCase())) {
           next.add(name);
         } else {
           changed = true;
@@ -560,9 +570,10 @@ export function AiProvidersCodexEditPage() {
       });
       return changed ? next : prev;
     });
-  }, [discoveredModels]);
+  }, [configuredModelNames, discoveredModels]);
 
   const toggleModelDiscoverySelection = (name: string) => {
+    if (configuredModelNames.has(name.toLowerCase())) return;
     setModelDiscoverySelected((prev) => {
       const next = new Set(prev);
       if (next.has(name)) {
@@ -756,6 +767,16 @@ export function AiProvidersCodexEditPage() {
                 ariaLabel={t('ai_providers.codex_websockets_label')}
               />
               <div className="hint">{t('ai_providers.codex_websockets_hint')}</div>
+            </div>
+            <div className="form-group">
+              <label>{t('ai_providers.disable_cooling_label')}</label>
+              <ToggleSwitch
+                checked={Boolean(form.disableCooling)}
+                onChange={(value) => setForm((prev) => ({ ...prev, disableCooling: value }))}
+                disabled={disableControls || saving}
+                ariaLabel={t('ai_providers.disable_cooling_label')}
+              />
+              <div className="hint">{t('ai_providers.disable_cooling_hint')}</div>
             </div>
             <Input
               label={t('ai_providers.codex_add_modal_proxy_label')}
@@ -984,12 +1005,17 @@ export function AiProvidersCodexEditPage() {
                   <div className={styles.modelDiscoveryList}>
                     {discoveredModelsFiltered.map((model) => {
                       const checked = modelDiscoverySelected.has(model.name);
+                      const alreadyConfigured = configuredModelNames.has(
+                        model.name.trim().toLowerCase()
+                      );
                       return (
                         <SelectionCheckbox
                           key={model.name}
                           checked={checked}
                           onChange={() => toggleModelDiscoverySelection(model.name)}
-                          disabled={disableControls || saving || modelDiscoveryFetching}
+                          disabled={
+                            disableControls || saving || modelDiscoveryFetching || alreadyConfigured
+                          }
                           ariaLabel={model.name}
                           className={`${styles.modelDiscoveryRow} ${
                             checked ? styles.modelDiscoveryRowSelected : ''
@@ -998,9 +1024,18 @@ export function AiProvidersCodexEditPage() {
                           label={
                             <div className={styles.modelDiscoveryMeta}>
                               <div className={styles.modelDiscoveryName}>
-                                {model.name}
-                                {model.alias && (
-                                  <span className={styles.modelDiscoveryAlias}>{model.alias}</span>
+                                <div className={styles.modelDiscoveryNameText}>
+                                  {model.name}
+                                  {model.alias && (
+                                    <span className={styles.modelDiscoveryAlias}>
+                                      {model.alias}
+                                    </span>
+                                  )}
+                                </div>
+                                {alreadyConfigured && (
+                                  <span className={styles.modelDiscoveryAddedBadge}>
+                                    {t('ai_providers.model_discovery_already_added')}
+                                  </span>
                                 )}
                               </div>
                               {model.description && (

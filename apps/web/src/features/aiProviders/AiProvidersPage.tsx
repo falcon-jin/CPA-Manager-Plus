@@ -691,6 +691,117 @@ export function AiProvidersPage() {
     }
   };
 
+  const setProviderDisableCoolingEnabled = async (
+    provider: 'gemini' | 'codex' | 'claude' | 'openai',
+    index: number,
+    enabled: boolean
+  ) => {
+    if (provider === 'gemini') {
+      const current = geminiKeys[index];
+      if (!current) return;
+
+      const switchingKey = `${provider}:${current.apiKey}:disable-cooling`;
+      setConfigSwitchingKey(switchingKey);
+
+      const previousList = geminiKeys;
+      const nextItem: GeminiKeyConfig = { ...current, disableCooling: enabled };
+      const nextList = previousList.map((item, idx) => (idx === index ? nextItem : item));
+
+      setGeminiKeys(nextList);
+      updateConfigValue('gemini-api-key', nextList);
+      clearCache('gemini-api-key');
+
+      try {
+        await providersApi.saveGeminiKeys(nextList);
+        showNotification(t('notification.gemini_key_updated'), 'success');
+      } catch (err: unknown) {
+        const message = getErrorMessage(err);
+        setGeminiKeys(previousList);
+        updateConfigValue('gemini-api-key', previousList);
+        clearCache('gemini-api-key');
+        showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
+      } finally {
+        setConfigSwitchingKey(null);
+      }
+      return;
+    }
+
+    if (provider === 'openai') {
+      const current = openaiProviders[index];
+      if (!current) return;
+
+      const switchingKey = `${provider}:${current.name}:${index}:disable-cooling`;
+      setConfigSwitchingKey(switchingKey);
+
+      const previousList = openaiProviders;
+      const nextItem: OpenAIProviderConfig = { ...current, disableCooling: enabled };
+      const nextList = previousList.map((item, idx) => (idx === index ? nextItem : item));
+
+      setOpenaiProviders(nextList);
+      updateConfigValue('openai-compatibility', nextList);
+      clearCache('openai-compatibility');
+
+      try {
+        await providersApi.saveOpenAIProviders(nextList);
+        showNotification(t('notification.openai_provider_updated'), 'success');
+      } catch (err: unknown) {
+        const message = getErrorMessage(err);
+        setOpenaiProviders(previousList);
+        updateConfigValue('openai-compatibility', previousList);
+        clearCache('openai-compatibility');
+        showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
+      } finally {
+        setConfigSwitchingKey(null);
+      }
+      return;
+    }
+
+    const source = provider === 'codex' ? codexConfigs : claudeConfigs;
+    const current = source[index];
+    if (!current) return;
+
+    const switchingKey = `${provider}:${current.apiKey}:disable-cooling`;
+    setConfigSwitchingKey(switchingKey);
+
+    const previousList = source;
+    const nextItem: ProviderKeyConfig = { ...current, disableCooling: enabled };
+    const nextList = previousList.map((item, idx) => (idx === index ? nextItem : item));
+
+    if (provider === 'codex') {
+      setCodexConfigs(nextList);
+      updateConfigValue('codex-api-key', nextList);
+      clearCache('codex-api-key');
+    } else {
+      setClaudeConfigs(nextList);
+      updateConfigValue('claude-api-key', nextList);
+      clearCache('claude-api-key');
+    }
+
+    try {
+      if (provider === 'codex') {
+        await providersApi.saveCodexConfigs(nextList);
+        showNotification(t('notification.codex_config_updated'), 'success');
+      } else {
+        await providersApi.saveClaudeConfigs(nextList);
+        showNotification(t('notification.claude_config_updated'), 'success');
+      }
+    } catch (err: unknown) {
+      const message = getErrorMessage(err);
+      if (provider === 'codex') {
+        setCodexConfigs(previousList);
+        updateConfigValue('codex-api-key', previousList);
+        clearCache('codex-api-key');
+      } else {
+        setClaudeConfigs(previousList);
+        updateConfigValue('claude-api-key', previousList);
+        clearCache('claude-api-key');
+      }
+      showNotification(`${t('notification.update_failed')}: ${message}`, 'error');
+    } finally {
+      setConfigSwitchingKey(null);
+    }
+  };
+
   // 删除（按 provider 分派，沿用既有 API 契约）
   const deleteGemini = (index: number) => {
     const entry = geminiKeys[index];
@@ -817,6 +928,18 @@ export function AiProvidersPage() {
   const handleRowCloakToggle = (row: ProviderRow, enabled: boolean) => {
     if (row.kind !== 'codex' && row.kind !== 'claude') return;
     void setProviderCloakEnabled(row.kind, row.originalIndex, enabled);
+  };
+
+  const handleRowDisableCoolingToggle = (row: ProviderRow, enabled: boolean) => {
+    if (
+      row.kind !== 'gemini' &&
+      row.kind !== 'codex' &&
+      row.kind !== 'claude' &&
+      row.kind !== 'openai'
+    ) {
+      return;
+    }
+    void setProviderDisableCoolingEnabled(row.kind, row.originalIndex, enabled);
   };
 
   const handleRowEdit = (row: ProviderRow) => {
@@ -985,6 +1108,7 @@ export function AiProvidersPage() {
         onToggle={handleRowToggle}
         onToggleWebsockets={handleRowWebsocketsToggle}
         onToggleCloak={handleRowCloakToggle}
+        onToggleDisableCooling={handleRowDisableCoolingToggle}
       />
       <ProviderHealthCheckDrawer
         open={healthCheckOpen}

@@ -130,6 +130,44 @@ describe('providersApi v1.16 provider fields', () => {
     });
   });
 
+  it('fills missing OpenAI provider disable-cooling from /config fallback', async () => {
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/openai-compatibility') {
+        return {
+          'openai-compatibility': [
+            {
+              name: 'openai-compatible',
+              'base-url': 'https://api.example.com/v1',
+              'api-key-entries': [],
+            },
+          ],
+        };
+      }
+      if (url === '/config') {
+        return {
+          'openai-compatibility': [
+            {
+              name: 'openai-compatible',
+              'base-url': 'https://api.example.com/v1',
+              'api-key-entries': [],
+              'disable-cooling': true,
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const providers = await providersApi.getOpenAIProviders();
+
+    expect(providers[0]).toMatchObject({
+      name: 'openai-compatible',
+      disableCooling: true,
+    });
+    expect(mocks.get).toHaveBeenNthCalledWith(1, '/openai-compatibility');
+    expect(mocks.get).toHaveBeenNthCalledWith(2, '/config');
+  });
+
   it('serializes Claude disable-cooling, cch signing, cloak cache, and model metadata', async () => {
     mocks.get.mockResolvedValue({
       'claude-api-key': [
