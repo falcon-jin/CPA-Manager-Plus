@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import type {
   AntigravityQuotaState,
+  AntigravityQuotaSubscription,
   AuthFileItem,
   ClaudeExtraUsage,
   ClaudeQuotaState,
@@ -90,6 +91,13 @@ export interface QuotaConfig<TState, TData> {
   buildLoadingState: (file?: AuthFileItem) => TState;
   buildSuccessState: (data: TData, file?: AuthFileItem) => TState;
   buildErrorState: (message: string, status?: number, file?: AuthFileItem) => TState;
+  buildFailureState?: (
+    message: string,
+    status: number | undefined,
+    file: AuthFileItem | undefined,
+    activeState: TState | undefined,
+    failedAtMs: number
+  ) => TState;
   scopeState?: (file: AuthFileItem, state: TState | undefined) => TState | undefined;
   cardClassName: string;
   controlsClassName: string;
@@ -112,6 +120,120 @@ export const getQuotaStoreKey = <TState, TData>(
   file: AuthFileItem
 ): string => config.getStoreKey?.(file) ?? file.name;
 
+export const getScopedQuotaState = <TState, TData>(
+  config: Pick<QuotaConfig<TState, TData>, 'getStoreKey' | 'scopeState'>,
+  states: Record<string, TState>,
+  file: AuthFileItem
+): TState | undefined => {
+  const storeKey = getQuotaStoreKey(config, file);
+  const activeQuota = states[storeKey];
+  const scopedQuota = config.scopeState ? config.scopeState(file, activeQuota) : activeQuota;
+  if (scopedQuota || storeKey === file.name) return scopedQuota;
+  const legacyQuota = states[file.name];
+  return config.scopeState ? config.scopeState(file, legacyQuota) : legacyQuota;
+};
+
+export const buildQuotaFailureState = <TState, TData>(
+  config: Pick<QuotaConfig<TState, TData>, 'buildErrorState' | 'buildFailureState'>,
+  message: string,
+  status: number | undefined,
+  file: AuthFileItem | undefined,
+  activeState: TState | undefined,
+  failedAtMs = Date.now()
+): TState =>
+  config.buildFailureState
+    ? config.buildFailureState(message, status, file, activeState, failedAtMs)
+    : config.buildErrorState(message, status, file);
+
+const formatAntigravityDuration = (t: TFunction, deltaMs: number): string => {
+  const totalMinutes = Math.max(0, Math.ceil(deltaMs / 60000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) {
+    return t('antigravity_quota.duration_day_hour', { days, hours });
+  }
+  if (hours > 0) {
+    return t('antigravity_quota.duration_hour_minute', { hours, minutes });
+  }
+  if (minutes > 0) {
+    return t('antigravity_quota.duration_minute', { minutes });
+  }
+  return t('antigravity_quota.duration_less_than_minute');
+};
+
+const formatAntigravityResetLabel = (
+  resetTime: string | undefined,
+  t: TFunction,
+  nowMs: number
+): string => {
+  if (!resetTime) return '-';
+  const resetMs = new Date(resetTime).getTime();
+  if (Number.isNaN(resetMs)) return formatQuotaResetTime(resetTime);
+  const deltaMs = resetMs - nowMs;
+  if (deltaMs <= 0) return t('antigravity_quota.refresh_available');
+  return t('antigravity_quota.refreshes_in', {
+    duration: formatAntigravityDuration(t, deltaMs),
+  });
+};
+
+const ANTIGRAVITY_GROUP_LABEL_KEYS = new Map<string, string>([
+  ['gemini models', 'group_gemini_models'],
+  ['claude and gpt models', 'group_claude_gpt_models'],
+]);
+
+const ANTIGRAVITY_BUCKET_LABEL_KEYS = new Map<string, string>([
+  ['weekly limit', 'weekly_limit'],
+  ['daily limit', 'daily_limit'],
+  ['5 hour limit', 'five_hour_limit'],
+  ['5-hour limit', 'five_hour_limit'],
+  ['five hour limit', 'five_hour_limit'],
+  ['monthly limit', 'monthly_limit'],
+]);
+
+const normalizeAntigravityQuotaText = (value: string): string =>
+  value.trim().toLowerCase().replace(/\s+/g, ' ');
+
+const translateAntigravityQuotaLabel = (
+  value: string,
+  keys: Map<string, string>,
+  t: TFunction
+): string => {
+  const key = keys.get(normalizeAntigravityQuotaText(value));
+  return key ? t(`antigravity_quota.${key}`) : value;
+};
+
+const translateAntigravityQuotaDescription = (
+  value: string | undefined,
+  t: TFunction
+): string | undefined => {
+  if (!value) return undefined;
+  const modelsMatch = value.match(/^models within this group:\s*(.+)$/i);
+  if (modelsMatch) {
+    return t('antigravity_quota.group_models_description', {
+      models: modelsMatch[1].trim(),
+    });
+  }
+  return value;
+};
+
+const getAntigravityPlanLabel = (
+  subscription: AntigravityQuotaSubscription | null | undefined,
+  t: TFunction
+): string | null => {
+  if (!subscription) return null;
+  if (subscription.plan === 'free') return t('antigravity_subscription.plan_free');
+  if (subscription.plan === 'pro') return t('antigravity_subscription.plan_pro');
+  if (subscription.plan === 'ultra') return t('antigravity_subscription.plan_ultra');
+  if (subscription.plan === 'ultra-lite') return t('antigravity_subscription.plan_ultra_lite');
+  return (
+    subscription.tierName ||
+    subscription.tierId ||
+    (subscription.plan === 'unknown' ? t('antigravity_subscription.plan_unknown') : null)
+  );
+};
+
 const renderAntigravityItems = (
   quota: AntigravityQuotaState,
   t: TFunction,
@@ -120,40 +242,74 @@ const renderAntigravityItems = (
   const { styles: styleMap, QuotaProgressBar } = helpers;
   const { createElement: h, Fragment } = React;
   const groups = quota.groups ?? [];
+  const nodes: ReactNode[] = [];
+  const planLabel = getAntigravityPlanLabel(quota.subscription, t);
+  const normalizedPlan = quota.subscription?.plan?.toLowerCase() ?? '';
+  const isPremiumPlan =
+    normalizedPlan === 'pro' || normalizedPlan === 'ultra' || normalizedPlan === 'ultra-lite';
+
+  if (planLabel) {
+    nodes.push(
+      h(
+        'div',
+        { key: 'plan', className: styleMap.codexPlan },
+        h('span', { className: styleMap.codexPlanLabel }, t('antigravity_quota.plan_label')),
+        h(
+          'span',
+          { className: isPremiumPlan ? styleMap.premiumPlanValue : styleMap.codexPlanValue },
+          planLabel
+        )
+      )
+    );
+  }
 
   if (groups.length === 0) {
-    return h('div', { className: styleMap.quotaMessage }, t('antigravity_quota.empty_models'));
+    nodes.push(
+      h(
+        'div',
+        { key: 'empty', className: styleMap.quotaMessage },
+        t('antigravity_quota.empty_models')
+      )
+    );
+    return h(Fragment, null, ...nodes);
   }
 
   const nowMs = Date.now() + (quota.serverTimeOffsetMs ?? 0);
 
-  return h(
-    Fragment,
-    null,
+  nodes.push(
     ...groups.flatMap((group) => {
-      const shouldRenderGroupHeader = group.buckets.length > 1 || Boolean(group.description);
-      const groupHeader = shouldRenderGroupHeader
-        ? [
-            h(
-              'div',
-              { key: `${group.id}-header`, className: styleMap.quotaMessage },
-              group.description
-                ? h('span', { title: group.description }, group.label)
-                : h('span', null, group.label)
-            ),
-          ]
-        : [];
+      const groupLabel = translateAntigravityQuotaLabel(
+        group.label,
+        ANTIGRAVITY_GROUP_LABEL_KEYS,
+        t
+      );
+      const groupDescription = translateAntigravityQuotaDescription(group.description, t);
+      const groupHeader = h(
+        'div',
+        { key: `${group.id}-header`, className: styleMap.quotaMessage },
+        groupDescription
+          ? h('span', { title: groupDescription }, groupLabel)
+          : h('span', null, groupLabel)
+      );
 
       return [
-        ...groupHeader,
+        groupHeader,
         ...group.buckets.map((bucket) => {
           const clamped = Math.max(0, Math.min(1, bucket.remainingFraction));
-          const percent = Math.round(clamped * 100);
-          const resetMs = bucket.resetTime ? new Date(bucket.resetTime).getTime() : Number.NaN;
-          const resetLabel =
-            bucket.resetTime && !Number.isNaN(resetMs) && resetMs <= nowMs
-              ? t('antigravity_quota.refresh_available')
-              : formatQuotaResetTime(bucket.resetTime);
+          const percent = clamped * 100;
+          const percentLabel =
+            bucket.remainingFraction === 1
+              ? t('antigravity_quota.quota_available')
+              : t('antigravity_quota.remaining_percent', {
+                  percent: Math.round(percent),
+                });
+          const resetLabel = formatAntigravityResetLabel(bucket.resetTime, t, nowMs);
+          const bucketLabel = translateAntigravityQuotaLabel(
+            bucket.label,
+            ANTIGRAVITY_BUCKET_LABEL_KEYS,
+            t
+          );
+          const bucketDescription = translateAntigravityQuotaDescription(bucket.description, t);
 
           return h(
             'div',
@@ -161,15 +317,11 @@ const renderAntigravityItems = (
             h(
               'div',
               { className: styleMap.quotaRowHeader },
-              h(
-                'span',
-                { className: styleMap.quotaModel, title: bucket.description },
-                bucket.label
-              ),
+              h('span', { className: styleMap.quotaModel, title: bucketDescription }, bucketLabel),
               h(
                 'div',
                 { className: styleMap.quotaMeta },
-                h('span', { className: styleMap.quotaPercent }, `${percent}%`),
+                h('span', { className: styleMap.quotaPercent }, percentLabel),
                 h('span', { className: styleMap.quotaReset }, resetLabel)
               )
             ),
@@ -183,6 +335,8 @@ const renderAntigravityItems = (
       ];
     })
   );
+
+  return h(Fragment, null, ...nodes);
 };
 
 const PREMIUM_CODEX_PLAN_TYPES = new Set(['pro', 'prolite', 'pro-lite', 'pro_lite']);
@@ -241,13 +395,139 @@ const getCodexSearchText = (
 
 type DisplayQuotaState = {
   status?: 'idle' | 'loading' | 'success' | 'error';
+  error?: string;
   errorStatus?: number | null;
   fetchedAtMs?: number;
+  failedAtMs?: number;
   observedAtMs?: number;
 };
 
+type CodexQuotaMergeState = DisplayQuotaState & Partial<CodexQuotaState>;
+
 const readFiniteTimestamp = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+const hasHeaderValue = (value: unknown): boolean => {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (typeof value === 'number') return Number.isFinite(value);
+  return true;
+};
+
+const hasKnownResetLabel = (value: unknown): value is string => {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  return trimmed !== '' && trimmed !== '-';
+};
+
+const mergeCodexQuotaWindow = (
+  activeWindow: CodexQuotaWindow,
+  observedWindow: CodexQuotaWindow
+): CodexQuotaWindow => ({
+  ...activeWindow,
+  ...(hasHeaderValue(observedWindow.label) ? { label: observedWindow.label } : {}),
+  ...(hasHeaderValue(observedWindow.labelKey) ? { labelKey: observedWindow.labelKey } : {}),
+  ...(observedWindow.labelParams && Object.keys(observedWindow.labelParams).length > 0
+    ? { labelParams: observedWindow.labelParams }
+    : {}),
+  ...(observedWindow.usedPercent !== null &&
+  observedWindow.usedPercent !== undefined &&
+  Number.isFinite(observedWindow.usedPercent)
+    ? { usedPercent: observedWindow.usedPercent }
+    : {}),
+  ...(hasKnownResetLabel(observedWindow.resetLabel)
+    ? { resetLabel: observedWindow.resetLabel }
+    : {}),
+  ...(observedWindow.limitWindowSeconds !== null &&
+  observedWindow.limitWindowSeconds !== undefined &&
+  observedWindow.limitWindowSeconds > 0
+    ? { limitWindowSeconds: observedWindow.limitWindowSeconds }
+    : {}),
+});
+
+const mergeCodexQuotaWindows = (
+  activeWindows: CodexQuotaWindow[] | undefined,
+  observedWindows: CodexQuotaWindow[] | undefined
+): CodexQuotaWindow[] | undefined => {
+  if (!observedWindows || observedWindows.length === 0) return activeWindows;
+  if (!activeWindows || activeWindows.length === 0) return observedWindows;
+
+  const observedById = new Map(observedWindows.map((window) => [window.id, window]));
+  const mergedWindows = activeWindows.map((window) => {
+    const observedWindow = observedById.get(window.id);
+    if (!observedWindow) return window;
+    observedById.delete(window.id);
+    return mergeCodexQuotaWindow(window, observedWindow);
+  });
+
+  return [...mergedWindows, ...observedById.values()];
+};
+
+const hasKnownResetCreditCount = (quota: CodexQuotaMergeState): boolean => {
+  const value = quota.rateLimitResetCreditsAvailableCount;
+  return typeof value === 'number' && Number.isFinite(value);
+};
+
+const mergeObservedQuotaIntoActive = <TState extends DisplayQuotaState>(
+  activeQuota: TState,
+  observedQuota: TState
+): TState => {
+  const active = activeQuota as CodexQuotaMergeState;
+  const observed = observedQuota as CodexQuotaMergeState;
+  const merged: CodexQuotaMergeState = { ...active };
+
+  const scalarKeys: Array<keyof CodexQuotaMergeState> = [
+    'status',
+    'planType',
+    'activeLimit',
+    'creditsHasCredits',
+    'creditsUnlimited',
+    'creditsBalance',
+    'rateLimitReachedType',
+    'primaryOverSecondaryLimitPercent',
+    'observedAtMs',
+    'observedTraceId',
+    'observedErrorKind',
+    'observedErrorCode',
+  ];
+
+  scalarKeys.forEach((key) => {
+    const value = observed[key];
+    if (hasHeaderValue(value)) {
+      (merged as Record<string, unknown>)[key] = value;
+    }
+  });
+
+  merged.windows = mergeCodexQuotaWindows(active.windows, observed.windows);
+  if (observed.observedFromUsageHeaders === true) {
+    merged.observedFromUsageHeaders = true;
+  }
+  if (observed.observedResetCreditsUnknown === true && !hasKnownResetCreditCount(active)) {
+    merged.observedResetCreditsUnknown = true;
+  }
+
+  return merged as TState;
+};
+
+const clearQuotaFailureForObservedRecovery = <TState extends DisplayQuotaState>(
+  quota: TState
+): TState => {
+  const recovered = { ...quota };
+  delete recovered.error;
+  delete recovered.errorStatus;
+  delete recovered.failedAtMs;
+  return recovered;
+};
+
+const isObservedQuotaNewerThanFailure = <TState extends DisplayQuotaState>(
+  activeQuota: TState,
+  observedQuota: TState | undefined
+): observedQuota is TState => {
+  if (observedQuota?.status !== 'success') return false;
+  const failedAtMs = readFiniteTimestamp(activeQuota.failedAtMs);
+  const observedAtMs = readFiniteTimestamp(observedQuota.observedAtMs);
+  return failedAtMs !== null && observedAtMs !== null && observedAtMs > failedAtMs;
+};
 
 const buildCodexQuotaAuthIdentity = (file: AuthFileItem | undefined) => {
   if (!file?.name) return {};
@@ -272,22 +552,46 @@ const scopeCodexQuotaStateToAuthFile = (
   return state.authFileKey === identity.authFileKey ? state : undefined;
 };
 
+const buildCodexQuotaFailureState = (
+  message: string,
+  status: number | undefined,
+  file: AuthFileItem | undefined,
+  activeState: CodexQuotaState | undefined,
+  failedAtMs: number
+): CodexQuotaState => {
+  const preservedState = activeState ? { ...activeState } : null;
+  return {
+    ...(preservedState ?? { windows: [] }),
+    status: 'error',
+    windows: preservedState?.windows ?? [],
+    error: message,
+    errorStatus: status,
+    failedAtMs,
+    ...buildCodexQuotaAuthIdentity(file),
+  };
+};
+
 export const resolveQuotaDisplayState = <TState extends DisplayQuotaState>(
   activeQuota: TState | undefined,
   observedQuota: TState | undefined
 ): TState | undefined => {
-  if (activeQuota && activeQuota.status !== 'idle' && activeQuota.status !== 'error') {
-    if (activeQuota.status === 'success' && observedQuota?.status === 'success') {
-      const fetchedAtMs = readFiniteTimestamp(activeQuota.fetchedAtMs);
-      const observedAtMs = readFiniteTimestamp(observedQuota.observedAtMs);
-      if (fetchedAtMs !== null && observedAtMs !== null && observedAtMs > fetchedAtMs) {
-        return observedQuota;
-      }
+  if (activeQuota?.status === 'error') {
+    if (isObservedQuotaNewerThanFailure(activeQuota, observedQuota)) {
+      return clearQuotaFailureForObservedRecovery(
+        mergeObservedQuotaIntoActive(activeQuota, observedQuota)
+      );
     }
     return activeQuota;
   }
 
-  if (activeQuota?.status === 'error' && activeQuota.errorStatus === 401) {
+  if (activeQuota && activeQuota.status !== 'idle') {
+    if (activeQuota.status === 'success' && observedQuota?.status === 'success') {
+      const fetchedAtMs = readFiniteTimestamp(activeQuota.fetchedAtMs);
+      const observedAtMs = readFiniteTimestamp(observedQuota.observedAtMs);
+      if (fetchedAtMs !== null && observedAtMs !== null && observedAtMs > fetchedAtMs) {
+        return mergeObservedQuotaIntoActive(activeQuota, observedQuota);
+      }
+    }
     return activeQuota;
   }
 
@@ -801,15 +1105,22 @@ export const ANTIGRAVITY_CONFIG: QuotaConfig<AntigravityQuotaState, AntigravityQ
   fetchQuota: fetchAntigravityQuota,
   storeSelector: (state) => state.antigravityQuota,
   storeSetter: 'setAntigravityQuota',
-  buildLoadingState: () => ({ status: 'loading', groups: [], serverTimeOffsetMs: null }),
+  buildLoadingState: () => ({
+    status: 'loading',
+    groups: [],
+    subscription: null,
+    serverTimeOffsetMs: null,
+  }),
   buildSuccessState: (data) => ({
     status: 'success',
     groups: data.groups,
+    subscription: data.subscription ?? null,
     serverTimeOffsetMs: data.serverTimeOffsetMs,
   }),
   buildErrorState: (message, status) => ({
     status: 'error',
     groups: [],
+    subscription: null,
     serverTimeOffsetMs: null,
     error: message,
     errorStatus: status,
@@ -821,10 +1132,7 @@ export const ANTIGRAVITY_CONFIG: QuotaConfig<AntigravityQuotaState, AntigravityQ
   renderQuotaItems: renderAntigravityItems,
 };
 
-export const CODEX_CONFIG: QuotaConfig<
-  CodexQuotaState,
-  CodexQuotaData
-> = {
+export const CODEX_CONFIG: QuotaConfig<CodexQuotaState, CodexQuotaData> = {
   type: 'codex',
   i18nPrefix: 'codex_quota',
   cardIdleMessageKey: 'quota_management.card_idle_hint',
@@ -854,8 +1162,10 @@ export const CODEX_CONFIG: QuotaConfig<
     windows: [],
     error: message,
     errorStatus: status,
+    failedAtMs: Date.now(),
     ...buildCodexQuotaAuthIdentity(file),
   }),
+  buildFailureState: buildCodexQuotaFailureState,
   scopeState: scopeCodexQuotaStateToAuthFile,
   cardClassName: styles.codexCard,
   controlsClassName: styles.codexControls,

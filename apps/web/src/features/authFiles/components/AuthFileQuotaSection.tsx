@@ -28,6 +28,13 @@ type InlineQuotaConfig = {
   buildLoadingState: (file?: AuthFileItem) => unknown;
   buildSuccessState: (data: unknown, file?: AuthFileItem) => unknown;
   buildErrorState: (message: string, status?: number, file?: AuthFileItem) => unknown;
+  buildFailureState?: (
+    message: string,
+    status: number | undefined,
+    file: AuthFileItem | undefined,
+    activeState: unknown | undefined,
+    failedAtMs: number
+  ) => unknown;
   renderQuotaItems: (quota: unknown, t: TFunction, helpers: unknown) => unknown;
   scopeState?: (file: AuthFileItem, state: QuotaState) => QuotaState;
 };
@@ -78,6 +85,7 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
     if (isRuntimeOnlyAuthFile(file)) return;
     if (file.disabled) return;
     if (quota?.status === 'loading') return;
+    const previousQuota = quota;
 
     updateQuotaState((prev: Record<string, unknown>) => ({
       ...prev,
@@ -96,11 +104,13 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
       const status = getStatusFromError(err);
       updateQuotaState((prev: Record<string, unknown>) => ({
         ...prev,
-        [storeKey]: config.buildErrorState(message, status, file)
+        [storeKey]: config.buildFailureState
+          ? config.buildFailureState(message, status, file, previousQuota, Date.now())
+          : config.buildErrorState(message, status, file)
       }));
       showNotification(t('auth_files.quota_refresh_failed', { name: file.name, message }), 'error');
     }
-  }, [config, disableControls, file, quota?.status, showNotification, storeKey, t, updateQuotaState]);
+  }, [config, disableControls, file, quota, showNotification, storeKey, t, updateQuotaState]);
 
   const displayQuota = quotaOverride === undefined ? quota : (quotaOverride ?? undefined);
   const quotaStatus = displayQuota?.status ?? 'idle';

@@ -17,6 +17,7 @@ const { mocks } = vi.hoisted(() => {
 
   return {
     mocks: {
+      fetchCodexQuota: vi.fn(),
       quotaStoreState,
       showNotification: vi.fn(),
     },
@@ -30,6 +31,14 @@ vi.mock('react-i18next', () => ({
       options ? `${key}:${JSON.stringify(options)}` : key,
   }),
 }));
+
+vi.mock('@/utils/quota', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/quota')>();
+  return {
+    ...actual,
+    fetchCodexQuota: mocks.fetchCodexQuota,
+  };
+});
 
 vi.mock('@/stores', () => ({
   useNotificationStore: (selector: (state: unknown) => unknown) =>
@@ -78,6 +87,12 @@ const getText = (node: ReactTestInstance): string =>
     })
     .join('');
 
+const findButtonByText = (renderer: ReactTestRenderer, text: string) => {
+  const button = renderer.root.findAllByType('button').find((node) => getText(node).includes(text));
+  if (!button) throw new Error(`Button not found: ${text}`);
+  return button;
+};
+
 const renderSection = (quotaOverride?: CodexQuotaState | null) => {
   let renderer!: ReactTestRenderer;
   act(() => {
@@ -95,6 +110,7 @@ const renderSection = (quotaOverride?: CodexQuotaState | null) => {
 
 describe('AuthFileQuotaSection Codex quota scoping', () => {
   beforeEach(() => {
+    mocks.fetchCodexQuota.mockReset();
     mocks.showNotification.mockReset();
     mocks.quotaStoreState.codexQuota = {};
     (mocks.quotaStoreState.setCodexQuota as ReturnType<typeof vi.fn>).mockClear();
@@ -146,5 +162,49 @@ describe('AuthFileQuotaSection Codex quota scoping', () => {
 
     expect(text).toContain('codex_quota.idle');
     expect(text).not.toContain('codex_quota.plan_pro');
+  });
+
+  it('keeps previous Codex quota data when inline refresh fails', async () => {
+    mocks.fetchCodexQuota.mockRejectedValue(new Error('refresh failed'));
+    mocks.quotaStoreState.codexQuota = {
+      [matchingQuota.authFileKey as string]: {
+        ...matchingQuota,
+        windows: [
+          {
+            id: 'spark-five-hour-0',
+            label: 'Spark 5-hour limit',
+            usedPercent: 30,
+            resetLabel: '07/01 01:00',
+            limitWindowSeconds: 18_000,
+          },
+        ],
+      },
+    };
+    const renderer = renderSection(null);
+
+    await act(async () => {
+      findButtonByText(renderer, 'codex_quota.idle').props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(mocks.quotaStoreState.codexQuota).toMatchObject({
+      [matchingQuota.authFileKey as string]: {
+        status: 'error',
+        error: 'refresh failed',
+        windows: [
+          {
+            id: 'spark-five-hour-0',
+            usedPercent: 30,
+            limitWindowSeconds: 18_000,
+          },
+        ],
+        rateLimitResetCreditsAvailableCount: 2,
+      },
+    });
+    expect(
+      (mocks.quotaStoreState.codexQuota as Record<string, CodexQuotaState>)[
+        matchingQuota.authFileKey as string
+      ].failedAtMs
+    ).toEqual(expect.any(Number));
   });
 });

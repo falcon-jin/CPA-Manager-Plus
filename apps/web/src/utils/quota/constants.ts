@@ -57,19 +57,55 @@ export const TYPE_COLORS: Record<string, TypeColorSet> = {
 };
 
 // Antigravity API configuration
-export const ANTIGRAVITY_QUOTA_URLS = [
+export const ANTIGRAVITY_QUOTA_SUMMARY_URLS = [
+  'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+  'https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary',
+  'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+];
+
+export const ANTIGRAVITY_AVAILABLE_MODELS_URLS = [
   'https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels',
   'https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels',
   'https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels',
 ];
 
-export const ANTIGRAVITY_CODE_ASSIST_URL =
-  'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist';
+export const ANTIGRAVITY_QUOTA_URLS = ANTIGRAVITY_QUOTA_SUMMARY_URLS;
+
+export const ANTIGRAVITY_CODE_ASSIST_URLS = [
+  'https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
+  'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
+];
+
+export const ANTIGRAVITY_CODE_ASSIST_URL = ANTIGRAVITY_CODE_ASSIST_URLS[0];
+
+export const ANTIGRAVITY_CLI_VERSION = '1.0.13';
+export const ANTIGRAVITY_CLIENT_NAME = 'aidev_client';
+export const ANTIGRAVITY_CLIENT_PLATFORM = {
+  osType: 'darwin',
+  arch: 'arm64',
+} as const;
+
+type AntigravityUserAgentOptions = {
+  version?: string;
+  clientName?: string;
+  osType?: string;
+  arch?: string;
+};
+
+export const buildAntigravityUserAgent = ({
+  version = ANTIGRAVITY_CLI_VERSION,
+  clientName = ANTIGRAVITY_CLIENT_NAME,
+  osType = ANTIGRAVITY_CLIENT_PLATFORM.osType,
+  arch = ANTIGRAVITY_CLIENT_PLATFORM.arch,
+}: AntigravityUserAgentOptions = {}) =>
+  `antigravity/cli/${version} (${clientName}; os_type=${osType}; arch=${arch})`;
+
+export const ANTIGRAVITY_USER_AGENT = buildAntigravityUserAgent();
 
 export const ANTIGRAVITY_REQUEST_HEADERS = {
   Authorization: 'Bearer $TOKEN$',
   'Content-Type': 'application/json',
-  'User-Agent': 'antigravity/1.11.5 windows/amd64',
+  'User-Agent': ANTIGRAVITY_USER_AGENT,
 };
 
 export const ANTIGRAVITY_QUOTA_GROUPS: AntigravityQuotaGroupDefinition[] = [

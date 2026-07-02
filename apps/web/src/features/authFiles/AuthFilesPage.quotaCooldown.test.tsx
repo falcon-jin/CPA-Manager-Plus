@@ -22,6 +22,7 @@ const { mocks } = vi.hoisted(() => {
       getCodexInspectionRun: vi.fn(),
       getActiveQuotaCooldowns: vi.fn(),
       getHeaderSnapshots: vi.fn(),
+      codexQuota: {} as Record<string, unknown>,
       panelFeatureAvailability: {
         checking: false,
         panelHostMode: 'manager_embedded' as const,
@@ -124,8 +125,8 @@ vi.mock('@/stores', () => ({
     }),
   useThemeStore: (selector: (state: { resolvedTheme: 'dark' }) => unknown) =>
     selector({ resolvedTheme: 'dark' }),
-  useQuotaStore: (selector: (state: { codexQuota: Record<string, never> }) => unknown) =>
-    selector({ codexQuota: {} }),
+  useQuotaStore: (selector: (state: { codexQuota: Record<string, unknown> }) => unknown) =>
+    selector({ codexQuota: mocks.codexQuota }),
 }));
 
 vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
@@ -233,7 +234,12 @@ vi.mock('@/features/authFiles/components/AuthFileCard', () => ({
       status?: string;
       planType?: string | null;
       observedFromUsageHeaders?: boolean;
-      windows?: Array<{ usedPercent?: number | null; limitWindowSeconds?: number | null }>;
+      rateLimitResetCreditsAvailableCount?: number | null;
+      windows?: Array<{
+        id?: string;
+        usedPercent?: number | null;
+        limitWindowSeconds?: number | null;
+      }>;
     };
   }) => {
     const cooldown = props.quotaCooldown
@@ -249,6 +255,15 @@ vi.mock('@/features/authFiles/components/AuthFileCard', () => ({
         data-codex-quota-observed={String(
           props.codexDisplayQuota?.observedFromUsageHeaders ?? false
         )}
+        data-codex-quota-reset-count={
+          props.codexDisplayQuota?.rateLimitResetCreditsAvailableCount === undefined ||
+          props.codexDisplayQuota.rateLimitResetCreditsAvailableCount === null
+            ? ''
+            : String(props.codexDisplayQuota.rateLimitResetCreditsAvailableCount)
+        }
+        data-codex-quota-window-ids={
+          props.codexDisplayQuota?.windows?.map((quotaWindow) => quotaWindow.id).join(',') ?? ''
+        }
         data-codex-quota-window-percent={
           window?.usedPercent === undefined || window.usedPercent === null
             ? ''
@@ -330,6 +345,7 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
     mocks.listCodexInspectionRuns.mockReset();
     mocks.getCodexInspectionRun.mockReset();
     mocks.getHeaderSnapshots.mockReset();
+    mocks.codexQuota = {};
     mocks.connectionStatus = 'connected';
     mocks.managementKey = 'test-key';
     mocks.pageTransitionStatus = 'current';
@@ -426,6 +442,224 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
     expect(card.props['data-codex-quota-observed']).toBe('true');
     expect(card.props['data-codex-quota-window-percent']).toBe('20');
     expect(card.props['data-codex-quota-window-seconds']).toBe('2592000');
+  });
+
+  it('merges observed Codex header quota without clearing stored quota-only fields', async () => {
+    mocks.codexQuota = {
+      'codex-one.json::-': {
+        status: 'success',
+        authFileKey: 'codex-one.json::-',
+        authFileName: 'codex-one.json',
+        authIndex: null,
+        fetchedAtMs: 1_000,
+        planType: 'plus',
+        rateLimitResetCreditsAvailableCount: 2,
+        windows: [
+          {
+            id: 'five-hour',
+            label: '5-hour limit',
+            labelKey: 'codex_quota.primary_window',
+            usedPercent: 10,
+            resetLabel: '06/30 12:00',
+            limitWindowSeconds: 18_000,
+          },
+          {
+            id: 'spark-five-hour-0',
+            label: 'Spark 5-hour limit',
+            labelKey: 'codex_quota.additional_primary_window',
+            labelParams: { name: 'spark' },
+            usedPercent: 30,
+            resetLabel: '07/01 01:00',
+            limitWindowSeconds: 18_000,
+          },
+        ],
+      },
+    };
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 1_700_000_000_000,
+      from_ms: 1_700_000_000_000,
+      to_ms: 1_700_000_000_000,
+      items: [
+        {
+          event_hash: 'event-1',
+          timestamp_ms: 1_700_000_000_000,
+          auth_file_snapshot: 'codex-one.json',
+          auth_provider_snapshot: 'codex',
+          response_metadata: {
+            quota: {
+              plan_type: 'free',
+              primary: {
+                used_percent: 20,
+                reset_at_ms: 1_700_018_000_000,
+                window_minutes: 300,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        renderer!.root.findByProps({ 'data-auth-card': 'codex-one.json' }).props[
+          'data-codex-quota-window-percent'
+        ]
+      ).toBe('20');
+    });
+
+    const card = renderer!.root.findByProps({ 'data-auth-card': 'codex-one.json' });
+    expect(card.props['data-codex-quota-plan']).toBe('free');
+    expect(card.props['data-codex-quota-observed']).toBe('true');
+    expect(card.props['data-codex-quota-reset-count']).toBe('2');
+    expect(card.props['data-codex-quota-window-ids']).toBe('five-hour,spark-five-hour-0');
+    expect(card.props['data-codex-quota-window-seconds']).toBe('18000');
+  });
+
+  it('keeps manual Codex quota refresh failures over older header snapshots', async () => {
+    mocks.codexQuota = {
+      'codex-one.json::-': {
+        status: 'error',
+        error: 'refresh failed',
+        errorStatus: 502,
+        failedAtMs: 1_700_000_000_500,
+        authFileKey: 'codex-one.json::-',
+        authFileName: 'codex-one.json',
+        authIndex: null,
+        planType: 'plus',
+        rateLimitResetCreditsAvailableCount: 2,
+        windows: [
+          {
+            id: 'five-hour',
+            label: '5-hour limit',
+            usedPercent: 10,
+            resetLabel: '06/30 12:00',
+            limitWindowSeconds: 18_000,
+          },
+        ],
+      },
+    };
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 1_700_000_000_000,
+      from_ms: 1_700_000_000_000,
+      to_ms: 1_700_000_000_000,
+      items: [
+        {
+          event_hash: 'event-1',
+          timestamp_ms: 1_700_000_000_000,
+          auth_file_snapshot: 'codex-one.json',
+          auth_provider_snapshot: 'codex',
+          response_metadata: {
+            quota: {
+              plan_type: 'free',
+              primary: {
+                used_percent: 20,
+                reset_at_ms: 1_700_018_000_000,
+                window_minutes: 300,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        renderer!.root.findByProps({ 'data-auth-card': 'codex-one.json' }).props[
+          'data-codex-quota-status'
+        ]
+      ).toBe('error');
+    });
+
+    const card = renderer!.root.findByProps({ 'data-auth-card': 'codex-one.json' });
+    expect(card.props['data-codex-quota-plan']).toBe('plus');
+    expect(card.props['data-codex-quota-observed']).toBe('false');
+    expect(card.props['data-codex-quota-reset-count']).toBe('2');
+    expect(card.props['data-codex-quota-window-percent']).toBe('10');
+  });
+
+  it('uses newer header snapshots after manual Codex quota refresh failures', async () => {
+    mocks.codexQuota = {
+      'codex-one.json::-': {
+        status: 'error',
+        error: 'refresh failed',
+        errorStatus: 502,
+        failedAtMs: 1_699_999_999_000,
+        authFileKey: 'codex-one.json::-',
+        authFileName: 'codex-one.json',
+        authIndex: null,
+        planType: 'plus',
+        rateLimitResetCreditsAvailableCount: 2,
+        windows: [
+          {
+            id: 'five-hour',
+            label: '5-hour limit',
+            usedPercent: 10,
+            resetLabel: '06/30 12:00',
+            limitWindowSeconds: 18_000,
+          },
+          {
+            id: 'spark-five-hour-0',
+            label: 'Spark 5-hour limit',
+            usedPercent: 30,
+            resetLabel: '07/01 01:00',
+            limitWindowSeconds: 18_000,
+          },
+        ],
+      },
+    };
+    mocks.getHeaderSnapshots.mockResolvedValue({
+      generated_at_ms: 1_700_000_000_000,
+      from_ms: 1_700_000_000_000,
+      to_ms: 1_700_000_000_000,
+      items: [
+        {
+          event_hash: 'event-1',
+          timestamp_ms: 1_700_000_000_000,
+          auth_file_snapshot: 'codex-one.json',
+          auth_provider_snapshot: 'codex',
+          response_metadata: {
+            quota: {
+              plan_type: 'free',
+              primary: {
+                used_percent: 20,
+                reset_at_ms: 1_700_018_000_000,
+                window_minutes: 300,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<AuthFilesPage />);
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        renderer!.root.findByProps({ 'data-auth-card': 'codex-one.json' }).props[
+          'data-codex-quota-status'
+        ]
+      ).toBe('success');
+    });
+
+    const card = renderer!.root.findByProps({ 'data-auth-card': 'codex-one.json' });
+    expect(card.props['data-codex-quota-plan']).toBe('free');
+    expect(card.props['data-codex-quota-observed']).toBe('true');
+    expect(card.props['data-codex-quota-reset-count']).toBe('2');
+    expect(card.props['data-codex-quota-window-percent']).toBe('20');
+    expect(card.props['data-codex-quota-window-ids']).toBe('five-hour,spark-five-hour-0');
   });
 
   it('clears stale cooldowns when managerServiceBase becomes empty', async () => {

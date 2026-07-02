@@ -41,6 +41,7 @@ import {
   isRuntimeOnlyAuthFile,
   normalizeProviderKey,
   parsePriorityValue,
+  supportsAuthFileWebsockets,
   type QuotaProviderType,
   type ResolvedTheme,
 } from '@/features/authFiles/constants';
@@ -991,11 +992,11 @@ export function AuthFilesPage() {
     () => selectedTargetFiles.map(getAuthFilePatchTarget),
     [selectedTargetFiles]
   );
-  const selectedCodexPatchTargets = useMemo(
+  const selectedWebsocketPatchTargets = useMemo(
     () =>
       selectedTargetFiles
         .filter(
-          (file) => normalizeProviderKey(String(file.type ?? file.provider ?? '')) === 'codex'
+          (file) => supportsAuthFileWebsockets(String(file.type ?? file.provider ?? ''))
         )
         .map(getAuthFilePatchTarget),
     [selectedTargetFiles]
@@ -1016,7 +1017,7 @@ export function AuthFilesPage() {
   const batchFieldsButtonsDisabled =
     disableControls || selectedPatchTargets.length === 0 || batchFieldsUpdating;
   const batchCodexFieldsButtonsDisabled =
-    disableControls || selectedCodexPatchTargets.length === 0 || batchFieldsUpdating;
+    disableControls || selectedWebsocketPatchTargets.length === 0 || batchFieldsUpdating;
   const batchDeleteButtonsDisabled =
     disableControls || selectedFileNames.length === 0 || selectedHasPartialSharedAuthFile;
 
@@ -1053,9 +1054,9 @@ export function AuthFilesPage() {
 
   const handleBatchCodexWebsockets = useCallback(
     (websockets: boolean) => {
-      void batchPatchFields(selectedCodexPatchTargets, { websockets });
+      void batchPatchFields(selectedWebsocketPatchTargets, { websockets });
     },
-    [batchPatchFields, selectedCodexPatchTargets]
+    [batchPatchFields, selectedWebsocketPatchTargets]
   );
 
   const handleCodexReauthSuccess = useCallback(async () => {

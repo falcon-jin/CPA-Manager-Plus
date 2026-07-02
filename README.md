@@ -1,16 +1,28 @@
+<div align="center">
+
 # CPA Manager Plus
 
-[中文文档](README_CN.md)
+[![Release](https://img.shields.io/github/v/release/seakee/CPA-Manager-Plus?style=flat-square)](https://github.com/seakee/CPA-Manager-Plus/releases/latest)
+[![License](https://img.shields.io/github/license/seakee/CPA-Manager-Plus?style=flat-square&color=blue)](https://github.com/seakee/CPA-Manager-Plus/blob/main/LICENSE)
+[![Docker Pulls](https://img.shields.io/docker/pulls/seakee/cpa-manager-plus?style=flat-square)](https://hub.docker.com/r/seakee/cpa-manager-plus)
+[![Stars](https://img.shields.io/github/stars/seakee/CPA-Manager-Plus?style=flat-square&label=stars)](https://github.com/seakee/CPA-Manager-Plus/stargazers)
 
-CPA Manager Plus is a single-file management panel for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plus a Manager Server for persistent request monitoring. Use this README as the project entry point; detailed deployment and operation guides live in the [Wiki](https://github.com/seakee/CPA-Manager-Plus/wiki).
+A self-hosted dashboard for monitoring AI gateway traffic: requests, cost, failures, quota, and account health.
 
-- Recommended CPA version: `v7.1.39+`
-- Minimum CPA version for the HTTP usage queue: `v6.10.8+`
-- Frontend: React 19, Vite, single-file `management.html`
-- Backend: Go 1.24 Manager Server, SQLite through `modernc.org/sqlite`, no CGO
-- Images: `seakee/cpa-manager-plus` and `ghcr.io/seakee/cpa-manager-plus`
+Works with [CPA / CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) and OpenAI-compatible gateways that serve Codex, Claude Code, or similar tools.
 
-## Panel Preview
+[中文](README_CN.md) ｜ [Demo](https://seakee.github.io/CPA-Manager-Plus/) ｜ [Documentation](https://seakee.github.io/CPA-Manager-Plus/docs/en/)
+
+</div>
+
+## Highlights
+
+- Real-time dashboard showing today's request count, success rate, average latency, and estimated cost. Supports filtering by model, account, project, and time range.
+- Cost ranking by model and per-account spend breakdown, with token-level detail (input, output, reasoning, cached).
+- Codex account inspection runs on a schedule to check quota, credential validity, and workspace status. Accounts that hit quota limits are paused automatically and re-enabled at reset time.
+- Single Docker container, all data in local files, no telemetry or account registration. Outbound calls are limited to your configured gateway plus user-configured or user-triggered integrations such as model price sync, OAuth, and providers.
+
+## Screenshots
 
 <table>
   <tr>
@@ -35,30 +47,92 @@ CPA Manager Plus is a single-file management panel for [CLIProxyAPI](https://git
   </tr>
 </table>
 
-## Core Features
+## When You Need It
 
-- Turns the CPA usage queue into a SQLite request ledger for live monitoring, historical search, import/export, and long-running analytics.
-- Breaks down cost, tokens, cache usage, latency, failures, and throughput by model, provider, account/auth file, API key alias, project, channel, and time window.
-- Codex account operations: browser-local checks and Manager Server scheduled inspections for quota windows, 401 reauth needs, deactivated workspaces, stale accounts, and safe enable/disable/delete suggestions.
-- Account-pool safeguards: Codex `usage_limit_reached` can temporarily disable an auth file and recover it at reset time, while manual disables are left untouched. Revoked or invalid OAuth tokens are collected as auth issue candidates for review or verified auto-disable.
-- Model pricing sync from LiteLLM and OpenRouter, with candidate matching for renamed/provider-prefixed models and cost estimates reused by the dashboard, monitoring, and analytics pages.
-- CPA operations UI for providers, auth files, OAuth, quota, API keys, logs, plugins, plugin store, and system information, including paste/import and batch auth-file workflows.
-- Manager Server mode adds admin-key login, encrypted CPA Management Key storage, request monitoring, and server automation; CPA panel mode stays lightweight for existing CPA-hosted panels.
-- Docker images, native packages for Linux/macOS/Windows on `amd64` and `arm64`, and a standalone single-file `management.html`.
+**"Why are my Codex requests failing?"** — Open the monitoring page to see failure rate, status codes, and which accounts or models are affected. Failure reasons are shown in a redacted summary, raw error bodies stay local.
 
-## Choose A Mode
+**"How much did my AI traffic cost this week?"** — The usage analytics page breaks down cost by model, provider, account, and project. You can see which model is the most expensive and how tokens distribute across input, output, reasoning, and cache.
 
-| Mode | Entry URL | Login credential | Best for |
-|---|---|---|---|
-| Manager Server mode | `http://<host>:18317/management.html` | Manager Server admin key | New deployments, request monitoring, historical analytics |
-| CPA panel mode | `http://<cpa-host>:8317/management.html` | CPA Management Key | Existing CPA panel hosting without Manager Server analytics |
-| Frontend development | Vite dev server or `apps/web/dist/index.html` | CPA URL and key | Local UI development |
+**"Is my Codex account still usable?"** — The inspection page shows each account's quota remaining, plan tier, reset schedule, and whether credentials are still valid. If an account has been disabled or hit its limit, CPAMP tells you what happened and what to do next.
 
-Manager Server mode is the full CPA Manager Plus experience. CPA panel mode stays a pure CPA panel: it does not configure Manager Server and does not read Manager Server SQLite data.
+## What You Get
+
+### Request Monitoring
+
+Every request flowing through your gateway is recorded and searchable. The monitoring page has three views: an account overview, a client API key summary, and a real-time feed showing individual requests with model, status, latency, and token usage. You can export request history as JSONL, or import historical data from a backup.
+
+### Cost & Usage Analytics
+
+A dedicated analytics page ranks models by cost, shows token composition, and breaks down spend per account. Filters cover provider, project, channel, and arbitrary date ranges. Model prices sync from LiteLLM and OpenRouter, so cost estimates stay current even when providers change pricing.
+
+### Account Health & Quota
+
+CPAMP runs scheduled inspections against Codex accounts: checking quota windows, reset credits and their expiry dates, credential validity (OAuth tokens, workspace status), and whether accounts should be paused or re-enabled. When an account hits `usage_limit_reached`, the corresponding auth file is temporarily disabled and automatically restored at reset time. Manual disables are never overridden.
+
+### Gateway Operations
+
+The dashboard also covers day-to-day CPA operations: managing providers, auth files, OAuth logins, API keys, quota, logs, plugins, and system config. Auth files can be added by JSON paste or batch import.
+
+### Self-Hosted & Private
+
+CPAMP has no analytics SDKs, cloud account dependency, or registration flow. By default it talks to the CPA gateway you configure; optional features such as model price sync, OAuth, and provider checks may call the external services you explicitly configure or trigger. It runs as a single Docker container or a native binary (Linux, macOS, Windows — amd64 and arm64), with all data stored in local files.
 
 ## Quick Start
 
-Run Manager Server:
+CPA Manager Plus works with [CPA / CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), an AI gateway that routes requests to OpenAI-compatible providers.
+
+### Installer
+
+For a guided deployment, run:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/seakee/CPA-Manager-Plus/main/bin/install-cpamp.sh
+bash install-cpamp.sh
+```
+
+The script checks your environment, lets you choose the operation language, chooses full stack or CPAMP-only install, generates minimal config, and deploys only after final confirmation. See [One-Click Installer](https://seakee.github.io/CPA-Manager-Plus/docs/en/deployment/installer.html) for all options.
+
+### CPA + CPAMP Together
+
+If you don't have CPA running yet, this Compose file starts both:
+
+```yaml
+services:
+  cli-proxy-api:
+    image: eceasy/cli-proxy-api:latest
+    restart: unless-stopped
+    ports:
+      - "8317:8317"
+    volumes:
+      - cpa-data:/app/data
+
+  cpa-manager-plus:
+    image: seakee/cpa-manager-plus:latest
+    restart: unless-stopped
+    ports:
+      - "18317:18317"
+    volumes:
+      - cpa-manager-plus-data:/data
+
+volumes:
+  cpa-data:
+  cpa-manager-plus-data:
+```
+
+```bash
+docker compose up -d
+```
+
+Open `http://<host>:18317/management.html`, get the admin key from `docker compose logs cpa-manager-plus`, then fill in:
+
+1. The admin key.
+2. CPA URL: `http://cli-proxy-api:8317`.
+3. Your CPA Management Key.
+4. Request monitoring preferences.
+
+### CPAMP Only
+
+If CPA is already running somewhere, just start CPAMP:
 
 ```bash
 docker run -d \
@@ -69,35 +143,39 @@ docker run -d \
   seakee/cpa-manager-plus:latest
 ```
 
-Open:
+Recommended CPA version: `v7.1.39+`. The HTTP usage queue needs `v6.10.8+`.
 
-```text
-http://<host>:18317/management.html
-```
-
-On first startup, read the generated admin key from `docker logs cpa-manager-plus`, then complete setup with:
-
-- Manager Server admin key
-- CPA URL
-- CPA Management Key
-- Request monitoring settings
-
-Detailed setup, Compose, Linux host networking, upgrades, backup rules, and native packages are in the Wiki.
+CPAMP can also run as a CPA-hosted panel on `:8317`, or as a standalone frontend for development. See the [documentation site](https://seakee.github.io/CPA-Manager-Plus/docs/en/) for Compose variants, host networking, upgrades, backup, reverse proxy, and troubleshooting.
 
 ## Documentation
 
 | Topic | Guide |
 |---|---|
-| Start here | [Wiki Home](https://github.com/seakee/CPA-Manager-Plus/wiki) |
-| Docker deployment | [Docker Deployment](https://github.com/seakee/CPA-Manager-Plus/wiki/Docker-Deployment) |
-| Native packages | [Native Binary Deployment](https://github.com/seakee/CPA-Manager-Plus/wiki/Native-Binary-Deployment) |
-| Manager Server config, endpoints, data, and security | [Manager Server Guide](https://github.com/seakee/CPA-Manager-Plus/wiki/Manager-Server-Guide) |
-| Reverse proxy | [Reverse Proxy Same Domain](https://github.com/seakee/CPA-Manager-Plus/wiki/Reverse-Proxy-CPA-and-CPA-Manager-Plus-with-the-Same-Domain) |
-| Migrate from old CPA-Manager | [Migration from CPA-Manager](https://github.com/seakee/CPA-Manager-Plus/wiki/Migration-from-CPA-Manager) |
-| Reset lost admin key | [Reset Admin Key](https://github.com/seakee/CPA-Manager-Plus/wiki/Reset-Admin-Key) |
-| Troubleshooting | [FAQ and Troubleshooting](https://github.com/seakee/CPA-Manager-Plus/wiki/FAQ-and-Troubleshooting) |
+| Demo site | [Live demo](https://seakee.github.io/CPA-Manager-Plus/) |
+| Documentation site | [CPAMP Docs](https://seakee.github.io/CPA-Manager-Plus/docs/en/) |
+| Start here | [Getting Started](https://seakee.github.io/CPA-Manager-Plus/docs/en/guide/getting-started.html) |
+| Installer | [One-Click Installer](https://seakee.github.io/CPA-Manager-Plus/docs/en/deployment/installer.html) |
+| Runtime model | [CPA gateway runtime and CPAMP](https://seakee.github.io/CPA-Manager-Plus/docs/en/guide/runtime-model.html) |
+| Gateway configuration | [Gateway Configuration](https://seakee.github.io/CPA-Manager-Plus/docs/en/gateway/configuration.html), [Providers And Compatibility APIs](https://seakee.github.io/CPA-Manager-Plus/docs/en/gateway/providers.html), [Client Configuration](https://seakee.github.io/CPA-Manager-Plus/docs/en/gateway/clients.html) |
+| Panel manual | [Dashboard](https://seakee.github.io/CPA-Manager-Plus/docs/en/manual/dashboard.html), [Configuration](https://seakee.github.io/CPA-Manager-Plus/docs/en/manual/configuration.html), [AI Providers](https://seakee.github.io/CPA-Manager-Plus/docs/en/manual/ai-providers.html), [Monitoring](https://seakee.github.io/CPA-Manager-Plus/docs/en/manual/monitoring.html), [Plugin Management](https://seakee.github.io/CPA-Manager-Plus/docs/en/manual/plugins.html) |
+| Docker deployment | [Docker Deployment](https://seakee.github.io/CPA-Manager-Plus/docs/en/deployment/docker.html) |
+| Native packages | [Native Packages](https://seakee.github.io/CPA-Manager-Plus/docs/en/deployment/native.html) |
+| Native background control | [Native Background Control](https://seakee.github.io/CPA-Manager-Plus/docs/en/deployment/native-background-control.html) |
+| Manager Server config, endpoints, data, and security | [Manager Server Guide](https://seakee.github.io/CPA-Manager-Plus/docs/en/operations/manager-server.html) |
+| Reverse proxy | [Reverse Proxy](https://seakee.github.io/CPA-Manager-Plus/docs/en/deployment/reverse-proxy.html) |
+| Migrate from old CPA-Manager | [Migration from CPA-Manager](https://seakee.github.io/CPA-Manager-Plus/docs/en/migration/from-cpa-manager.html) |
+| Reset lost admin key | [Reset Admin Key](https://seakee.github.io/CPA-Manager-Plus/docs/en/operations/reset-admin-key.html) |
+| Troubleshooting | [FAQ](https://seakee.github.io/CPA-Manager-Plus/docs/en/reference/faq.html) and [Request Monitoring Troubleshooting](https://seakee.github.io/CPA-Manager-Plus/docs/en/troubleshooting/request-monitoring.html) |
 | Release process | [docs/release.md](docs/release.md) |
 | Release notes | [docs/release-notes](docs/release-notes) |
+| Legacy Wiki | [Transition-only archive](https://github.com/seakee/CPA-Manager-Plus/wiki) |
+
+## Data And Privacy
+
+- CPAMP does not phone home. It has no analytics SDKs and no account registration. External connections are limited to the CPA gateway you configure and optional integrations you explicitly configure or trigger, such as model price sync, OAuth, and provider APIs.
+- All data (request history, credentials, configuration) is stored in local files on your host.
+- Gateway keys are encrypted before storage. Exported data never includes raw error bodies.
+- CPAMP is built for observability over traffic you are authorized to manage: cost tracking, failure diagnosis, and operational health.
 
 ## Development
 
@@ -138,6 +216,16 @@ docker compose -f docker-compose.manager.yml up --build
 - Thanks to the upstream projects [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) and [Cli-Proxy-API-Management-Center](https://github.com/router-for-me/Cli-Proxy-API-Management-Center) for the foundation and inspiration.
 - Thanks to the [Linux.do](https://linux.do/) community for project promotion and feedback.
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=seakee%2FCPA-Manager-Plus&type=date&logscale=&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=seakee/CPA-Manager-Plus&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=seakee/CPA-Manager-Plus&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=seakee/CPA-Manager-Plus&type=date&legend=top-left" />
+ </picture>
+</a>
+
 ## License
 
-MIT
+[MIT](https://github.com/seakee/CPA-Manager-Plus/blob/main/LICENSE) — Copyright 2026 Seakee.

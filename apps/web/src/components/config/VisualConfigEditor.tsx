@@ -41,6 +41,7 @@ import {
   ApiKeysCardEditor,
   PayloadFilterRulesEditor,
   PayloadRulesEditor,
+  PluginStoreAuthEditor,
 } from './VisualConfigEditorBlocks';
 import styles from './VisualConfigEditor.module.scss';
 
@@ -832,6 +833,18 @@ export function VisualConfigEditor({
                     placeholder="https://example.com/plugins.json"
                   />
                 </FieldShell>
+                <div className={styles.fieldWide}>
+                  <FieldShell
+                    label={t('config_management.visual.sections.system.plugin_store_auth')}
+                    hint={t('config_management.visual.sections.system.plugin_store_auth_desc')}
+                  >
+                    <PluginStoreAuthEditor
+                      value={values.pluginStoreAuth}
+                      disabled={disabled}
+                      onChange={(pluginStoreAuth) => onChange({ pluginStoreAuth })}
+                    />
+                  </FieldShell>
+                </div>
               </SectionGrid>
 
               <SectionGrid>

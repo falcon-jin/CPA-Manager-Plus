@@ -7,12 +7,13 @@ import {
   useRef,
   useState,
 } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { PageTransition } from '@/components/common/PageTransition';
 import { MainRoutes } from '@/router/MainRoutes';
 import {
+  IconGithub,
   IconSidebarAuthFiles,
   IconSidebarConfig,
   IconSidebarDashboard,
@@ -47,11 +48,13 @@ import {
 import { triggerHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { usePanelFeatureAvailability } from '@/hooks/usePanelFeatureAvailability';
 import { isFileLogsAvailable } from '@/features/logs/logFeatureAvailability';
+import { getDemoLogoutPath, prefixRouteBase, stripRouteBase } from '@/features/demo/demoMode';
 import { LANGUAGE_LABEL_KEYS, LANGUAGE_ORDER, STORAGE_KEY_SIDEBAR } from '@/utils/constants';
 import { isSupportedLanguage } from '@/utils/language';
 import type { Theme, VisualEffectsMode } from '@/types';
 
 const SIDEBAR_ICON_SIZE = 20;
+const GITHUB_REPOSITORY_URL = 'https://github.com/seakee/CPA-Manager-Plus';
 
 const sidebarIcons: Record<string, ReactNode> = {
   dashboard: <IconSidebarDashboard size={SIDEBAR_ICON_SIZE} />,
@@ -220,10 +223,17 @@ type NavItem = {
   exact?: boolean;
 };
 
-export function MainLayout() {
+interface MainLayoutProps {
+  routeBase?: string;
+  demoMode?: boolean;
+}
+
+export function MainLayout({ routeBase = '', demoMode = false }: MainLayoutProps = {}) {
   const { t } = useTranslation();
   const { showNotification } = useNotificationStore();
   const location = useLocation();
+  const navigate = useNavigate();
+  const routePathname = stripRouteBase(location.pathname, routeBase);
 
   const logout = useAuthStore((state) => state.logout);
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
@@ -262,8 +272,8 @@ export function MainLayout() {
 
   const fullBrandName = 'CPA Manager Plus';
   const abbrBrandName = t('title.abbr');
-  const isLogsPage = location.pathname.startsWith('/logs');
-  const isPluginResourcePage = location.pathname.startsWith('/plugin-pages');
+  const isLogsPage = routePathname.startsWith('/logs');
+  const isPluginResourcePage = routePathname.startsWith('/plugin-pages');
   const showSidebarLabels = !sidebarCollapsed || sidebarOpen;
   const pluginControlMenuVisible = isPluginManagementNavVisible({ supportsPlugin });
   const configPluginsEnabled = config?.pluginsEnabled;
@@ -683,13 +693,20 @@ export function MainLayout() {
     }
     showNotification(t('notification.data_refreshed'), 'success');
   };
+  const handleLogout = () => {
+    if (demoMode) {
+      navigate(getDemoLogoutPath(routeBase), { replace: true });
+      return;
+    }
+    logout();
+  };
   const mobileSidebarToggleLabel = sidebarOpen
     ? t('sidebar.toggle_collapse', { defaultValue: 'Close navigation' })
     : t('sidebar.toggle_expand', { defaultValue: 'Open navigation' });
   const normalizedLocationPath =
-    location.pathname.length > 1 && location.pathname.endsWith('/')
-      ? location.pathname.slice(0, -1)
-      : location.pathname;
+    routePathname.length > 1 && routePathname.endsWith('/')
+      ? routePathname.slice(0, -1)
+      : routePathname;
   const currentPath = normalizedLocationPath === '/dashboard' ? '/' : normalizedLocationPath;
   const matchesNavPath = (item: NavItem, pathname: string) =>
     item.path === '/' || item.exact
@@ -760,6 +777,19 @@ export function MainLayout() {
             >
               {headerIcons.refresh}
             </Button>
+
+            <a
+              className="btn btn-ghost btn-sm"
+              href={GITHUB_REPOSITORY_URL}
+              target="_blank"
+              rel="noreferrer"
+              title={t('header.open_github')}
+              aria-label={t('header.open_github')}
+            >
+              <span>
+                <IconGithub size={16} />
+              </span>
+            </a>
 
             <div
               className={`language-menu ${languageMenuOpen ? 'open' : ''}`}
@@ -885,7 +915,7 @@ export function MainLayout() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={logout}
+              onClick={handleLogout}
               title={t('header.logout')}
               aria-label={t('header.logout')}
             >
@@ -925,7 +955,7 @@ export function MainLayout() {
                 {section.map((item) => (
                   <NavLink
                     key={item.path}
-                    to={item.path}
+                    to={prefixRouteBase(item.path, routeBase)}
                     end={item.path === '/' || item.exact}
                     className={({ isActive }) =>
                       `nav-item ${isActive || matchesNavPath(item, currentPath) ? 'active' : ''}`
@@ -964,9 +994,15 @@ export function MainLayout() {
               .join(' ')}
           >
             <PageTransition
-              render={(location) => <MainRoutes location={location} />}
-              getRouteOrder={getRouteOrder}
-              getTransitionVariant={getTransitionVariant}
+              key={routeBase || 'main'}
+              render={(location) => <MainRoutes location={location} routeBase={routeBase} />}
+              getRouteOrder={(pathname) => getRouteOrder(stripRouteBase(pathname, routeBase))}
+              getTransitionVariant={(fromPathname, toPathname) =>
+                getTransitionVariant(
+                  stripRouteBase(fromPathname, routeBase),
+                  stripRouteBase(toPathname, routeBase)
+                )
+              }
               scrollContainerRef={contentRef}
             />
           </main>

@@ -22,6 +22,7 @@ import {
 import type { MonitoringCenterUiState } from '@/features/monitoring/monitoringCenterUiState';
 import type {
   AccountQuotaEntry,
+  AccountQuotaState,
   AccountQuotaWindow,
 } from '@/features/monitoring/components/accountOverviewPresentation';
 import {
@@ -792,6 +793,207 @@ const buildCodexAccountQuotaWindows = (
     };
   });
 
+const hasKnownAccountQuotaResetLabel = (value: unknown): value is string => {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  return trimmed !== '' && trimmed !== '-';
+};
+
+const readFiniteTimestamp = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+const mergeAccountQuotaWindow = (
+  activeWindow: AccountQuotaWindow,
+  observedWindow: AccountQuotaWindow
+): AccountQuotaWindow => ({
+  ...activeWindow,
+  ...(observedWindow.label.trim() ? { label: observedWindow.label } : {}),
+  ...(observedWindow.remainingPercent !== null &&
+  observedWindow.remainingPercent !== undefined &&
+  Number.isFinite(observedWindow.remainingPercent)
+    ? { remainingPercent: observedWindow.remainingPercent }
+    : {}),
+  ...(hasKnownAccountQuotaResetLabel(observedWindow.resetLabel)
+    ? { resetLabel: observedWindow.resetLabel }
+    : {}),
+  ...(observedWindow.usageLabel && observedWindow.usageLabel.trim()
+    ? { usageLabel: observedWindow.usageLabel }
+    : {}),
+});
+
+const mergeAccountQuotaWindows = (
+  activeWindows: AccountQuotaWindow[],
+  observedWindows: AccountQuotaWindow[]
+): AccountQuotaWindow[] => {
+  if (observedWindows.length === 0) return activeWindows;
+  if (activeWindows.length === 0) return observedWindows;
+
+  const observedById = new Map(observedWindows.map((window) => [window.id, window]));
+  const mergedWindows = activeWindows.map((window) => {
+    const observedWindow = observedById.get(window.id);
+    if (!observedWindow) return window;
+    observedById.delete(window.id);
+    return mergeAccountQuotaWindow(window, observedWindow);
+  });
+
+  return [...mergedWindows, ...observedById.values()];
+};
+
+const mergeAccountQuotaMetaLabels = (
+  activeLabels: string[] | undefined,
+  observedLabels: string[] | undefined
+) => {
+  const labels: string[] = [];
+  [...(activeLabels ?? []), ...(observedLabels ?? [])].forEach((label) => {
+    const trimmed = label.trim();
+    if (!trimmed || labels.includes(trimmed)) return;
+    labels.push(trimmed);
+  });
+  return labels.length > 0 ? labels : undefined;
+};
+
+const mergeAccountQuotaEntryMetaLabels = (
+  activeEntry: AccountQuotaEntry,
+  observedEntry: AccountQuotaEntry
+) => {
+  if (
+    observedEntry.planType &&
+    observedEntry.planType !== activeEntry.planType &&
+    observedEntry.metaLabels &&
+    observedEntry.metaLabels.length > 0
+  ) {
+    return mergeAccountQuotaMetaLabels(undefined, observedEntry.metaLabels);
+  }
+
+  return mergeAccountQuotaMetaLabels(activeEntry.metaLabels, observedEntry.metaLabels);
+};
+
+const getMergeableAccountQuotaEntry = (
+  entry: AccountQuotaEntry | undefined
+): AccountQuotaEntry | undefined => {
+  if (!entry?.error) return entry;
+  const mergeableEntry = { ...entry };
+  delete mergeableEntry.error;
+  return mergeableEntry;
+};
+
+export const mergeObservedAccountQuotaEntry = (
+  activeEntry: AccountQuotaEntry | undefined,
+  observedEntry: AccountQuotaEntry | null
+): AccountQuotaEntry | null => {
+  const mergeableActiveEntry = getMergeableAccountQuotaEntry(activeEntry);
+  if (!mergeableActiveEntry) return observedEntry;
+  if (!observedEntry || observedEntry.error) return mergeableActiveEntry;
+
+  return {
+    ...mergeableActiveEntry,
+    planType: observedEntry.planType ?? mergeableActiveEntry.planType,
+    metaLabels: mergeAccountQuotaEntryMetaLabels(mergeableActiveEntry, observedEntry),
+    windows: mergeAccountQuotaWindows(mergeableActiveEntry.windows, observedEntry.windows),
+    observedAtMs: observedEntry.observedAtMs ?? mergeableActiveEntry.observedAtMs,
+    observedFromUsageHeaders:
+      observedEntry.observedFromUsageHeaders ?? mergeableActiveEntry.observedFromUsageHeaders,
+  };
+};
+
+const isObservedAccountQuotaNewerThanFailure = (
+  failedAtMs: number | undefined,
+  observedEntry: AccountQuotaEntry | null | undefined
+) => {
+  const failureTime = readFiniteTimestamp(failedAtMs);
+  const observedTime = readFiniteTimestamp(observedEntry?.observedAtMs);
+  return failureTime !== null && observedTime !== null && observedTime > failureTime;
+};
+
+const clearAccountQuotaEntryFailure = (entry: AccountQuotaEntry): AccountQuotaEntry => {
+  const recovered = { ...entry };
+  delete recovered.error;
+  delete recovered.failedAtMs;
+  return recovered;
+};
+
+export const buildAccountQuotaRefreshFailureEntry = (
+  target: MonitoringAccountQuotaTarget,
+  error: string,
+  t: TFunction,
+  activeEntry?: AccountQuotaEntry,
+  observedEntry?: AccountQuotaEntry | null,
+  failedAtMs = Date.now()
+): AccountQuotaEntry => {
+  const mergeableActiveEntry = getMergeableAccountQuotaEntry(activeEntry);
+  const mergedEntry =
+    mergeObservedAccountQuotaEntry(mergeableActiveEntry, observedEntry ?? null) ??
+    observedEntry ??
+    mergeableActiveEntry ??
+    null;
+
+  if (!mergedEntry) {
+    return {
+      ...buildAccountQuotaErrorEntry(target, error, t),
+      failedAtMs,
+    };
+  }
+
+  return {
+    ...mergedEntry,
+    error,
+    failedAtMs,
+  };
+};
+
+export const mergeObservedAccountQuotaState = (
+  state: AccountQuotaState | undefined,
+  targets: MonitoringAccountQuotaTarget[],
+  observedEntries: AccountQuotaEntry[]
+): AccountQuotaState | undefined => {
+  if (!state || state.status === 'loading' || observedEntries.length === 0) return state;
+
+  const targetKey = targets.map((target) => target.key).join('|');
+  if (state.targetKey !== targetKey) return state;
+
+  const observedByKey = new Map(observedEntries.map((entry) => [entry.key, entry]));
+  const activeKeys = new Set(state.entries.map((entry) => entry.key));
+  let changed = false;
+
+  const entries = state.entries.map((entry) => {
+    const observedEntry = observedByKey.get(entry.key);
+    if (!observedEntry) return entry;
+
+    const mergedEntry = mergeObservedAccountQuotaEntry(entry, observedEntry) ?? entry;
+    const nextEntry = entry.error
+      ? isObservedAccountQuotaNewerThanFailure(entry.failedAtMs, observedEntry)
+        ? clearAccountQuotaEntryFailure(mergedEntry)
+        : { ...mergedEntry, error: entry.error, failedAtMs: entry.failedAtMs }
+      : mergedEntry;
+    changed = changed || nextEntry !== entry;
+    return nextEntry;
+  });
+
+  const targetKeys = new Set(targets.map((target) => target.key));
+  observedEntries.forEach((observedEntry) => {
+    if (!targetKeys.has(observedEntry.key) || activeKeys.has(observedEntry.key)) return;
+
+    if (state.status === 'error' && !isObservedAccountQuotaNewerThanFailure(state.failedAtMs, observedEntry)) {
+      if (!state.error) return;
+      entries.push({ ...observedEntry, error: state.error, failedAtMs: state.failedAtMs });
+    } else {
+      entries.push(observedEntry);
+    }
+    changed = true;
+  });
+
+  if (!changed) return state;
+
+  const firstError = entries.find((entry) => entry.error)?.error;
+  return {
+    ...state,
+    status: firstError ? 'error' : 'success',
+    entries,
+    error: firstError || '',
+    failedAtMs: firstError ? state.failedAtMs : undefined,
+  };
+};
+
 const buildClaudeAccountQuotaWindows = (
   windows: ClaudeQuotaWindow[],
   t: TFunction
@@ -957,10 +1159,8 @@ export const buildObservedCodexAccountQuotaEntry = (
   const planType = target.planType ?? getHeaderSnapshotPlanType(snapshot) ?? null;
   const observedQuota = buildObservedCodexQuotaFromHeaderSnapshot(snapshot);
   const planLabel = getCodexPlanLabel(planType, t);
-  const observedAt =
-    snapshot?.timestamp_ms && Number.isFinite(snapshot.timestamp_ms)
-      ? new Date(snapshot.timestamp_ms).toLocaleString()
-      : '';
+  const observedAtMs = readFiniteTimestamp(snapshot?.timestamp_ms) ?? undefined;
+  const observedAt = observedAtMs ? new Date(observedAtMs).toLocaleString() : '';
   const usedPercent = getHeaderSnapshotUsedPercent(snapshot);
   const recoverAtMS = getHeaderSnapshotRecoverAtMs(snapshot);
   const errorKind = getHeaderSnapshotErrorKind(snapshot);
@@ -1016,6 +1216,8 @@ export const buildObservedCodexAccountQuotaEntry = (
     ...buildBaseAccountQuotaEntry({ ...target, planType }, t, metaLabels),
     planType,
     windows,
+    observedAtMs,
+    observedFromUsageHeaders: true,
   };
 };
 

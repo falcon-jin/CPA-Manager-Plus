@@ -9,6 +9,21 @@ import type {
 const PLUGIN_STATE_TIMEOUT_MS = 15_000;
 const PLUGIN_STATE_INTERVAL_MS = 500;
 
+const normalizePluginVersion = (version: string) => version.trim().replace(/^v/i, '');
+
+export const pluginVersionMatches = (left: string, right: string) =>
+  normalizePluginVersion(left) === normalizePluginVersion(right);
+
+export const isPluginStoreInstallSettled = (
+  plugin: PluginStoreEntry,
+  requestedVersion = ''
+): boolean => {
+  if (!plugin.installed) return false;
+  const version = requestedVersion.trim();
+  if (version) return pluginVersionMatches(plugin.installedVersion, version);
+  return !plugin.updateAvailable;
+};
+
 const wait = (ms: number) =>
   new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms);

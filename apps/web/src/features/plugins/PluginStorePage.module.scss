@@ -47,6 +47,19 @@
   line-height: 1.6;
 }
 
+.installOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.installOptionsMessage {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
 .installSecurityWarning {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

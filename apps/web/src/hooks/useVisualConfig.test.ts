@@ -84,6 +84,39 @@ describe('useVisualConfig', () => {
     harness.unmount();
   });
 
+  it('loads plugin store auth rules from plugins config', () => {
+    const harness = mountUseVisualConfig();
+    const yaml = [
+      'plugins:',
+      '  store-auth:',
+      '    - match: https://api.github.com/repos/acme/private/releases/',
+      '      apply-to:',
+      '        - metadata',
+      '        - artifact',
+      '      type: github-token',
+      '      token-env: GITHUB_TOKEN',
+      '      allow-insecure: true',
+      '',
+    ].join('\n');
+
+    act(() => {
+      const result = harness.getCurrent().loadVisualValuesFromYaml(yaml);
+      expect(result.ok).toBe(true);
+    });
+
+    expect(harness.getCurrent().visualValues.pluginStoreAuth).toEqual([
+      expect.objectContaining({
+        match: 'https://api.github.com/repos/acme/private/releases/',
+        applyTo: ['metadata', 'artifact'],
+        type: 'github-token',
+        tokenEnv: 'GITHUB_TOKEN',
+        allowInsecure: true,
+      }),
+    ]);
+
+    harness.unmount();
+  });
+
   it('writes plugins.enabled when enabling plugin system from visual editor', () => {
     const harness = mountUseVisualConfig();
     const yaml = ['host: 127.0.0.1', ''].join('\n');
@@ -137,6 +170,62 @@ describe('useVisualConfig', () => {
     expect(parsed.plugins?.['store-sources']).toEqual([
       'https://plugins.example.com/official.json',
       'https://plugins.example.com/private.json',
+    ]);
+    expect(parsed.plugins?.configs?.demo?.enabled).toBe(true);
+
+    harness.unmount();
+  });
+
+  it('writes plugin store auth rules only after editing the auth field', () => {
+    const harness = mountUseVisualConfig();
+    const yaml = ['plugins:', '  configs:', '    demo:', '      enabled: true', ''].join('\n');
+
+    act(() => {
+      const result = harness.getCurrent().loadVisualValuesFromYaml(yaml);
+      expect(result.ok).toBe(true);
+    });
+
+    const unchangedYaml = harness.getCurrent().applyVisualChangesToYaml(yaml);
+    expect(parseYaml(unchangedYaml) as { plugins?: { 'store-auth'?: unknown } }).toEqual(
+      expect.objectContaining({
+        plugins: expect.not.objectContaining({ 'store-auth': expect.anything() }),
+      })
+    );
+
+    act(() => {
+      harness.getCurrent().setVisualValues({
+        pluginStoreAuth: [
+          {
+            id: 'rule-1',
+            match: 'https://downloads.example.com/private/',
+            applyTo: ['artifact'],
+            type: 'bearer',
+            tokenEnv: 'PLUGIN_TOKEN',
+            usernameEnv: '',
+            passwordEnv: '',
+            headerName: '',
+            headerValueEnv: '',
+            allowInsecure: false,
+          },
+        ],
+      });
+    });
+
+    const savedYaml = harness.getCurrent().applyVisualChangesToYaml(yaml);
+    const parsed = parseYaml(savedYaml) as {
+      plugins?: {
+        'store-auth'?: Array<Record<string, unknown>>;
+        configs?: { demo?: { enabled?: boolean } };
+      };
+    };
+
+    expect(parsed.plugins?.['store-auth']).toEqual([
+      {
+        match: 'https://downloads.example.com/private/',
+        type: 'bearer',
+        'apply-to': ['artifact'],
+        'token-env': 'PLUGIN_TOKEN',
+      },
     ]);
     expect(parsed.plugins?.configs?.demo?.enabled).toBe(true);
 

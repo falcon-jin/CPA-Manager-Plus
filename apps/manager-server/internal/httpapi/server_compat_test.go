@@ -646,16 +646,17 @@ func TestServerCompatPluginProxyRoutes(t *testing.T) {
 		t,
 		handler,
 		http.MethodPost,
-		"/v0/management/plugin-store/demo/install?source=official",
-		"",
+		"/v0/management/plugin-store/demo/install?source=official&version=v1.2.3",
+		`{"version":"v1.2.3"}`,
 		testutil.AdminKey,
 	)
 	testutil.RequireStatus(t, managementInstallRR, http.StatusOK)
 	assertObserved("/v0/management/plugin-store/demo/install", observedRequest{
 		method:        http.MethodPost,
 		path:          "/v0/management/plugin-store/demo/install",
-		query:         "source=official",
+		query:         "source=official&version=v1.2.3",
 		authorization: "Bearer management-key",
+		body:          `{"version":"v1.2.3"}`,
 	})
 
 	pluginManagementRR := testutil.Request(

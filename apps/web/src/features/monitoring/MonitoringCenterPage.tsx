@@ -75,7 +75,7 @@ import {
   buildApiKeyOptionsFromRows,
   buildApiKeyOverviewColumns,
   buildAuthFilesByAuthIndex,
-  buildAccountQuotaErrorEntry,
+  buildAccountQuotaRefreshFailureEntry,
   buildObservedCodexAccountQuotaEntry,
   buildChannelOptionsFromValues,
   buildMonitoringInitialStateFromQuery,
@@ -90,6 +90,7 @@ import {
   getCurrentInputValue,
   getTodayStartInputValue,
   isUsageImportFile,
+  mergeObservedAccountQuotaState,
   parseDateTimeLocalValue,
   requestAccountQuota,
   type FocusSnapshot,
@@ -693,6 +694,28 @@ export function MonitoringCenterPage() {
     [headerSnapshots]
   );
   const scopedFailureCount = scopedSummary.failureCalls;
+  const accountQuotaStatesWithObservedHeaders = useMemo(() => {
+    let changed = false;
+    const nextStates = Object.fromEntries(
+      Object.entries(accountQuotaStates).map(([account, state]) => {
+        const targets = accountQuotaTargetsByAccount.get(account) ?? [];
+        const observedEntries = targets
+          .map((target) =>
+            buildObservedCodexAccountQuotaEntry(
+              target,
+              getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, target.file),
+              t
+            )
+          )
+          .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+        const nextState =
+          mergeObservedAccountQuotaState(state, targets, observedEntries) ?? state;
+        changed = changed || nextState !== state;
+        return [account, nextState] as const;
+      })
+    );
+    return changed ? nextStates : accountQuotaStates;
+  }, [accountQuotaStates, accountQuotaTargetsByAccount, headerSnapshotLookup, t]);
 
   const hasSearchFilter = Boolean(deferredSearch.trim());
   const hasScopeFilter =
@@ -900,6 +923,10 @@ export function MonitoringCenterPage() {
       const currentState = accountQuotaStatesRef.current[account];
       const targets = accountQuotaTargetsByAccount.get(account) ?? [];
       const targetKey = targets.map((target) => target.key).join('|');
+      const previousEntriesByKey =
+        currentState?.targetKey === targetKey
+          ? new Map(currentState.entries.map((entry) => [entry.key, entry]))
+          : new Map();
       const observedEntries = targets
         .map((target) =>
           buildObservedCodexAccountQuotaEntry(
@@ -953,6 +980,8 @@ export function MonitoringCenterPage() {
       );
       if (accountQuotaRequestIdsRef.current[account] !== requestId) return;
 
+      const hasFailure = settled.some((result) => result.status === 'rejected');
+      const completedAtMs = Date.now();
       const entries = settled.map((result, index) => {
         const fallback = targets[index];
         if (result.status === 'fulfilled') {
@@ -963,24 +992,32 @@ export function MonitoringCenterPage() {
           result.reason instanceof Error
             ? result.reason.message
             : String(result.reason || t('common.unknown_error'));
-        return (
-          buildObservedCodexAccountQuotaEntry(
-            fallback,
-            getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, fallback.file),
-            t
-          ) ?? buildAccountQuotaErrorEntry(fallback, error, t)
+        const observedEntry = buildObservedCodexAccountQuotaEntry(
+          fallback,
+          getHighConfidenceUsageHeaderSnapshotForAuthFile(headerSnapshotLookup, fallback.file),
+          t
+        );
+        return buildAccountQuotaRefreshFailureEntry(
+          fallback,
+          error,
+          t,
+          previousEntriesByKey.get(fallback.key),
+          observedEntry,
+          completedAtMs
         );
       });
 
       const hasSuccess = entries.some((entry) => !entry.error);
+      const firstError = entries.find((entry) => entry.error)?.error;
       setAccountQuotaStates((previous) => ({
         ...previous,
         [account]: {
-          status: hasSuccess ? 'success' : 'error',
+          status: hasFailure ? 'error' : hasSuccess ? 'success' : 'error',
           targetKey,
           entries,
-          error: hasSuccess ? '' : entries[0]?.error || t('common.unknown_error'),
-          lastRefreshedAt: Date.now(),
+          error: hasFailure ? firstError || t('common.unknown_error') : '',
+          failedAtMs: hasFailure ? completedAtMs : undefined,
+          lastRefreshedAt: hasFailure ? previous[account]?.lastRefreshedAt : completedAtMs,
         },
       }));
     },
@@ -1386,7 +1423,7 @@ export function MonitoringCenterPage() {
                 accountAuthStateByRowId={accountAuthStateByRowId}
                 accountStatusDataByRowId={accountStatusDataByRowId}
                 emptyAccountStatusData={emptyAccountStatusData}
-                accountQuotaStates={accountQuotaStates}
+                accountQuotaStates={accountQuotaStatesWithObservedHeaders}
                 accountPageSize={accountPageSize}
                 accountPageSizeOptions={accountPageSizeOptions}
                 accountOverviewScopeText={accountOverviewScopeText}

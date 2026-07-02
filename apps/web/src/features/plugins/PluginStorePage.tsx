@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import { Modal } from '@/components/ui/Modal';
 import {
   IconDownload,
   IconPlugin,
@@ -33,7 +34,7 @@ import {
   PLUGIN_RESOURCES_SETTLE_REFRESH_DELAY_MS,
   resolvePluginAssetURL,
 } from './pluginResources';
-import { waitForPluginStoreState } from './pluginPolling';
+import { isPluginStoreInstallSettled, waitForPluginStoreState } from './pluginPolling';
 import { PluginInstallGateModal } from './components/PluginInstallGateModal';
 import styles from './PluginStorePage.module.scss';
 
@@ -78,6 +79,11 @@ const hasRestartRequired = (error: unknown) =>
 const getStoreEntryTitle = (entry: PluginStoreEntry) => entry.name || entry.id;
 const getStoreEntryKey = (entry: PluginStoreEntry) =>
   entry.storeId || [entry.sourceId, entry.id].filter(Boolean).join('/') || entry.id;
+const formatPluginVersion = (version: string) => {
+  const trimmed = version.trim();
+  if (!trimmed) return '';
+  return /^v/i.test(trimmed) ? trimmed : `v${trimmed}`;
+};
 
 function StoreLogo({ src }: { src: string }) {
   const [failed, setFailed] = useState(false);
@@ -87,6 +93,82 @@ function StoreLogo({ src }: { src: string }) {
     <img src={src} alt="" onError={() => setFailed(true)} />
   ) : (
     <IconPlugin size={18} />
+  );
+}
+
+type PluginInstallOptionsModalProps = {
+  entry: PluginStoreEntry | null;
+  isUpdate: boolean;
+  version: string;
+  installing: boolean;
+  onVersionChange: (version: string) => void;
+  onClose: () => void;
+  onConfirm: () => void | Promise<void>;
+};
+
+function PluginInstallOptionsModal({
+  entry,
+  isUpdate,
+  version,
+  installing,
+  onVersionChange,
+  onClose,
+  onConfirm,
+}: PluginInstallOptionsModalProps) {
+  const { t } = useTranslation();
+  if (!entry) return null;
+
+  const requestedVersion = version.trim();
+  const displayVersion = requestedVersion || entry.version;
+  const target = displayVersion
+    ? `${getStoreEntryTitle(entry)} ${formatPluginVersion(displayVersion)}`
+    : getStoreEntryTitle(entry);
+  const placeholder = entry.version
+    ? formatPluginVersion(entry.version)
+    : t('plugin_store.install_version_latest');
+  const handleClose = () => {
+    if (installing) return;
+    onClose();
+  };
+
+  return (
+    <Modal
+      open={Boolean(entry)}
+      onClose={handleClose}
+      closeDisabled={installing}
+      width={520}
+      title={isUpdate ? t('plugin_store.update_confirm_title') : t('plugin_store.install_confirm_title')}
+      footer={
+        <>
+          <Button variant="secondary" onClick={handleClose} disabled={installing}>
+            {t('common.cancel')}
+          </Button>
+          <Button onClick={onConfirm} loading={installing}>
+            {isUpdate ? t('plugin_store.update') : t('plugin_store.install')}
+          </Button>
+        </>
+      }
+    >
+      <div className={styles.installOptions}>
+        <p className={styles.installOptionsMessage}>
+          {isUpdate
+            ? t('plugin_store.update_confirm_message', { target })
+            : t('plugin_store.install_confirm_message', { target })}
+        </p>
+        <Input
+          label={t('plugin_store.install_version_label')}
+          value={version}
+          onChange={(event) => onVersionChange(event.target.value)}
+          placeholder={placeholder}
+          disabled={installing}
+          autoComplete="off"
+          spellCheck={false}
+          hint={t('plugin_store.install_version_hint', {
+            version: entry.version ? formatPluginVersion(entry.version) : placeholder,
+          })}
+        />
+      </div>
+    </Modal>
   );
 }
 
@@ -114,6 +196,10 @@ export function PluginStorePage({
   const [gateEntry, setGateEntry] = useState<PluginStoreEntry | null>(null);
   const [gateMode, setGateMode] = useState<'install' | 'reinstall'>('install');
   const [gateIsUpdate, setGateIsUpdate] = useState(false);
+  const [gateRequestedVersion, setGateRequestedVersion] = useState('');
+  const [installOptionsEntry, setInstallOptionsEntry] = useState<PluginStoreEntry | null>(null);
+  const [installOptionsIsUpdate, setInstallOptionsIsUpdate] = useState(false);
+  const [installVersion, setInstallVersion] = useState('');
 
   const connected = connectionStatus === 'connected';
 
@@ -268,14 +354,18 @@ export function PluginStorePage({
   );
 
   const runInstall = useCallback(
-    async (entry: PluginStoreEntry, isUpdate: boolean) => {
+    async (entry: PluginStoreEntry, isUpdate: boolean, requestedVersion = '') => {
       const failedKey = isUpdate ? 'plugin_store.update_failed' : 'plugin_store.install_failed';
       const entryKey = getStoreEntryKey(entry);
       const sourceId = entry.sourceId || undefined;
+      const version = requestedVersion.trim();
 
       setInstallingID(entryKey);
       try {
-        const result = await pluginStoreApi.install(entry.id, { sourceId });
+        const result = await pluginStoreApi.install(entry.id, {
+          sourceId,
+          version: version || undefined,
+        });
         showNotification(
           isUpdate ? t('plugin_store.update_success') : t('plugin_store.install_success'),
           'success'
@@ -293,7 +383,7 @@ export function PluginStorePage({
           const waitResult = await waitForPluginStoreState(
             entry.id,
             entry.sourceId,
-            (plugin) => plugin.installed && !plugin.updateAvailable
+            (plugin) => isPluginStoreInstallSettled(plugin, version)
           );
           setData(waitResult.response);
         }
@@ -321,46 +411,37 @@ export function PluginStorePage({
 
   const handleInstall = (entry: PluginStoreEntry) => {
     const isUpdate = entry.installed && entry.updateAvailable;
-    if (!isOfficialPlugin(entry)) {
-      setGateEntry(entry);
+    setInstallOptionsEntry(entry);
+    setInstallOptionsIsUpdate(isUpdate);
+    setInstallVersion('');
+  };
+
+  const handleInstallOptionsClose = useCallback(() => {
+    if (installingID) return;
+    setInstallOptionsEntry(null);
+    setInstallVersion('');
+  }, [installingID]);
+
+  const handleInstallOptionsConfirm = useCallback(async () => {
+    if (!installOptionsEntry) return;
+    const requestedVersion = installVersion.trim();
+    if (!isOfficialPlugin(installOptionsEntry)) {
+      setGateEntry(installOptionsEntry);
       setGateMode('install');
-      setGateIsUpdate(isUpdate);
+      setGateIsUpdate(installOptionsIsUpdate);
+      setGateRequestedVersion(requestedVersion);
+      setInstallOptionsEntry(null);
+      setInstallVersion('');
       return;
     }
-
-    const title = getStoreEntryTitle(entry);
-    const target = entry.version ? `${title} v${entry.version}` : title;
-    const confirmationMessage = isUpdate ? (
-      t('plugin_store.update_confirm_message', { target })
-    ) : (
-      <div className={styles.installConfirmContent}>
-        <p className={styles.installConfirmMessage}>
-          {t('plugin_store.install_confirm_message', { target })}
-        </p>
-        <div className={styles.installSecurityWarning}>
-          <IconShield className={styles.installSecurityWarningIcon} size={18} aria-hidden="true" />
-          <div className={styles.installSecurityWarningBody}>
-            <strong className={styles.installSecurityWarningTitle}>
-              {t('plugin_store.install_security_warning_title')}
-            </strong>
-            <p className={styles.installSecurityWarningText}>
-              {t('plugin_store.install_security_warning_message')}
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-
-    showConfirmation({
-      title: isUpdate
-        ? t('plugin_store.update_confirm_title')
-        : t('plugin_store.install_confirm_title'),
-      message: confirmationMessage,
-      confirmText: isUpdate ? t('plugin_store.update') : t('plugin_store.install'),
-      variant: 'primary',
-      onConfirm: () => runInstall(entry, isUpdate),
-    });
-  };
+    try {
+      await runInstall(installOptionsEntry, installOptionsIsUpdate, requestedVersion);
+      setInstallOptionsEntry(null);
+      setInstallVersion('');
+    } catch {
+      // runInstall has already shown a notification; keep the modal open for correction.
+    }
+  }, [installOptionsEntry, installOptionsIsUpdate, installVersion, runInstall]);
 
   const handleDeleteInstalled = (entry: PluginStoreEntry) => {
     if (installingID) return;
@@ -490,6 +571,7 @@ export function PluginStorePage({
 
   const handleGateClose = useCallback(() => {
     setGateEntry(null);
+    setGateRequestedVersion('');
   }, []);
 
   const handleGateConfirm = useCallback(async () => {
@@ -497,10 +579,11 @@ export function PluginStorePage({
     if (gateMode === 'reinstall') {
       await runReinstall(gateEntry);
     } else {
-      await runInstall(gateEntry, gateIsUpdate);
+      await runInstall(gateEntry, gateIsUpdate, gateRequestedVersion);
     }
     setGateEntry(null);
-  }, [gateEntry, gateIsUpdate, gateMode, runInstall, runReinstall]);
+    setGateRequestedVersion('');
+  }, [gateEntry, gateIsUpdate, gateMode, gateRequestedVersion, runInstall, runReinstall]);
 
   const renderCard = (entry: PluginStoreEntry) => {
     const entryKey = getStoreEntryKey(entry);
@@ -519,6 +602,19 @@ export function PluginStorePage({
     const sourceLabel = isDefaultPluginStoreSource(entry)
       ? t('plugin_store.cli_proxy_api_source')
       : entry.sourceName || entry.sourceId;
+    const platformText =
+      entry.platforms.length > 0
+        ? t('plugin_store.platforms', {
+            platforms: entry.platforms
+              .map((platform) => `${platform.goos}/${platform.goarch}`)
+              .join(', '),
+          })
+        : '';
+    const authText = entry.authRequired
+      ? entry.authConfigured
+        ? t('plugin_store.auth_configured')
+        : t('plugin_store.auth_required')
+      : '';
     const metaItems: Array<{
       key: string;
       label: string;
@@ -560,10 +656,21 @@ export function PluginStorePage({
         tone: 'source',
       });
     }
+    if (platformText) {
+      metaItems.push({
+        key: 'platforms',
+        label: t('plugin_store.meta_platforms'),
+        value: platformText,
+        tone: 'source',
+      });
+    }
 
     const installingCurrent = installingID === entryKey;
     const reinstallingCurrent = installingID === `${entryKey}:reinstall`;
     const deletingCurrent = installingID === `${entryKey}:delete`;
+    const missingAuth = entry.authRequired && !entry.authConfigured;
+    const actionDisabled = !connected || missingAuth || Boolean(installingID);
+    const actionTitle = missingAuth ? t('plugin_store.auth_required_hint') : undefined;
 
     return (
       <article key={entryKey} className={styles.card}>
@@ -607,6 +714,11 @@ export function PluginStorePage({
             {entry.installed && entry.effectiveEnabled ? (
               <span className={styles.badge}>{t('plugin_store.badge_effective')}</span>
             ) : null}
+            {entry.authRequired ? (
+              <span className={entry.authConfigured ? styles.badge : styles.badgeWarn}>
+                {authText}
+              </span>
+            ) : null}
           </div>
         </div>
 
@@ -644,8 +756,9 @@ export function PluginStorePage({
               <Button
                 size="sm"
                 onClick={() => handleInstall(entry)}
-                disabled={!connected || Boolean(installingID)}
+                disabled={actionDisabled}
                 loading={installingID === entryKey}
+                title={actionTitle}
               >
                 <IconDownload size={14} />
                 {t('plugin_store.install')}
@@ -666,8 +779,9 @@ export function PluginStorePage({
                   <Button
                     size="sm"
                     onClick={() => handleInstall(entry)}
-                    disabled={!connected || Boolean(installingID)}
+                    disabled={actionDisabled}
                     loading={installingCurrent}
+                    title={actionTitle}
                   >
                     <IconRefreshCw size={14} />
                     {t('plugin_store.update')}
@@ -892,6 +1006,15 @@ export function PluginStorePage({
         }
         onClose={handleGateClose}
         onConfirm={handleGateConfirm}
+      />
+      <PluginInstallOptionsModal
+        entry={installOptionsEntry}
+        isUpdate={installOptionsIsUpdate}
+        version={installVersion}
+        installing={installOptionsEntry ? installingID === getStoreEntryKey(installOptionsEntry) : false}
+        onVersionChange={setInstallVersion}
+        onClose={handleInstallOptionsClose}
+        onConfirm={handleInstallOptionsConfirm}
       />
     </div>
   );

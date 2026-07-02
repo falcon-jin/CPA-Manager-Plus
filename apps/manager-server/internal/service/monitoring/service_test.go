@@ -523,6 +523,59 @@ func TestAnalyticsUsesResolvedModelPricingInAggregates(t *testing.T) {
 	}
 }
 
+func TestAnalyticsFallsBackToRequestedModelPriceWhenResolvedPriceIsMissing(t *testing.T) {
+	db := newMonitoringTestStore(t)
+	ctx := context.Background()
+	fromMS := int64(1_778_005_000_000)
+	toMS := fromMS + 60*60*1000
+
+	if err := db.SaveModelPrices(ctx, map[string]store.ModelPrice{
+		"GLM-5.2": {Prompt: 3},
+	}); err != nil {
+		t.Fatalf("save model prices: %v", err)
+	}
+	event := monitoringEvent("alias-fallback-cost", fromMS+1_000, "GLM-5.2", "auth-1", "source-a", false, 1_000_000, 0, 0, 0, 1_000_000, nil)
+	event.RequestedModel = "GLM-5.2"
+	event.ResolvedModel = "zai/glm-5.2"
+	if _, err := db.InsertEvents(ctx, []usage.Event{event}); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	resp, err := New(db).Analytics(ctx, Request{
+		FromMS: fromMS,
+		ToMS:   toMS,
+		Include: Include{
+			Summary:      true,
+			ModelShare:   true,
+			ModelStats:   true,
+			ChannelShare: true,
+			Timeline:     true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("analytics: %v", err)
+	}
+
+	if resp.Summary == nil || math.Abs(resp.Summary.TotalCost-3) > 0.000001 {
+		t.Fatalf("summary cost = %#v", resp.Summary)
+	}
+	if len(resp.ModelStats) != 1 || resp.ModelStats[0].Model != "GLM-5.2" ||
+		math.Abs(resp.ModelStats[0].Cost-3) > 0.000001 {
+		t.Fatalf("model stats = %#v", resp.ModelStats)
+	}
+	if len(resp.ModelShare) != 1 || resp.ModelShare[0].Model != "GLM-5.2" ||
+		math.Abs(resp.ModelShare[0].Cost-3) > 0.000001 {
+		t.Fatalf("model share = %#v", resp.ModelShare)
+	}
+	if len(resp.ChannelShare) != 1 || resp.ChannelShare[0].AuthIndex != "auth-1" ||
+		math.Abs(resp.ChannelShare[0].Cost-3) > 0.000001 {
+		t.Fatalf("channel share = %#v", resp.ChannelShare)
+	}
+	if len(resp.Timeline) != 1 || math.Abs(resp.Timeline[0].Cost-3) > 0.000001 {
+		t.Fatalf("timeline = %#v", resp.Timeline)
+	}
+}
+
 func TestAnalyticsPricesPriorityAndDefaultServiceTiersSeparately(t *testing.T) {
 	db := newMonitoringTestStore(t)
 	ctx := context.Background()

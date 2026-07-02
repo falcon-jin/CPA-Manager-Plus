@@ -19,7 +19,9 @@ import { QuotaCard } from './QuotaCard';
 import type { QuotaStatusState } from './QuotaCard';
 import { useQuotaLoader } from './useQuotaLoader';
 import {
+  buildQuotaFailureState,
   getQuotaStoreKey,
+  getScopedQuotaState,
   resolveQuotaDisplayState,
   type QuotaConfig,
   type QuotaSortMode,
@@ -196,12 +198,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
 
   const getScopedQuota = useCallback(
     (file: AuthFileItem): TState | undefined => {
-      const storeKey = getQuotaStoreKey(config, file);
-      const activeQuota = quota[storeKey];
-      const scopedQuota = config.scopeState ? config.scopeState(file, activeQuota) : activeQuota;
-      if (scopedQuota || storeKey === file.name) return scopedQuota;
-      const legacyQuota = quota[file.name];
-      return config.scopeState ? config.scopeState(file, legacyQuota) : legacyQuota;
+      return getScopedQuotaState(config, quota, file);
     },
     [config, quota]
   );
@@ -372,6 +369,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
       if (getScopedQuota(file)?.status === 'loading') return;
       const displayName = getAccountDisplayName(file);
       const storeKey = getQuotaStoreKey(config, file);
+      const previousQuota = getScopedQuota(file);
 
       setQuota((prev) => ({
         ...prev,
@@ -390,7 +388,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
         const status = getStatusFromError(err);
         setQuota((prev) => ({
           ...prev,
-          [storeKey]: config.buildErrorState(message, status, file),
+          [storeKey]: buildQuotaFailureState(config, message, status, file, previousQuota),
         }));
         showNotification(
           t('auth_files.quota_refresh_failed', { name: displayName, message }),
@@ -425,6 +423,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
         cancelText: t('common.cancel'),
         variant: 'primary',
         onConfirm: async () => {
+          const previousQuota = getScopedQuota(file);
           setQuota((prev) => ({
             ...prev,
             [storeKey]: config.buildLoadingState(file),
@@ -448,7 +447,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
             const status = getStatusFromError(err);
             setQuota((prev) => ({
               ...prev,
-              [storeKey]: config.buildErrorState(message, status, file),
+              [storeKey]: buildQuotaFailureState(config, message, status, file, previousQuota),
             }));
             showNotification(
               t(`${config.i18nPrefix}.reset_failed`, { name: displayName, message }),
