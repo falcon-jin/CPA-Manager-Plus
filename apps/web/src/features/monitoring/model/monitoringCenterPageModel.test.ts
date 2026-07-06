@@ -4,6 +4,7 @@ import {
   fetchAntigravityQuota,
   fetchClaudeQuota,
   fetchCodexQuota,
+  fetchKimiQuota,
   fetchXaiQuota,
 } from '@/utils/quota';
 import type { MonitoringAccountQuotaTarget } from '@/features/monitoring/accountOverviewQuotaTargets';
@@ -57,6 +58,8 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'xai_quota.title': 'xAI Quota',
     'xai_quota.empty_data': 'No xAI quota data',
     'xai_quota.monthly_limit': 'Monthly billing limit',
+    'xai_quota.monthly_credits': 'Monthly credits',
+    'xai_quota.pay_as_you_go_label': 'Pay-as-you-go',
     'xai_quota.on_demand_cap': 'On-demand cap',
     'xai_quota.usage_amount': '{{remaining}} / {{limit}} remaining',
   };
@@ -844,14 +847,51 @@ describe('monitoringCenterPageModel account quota', () => {
     ]);
   });
 
+  it('maps Kimi quota rows without amount labels in account quota entries', async () => {
+    vi.mocked(fetchKimiQuota).mockResolvedValue([
+      {
+        id: 'daily',
+        label: 'Daily',
+        used: 25,
+        limit: 100,
+        resetHint: '2026-07-31T00:00:00Z',
+      },
+    ]);
+
+    const entry = await requestAccountQuota(
+      createTarget({
+        provider: 'kimi',
+        authIndex: '4',
+        fileName: 'kimi.json',
+      }),
+      t
+    );
+
+    expect(entry).toMatchObject({
+      provider: 'kimi',
+      providerLabel: 'Kimi Quota',
+      windows: [
+        {
+          id: 'daily',
+          label: 'Daily',
+          remainingPercent: 75,
+          usageLabel: null,
+        },
+      ],
+    });
+  });
+
   it('maps xAI billing into account quota entries', async () => {
     vi.mocked(fetchXaiQuota).mockResolvedValue({
       monthlyLimitCents: 10000,
-      usedCents: 2500,
+      usedCents: 12500,
+      includedUsedCents: 10000,
       onDemandCapCents: 5000,
+      onDemandUsedCents: 2500,
+      onDemandUsedPercent: 50,
       billingPeriodStart: '2026-05-01T00:00:00Z',
       billingPeriodEnd: '2026-06-01T00:00:00Z',
-      usedPercent: 25,
+      usedPercent: 100,
     });
 
     const entry = await requestAccountQuota(
@@ -870,9 +910,15 @@ describe('monitoringCenterPageModel account quota', () => {
       windows: [
         {
           id: 'monthly-limit',
-          label: 'Monthly billing limit',
-          remainingPercent: 75,
-          usageLabel: '$75.00 / $100.00 remaining',
+          label: 'Monthly credits',
+          remainingPercent: 0,
+          usageLabel: '$0.00 / $100.00 remaining',
+        },
+        {
+          id: 'pay-as-you-go',
+          label: 'Pay-as-you-go',
+          remainingPercent: 50,
+          usageLabel: '$25.00 / $50.00 remaining',
         },
       ],
     });

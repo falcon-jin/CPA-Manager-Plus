@@ -216,6 +216,10 @@ docker compose -f docker-compose.manager.yml up --build
 - 感谢上游项目 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 和 [Cli-Proxy-API-Management-Center](https://github.com/router-for-me/Cli-Proxy-API-Management-Center) 提供基础与参考。
 - 感谢 [Linux.do](https://linux.do/) 社区对项目推广与反馈的支持。
 
+## 社区与反馈
+
+- Telegram 交流群: https://t.me/cpa_mp
+
 ## Star History
 
 <a href="https://www.star-history.com/?repos=seakee%2FCPA-Manager-Plus&type=date&logscale=&legend=top-left">

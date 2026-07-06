@@ -1219,7 +1219,6 @@ const renderKimiItems = (
           'div',
           { className: styleMap.quotaMeta },
           h('span', { className: styleMap.quotaPercent }, percentLabel),
-          limit > 0 ? h('span', { className: styleMap.quotaAmount }, `${used} / ${limit}`) : null,
           resetLabel ? h('span', { className: styleMap.quotaReset }, resetLabel) : null
         )
       ),
@@ -1260,6 +1259,22 @@ const formatXaiCurrency = (value: number | null): string => {
   return `$${(value / 100).toFixed(2)}`;
 };
 
+const formatXaiRemainingAmount = (billing: XaiBillingSummary): string => {
+  const remainingCents =
+    billing.monthlyLimitCents !== null && billing.includedUsedCents !== null
+      ? Math.max(0, billing.monthlyLimitCents - billing.includedUsedCents)
+      : null;
+  return `${formatXaiCurrency(remainingCents)} / ${formatXaiCurrency(billing.monthlyLimitCents)}`;
+};
+
+const formatXaiOnDemandAmount = (billing: XaiBillingSummary): string => {
+  const remainingCents =
+    billing.onDemandCapCents !== null && billing.onDemandUsedCents !== null
+      ? Math.max(0, billing.onDemandCapCents - billing.onDemandUsedCents)
+      : null;
+  return `${formatXaiCurrency(remainingCents)} / ${formatXaiCurrency(billing.onDemandCapCents)}`;
+};
+
 const XAI_SUPERGROK_LIMIT_CENTS = 15_000;
 const XAI_SUPERGROK_HEAVY_LIMIT_CENTS = 150_000;
 
@@ -1288,21 +1303,24 @@ const renderXaiItems = (
     return h('div', { className: styleMap.quotaMessage }, t('xai_quota.empty_data'));
   }
 
-  const usedPercent = billing.usedPercent;
-  const clampedUsed = usedPercent === null ? null : Math.max(0, Math.min(100, usedPercent));
+  const clampedUsed =
+    billing.usedPercent === null ? null : Math.max(0, Math.min(100, billing.usedPercent));
   const remaining = clampedUsed === null ? null : Math.max(0, Math.min(100, 100 - clampedUsed));
   const percentLabel = remaining === null ? '--' : `${Math.round(remaining)}%`;
-  const remainingCents =
-    billing.monthlyLimitCents !== null && billing.usedCents !== null
-      ? Math.max(0, billing.monthlyLimitCents - billing.usedCents)
-      : null;
-  const amountLabel = t('xai_quota.usage_amount', {
-    remaining: formatXaiCurrency(remainingCents),
-    limit: formatXaiCurrency(billing.monthlyLimitCents),
-  });
+  const amountLabel = formatXaiRemainingAmount(billing);
   const resetLabel = billing.billingPeriodEnd
     ? formatQuotaResetTime(billing.billingPeriodEnd)
     : t('xai_quota.reset_unknown');
+  const onDemandCap = billing.onDemandCapCents ?? 0;
+  const clampedOnDemandUsed =
+    billing.onDemandUsedPercent === null
+      ? null
+      : Math.max(0, Math.min(100, billing.onDemandUsedPercent));
+  const onDemandRemaining =
+    clampedOnDemandUsed === null ? null : Math.max(0, Math.min(100, 100 - clampedOnDemandUsed));
+  const onDemandPercentLabel =
+    onDemandRemaining === null ? '--' : `${Math.round(onDemandRemaining)}%`;
+  const onDemandAmountLabel = formatXaiOnDemandAmount(billing);
   const plan = resolveXaiPlan(billing.monthlyLimitCents);
 
   const nodes: ReactNode[] = [
@@ -1318,13 +1336,40 @@ const renderXaiItems = (
           )
         )
       : null,
+    onDemandCap > 0
+      ? h(
+          'div',
+          { key: 'pay-as-you-go', className: styleMap.quotaRow },
+          h(
+            'div',
+            { className: styleMap.quotaRowHeader },
+            h('span', { className: styleMap.quotaModel }, t('xai_quota.pay_as_you_go_label')),
+            h(
+              'div',
+              { className: styleMap.quotaMeta },
+              h('span', { className: styleMap.quotaPercent }, onDemandPercentLabel),
+              h('span', { className: styleMap.quotaAmount }, onDemandAmountLabel)
+            )
+          ),
+          h(QuotaProgressBar, {
+            percent: onDemandRemaining,
+            highThreshold: QUOTA_PROGRESS_HIGH_THRESHOLD,
+            mediumThreshold: QUOTA_PROGRESS_MEDIUM_THRESHOLD,
+          })
+        )
+      : h(
+          'div',
+          { key: 'pay-as-you-go', className: styleMap.codexPlan },
+          h('span', { className: styleMap.codexPlanLabel }, t('xai_quota.pay_as_you_go_label')),
+          h('span', { className: styleMap.codexPlanValue }, t('xai_quota.pay_as_you_go_disabled'))
+        ),
     h(
       'div',
       { key: 'billing', className: styleMap.quotaRow },
       h(
         'div',
         { className: styleMap.quotaRowHeader },
-        h('span', { className: styleMap.quotaModel }, t('xai_quota.monthly_limit')),
+        h('span', { className: styleMap.quotaModel }, t('xai_quota.monthly_credits')),
         h(
           'div',
           { className: styleMap.quotaMeta },
@@ -1340,21 +1385,6 @@ const renderXaiItems = (
       })
     ),
   ];
-
-  if (billing.onDemandCapCents !== null) {
-    nodes.push(
-      h(
-        'div',
-        { key: 'on-demand-cap', className: styleMap.codexPlan },
-        h('span', { className: styleMap.codexPlanLabel }, t('xai_quota.on_demand_cap')),
-        h(
-          'span',
-          { className: styleMap.codexPlanValue },
-          formatXaiCurrency(billing.onDemandCapCents)
-        )
-      )
-    );
-  }
 
   return h(React.Fragment, null, ...nodes);
 };

@@ -1055,7 +1055,7 @@ const buildKimiAccountQuotaWindows = (rows: KimiQuotaRow[], t: TFunction): Accou
       label: rowLabel,
       remainingPercent,
       resetLabel: resetLabel || '-',
-      usageLabel: limit > 0 ? `${used} / ${limit}` : null,
+      usageLabel: null,
     };
   });
 
@@ -1069,14 +1069,13 @@ const buildXaiAccountQuotaWindows = (
   t: TFunction
 ): AccountQuotaWindow[] => {
   const remainingCents =
-    billing.monthlyLimitCents !== null && billing.usedCents !== null
-      ? Math.max(0, billing.monthlyLimitCents - billing.usedCents)
+    billing.monthlyLimitCents !== null && billing.includedUsedCents !== null
+      ? Math.max(0, billing.monthlyLimitCents - billing.includedUsedCents)
       : null;
-
-  return [
+  const windows: AccountQuotaWindow[] = [
     {
       id: 'monthly-limit',
-      label: t('xai_quota.monthly_limit'),
+      label: t('xai_quota.monthly_credits'),
       remainingPercent: buildRemainingFromUsedPercent(billing.usedPercent),
       resetLabel: billing.billingPeriodEnd ? formatQuotaResetTime(billing.billingPeriodEnd) : '-',
       usageLabel: t('xai_quota.usage_amount', {
@@ -1085,6 +1084,25 @@ const buildXaiAccountQuotaWindows = (
       }),
     },
   ];
+
+  if (billing.onDemandCapCents !== null && billing.onDemandCapCents > 0) {
+    const onDemandRemainingCents =
+      billing.onDemandUsedCents !== null
+        ? Math.max(0, billing.onDemandCapCents - billing.onDemandUsedCents)
+        : null;
+    windows.push({
+      id: 'pay-as-you-go',
+      label: t('xai_quota.pay_as_you_go_label'),
+      remainingPercent: buildRemainingFromUsedPercent(billing.onDemandUsedPercent),
+      resetLabel: '-',
+      usageLabel: t('xai_quota.usage_amount', {
+        remaining: formatXaiCurrency(onDemandRemainingCents),
+        limit: formatXaiCurrency(billing.onDemandCapCents),
+      }),
+    });
+  }
+
+  return windows;
 };
 
 export const getAccountQuotaProviderLabel = (

@@ -582,15 +582,32 @@ export const buildXaiBillingSummary = (
     return null;
   }
 
+  const includedUsedCents =
+    usedCents === null
+      ? null
+      : monthlyLimitCents !== null && monthlyLimitCents > 0
+        ? Math.min(usedCents, monthlyLimitCents)
+        : usedCents;
+  const onDemandUsedCents =
+    usedCents !== null && monthlyLimitCents !== null
+      ? Math.max(0, usedCents - monthlyLimitCents)
+      : null;
   const usedPercent =
-    monthlyLimitCents !== null && monthlyLimitCents > 0 && usedCents !== null
-      ? (usedCents / monthlyLimitCents) * 100
+    monthlyLimitCents !== null && monthlyLimitCents > 0 && includedUsedCents !== null
+      ? (includedUsedCents / monthlyLimitCents) * 100
+      : null;
+  const onDemandUsedPercent =
+    onDemandCapCents !== null && onDemandCapCents > 0 && onDemandUsedCents !== null
+      ? (onDemandUsedCents / onDemandCapCents) * 100
       : null;
 
   return {
     monthlyLimitCents,
     usedCents,
+    includedUsedCents,
     onDemandCapCents,
+    onDemandUsedCents,
+    onDemandUsedPercent,
     billingPeriodStart,
     billingPeriodEnd,
     usedPercent,

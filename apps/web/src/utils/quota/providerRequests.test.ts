@@ -237,9 +237,30 @@ describe('buildXaiBillingSummary', () => {
     expect(summary).toMatchObject({
       monthlyLimitCents: 15000,
       usedCents: 3750,
+      includedUsedCents: 3750,
       onDemandCapCents: 2500,
+      onDemandUsedCents: 0,
+      onDemandUsedPercent: 0,
       billingPeriodEnd: '2026-07-31T00:00:00Z',
       usedPercent: 25,
+    });
+  });
+
+  it('splits included and pay-as-you-go usage after monthly credits are exhausted', () => {
+    const summary = buildXaiBillingSummary({
+      monthly_limit: 10000,
+      used: 12500,
+      on_demand_cap: 5000,
+    });
+
+    expect(summary).toMatchObject({
+      monthlyLimitCents: 10000,
+      usedCents: 12500,
+      includedUsedCents: 10000,
+      onDemandCapCents: 5000,
+      onDemandUsedCents: 2500,
+      usedPercent: 100,
+      onDemandUsedPercent: 50,
     });
   });
 });
