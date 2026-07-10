@@ -57,6 +57,7 @@ export type AuthFileCardProps = {
   antigravitySubscription?: AntigravitySubscriptionState;
   onRefreshAntigravitySubscription?: (file: AuthFileItem) => void;
   quotaCooldown?: QuotaCooldownInfo;
+  onRefreshQuota: (file: AuthFileItem) => void | Promise<unknown>;
   onShowModels: (file: AuthFileItem) => void;
   onReauth?: (file: AuthFileItem) => void;
   onDownload: (name: string) => void;
@@ -95,6 +96,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
     antigravitySubscription,
     onRefreshAntigravitySubscription,
     quotaCooldown,
+    onRefreshQuota,
     onShowModels,
     onReauth,
     onDownload,
@@ -144,8 +146,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
   const priorityValue = parsePriorityValue(file.priority ?? file['priority']);
   const projectIdValue = getProjectIdValue(file);
   const noteValue = typeof file.note === 'string' ? file.note.trim() : '';
-  const subscription =
-    isAntigravity && !isRuntimeOnly ? antigravitySubscription : undefined;
+  const subscription = isAntigravity && !isRuntimeOnly ? antigravitySubscription : undefined;
   const subscriptionData = subscription?.status === 'success' ? subscription.data : undefined;
   const isSubscriptionLoading = subscription?.status === 'loading';
   const subscriptionPlanLabel =
@@ -162,10 +163,9 @@ export function AuthFileCard(props: AuthFileCardProps) {
                 subscriptionData.tierId ||
                 t('antigravity_subscription.plan_unknown')
               : '';
-  const subscriptionBadgeLabel =
-    isSubscriptionLoading
-      ? t('antigravity_subscription.loading_short')
-      : subscription?.status === 'error'
+  const subscriptionBadgeLabel = isSubscriptionLoading
+    ? t('antigravity_subscription.loading_short')
+    : subscription?.status === 'error'
       ? t('antigravity_subscription.error_badge')
       : subscriptionData
         ? t('antigravity_subscription.plan_badge', {
@@ -178,10 +178,9 @@ export function AuthFileCard(props: AuthFileCardProps) {
       : subscriptionData?.tierName && subscriptionData.tierId
         ? `${subscriptionData.tierName} (${subscriptionData.tierId})`
         : subscriptionData?.tierName || subscriptionData?.tierId || subscriptionBadgeLabel;
-  const subscriptionBadgeClass =
-    isSubscriptionLoading
-      ? styles.subscriptionBadgeLoading
-      : subscription?.status === 'error'
+  const subscriptionBadgeClass = isSubscriptionLoading
+    ? styles.subscriptionBadgeLoading
+    : subscription?.status === 'error'
       ? styles.subscriptionBadgeError
       : subscriptionData?.plan === 'free'
         ? styles.subscriptionBadgeFree
@@ -189,9 +188,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
           ? styles.subscriptionBadgeUnknown
           : styles.subscriptionBadgePaid;
   const subscriptionErrorMessage =
-    subscription?.status === 'error'
-      ? subscription.error || t('common.unknown_error')
-      : '';
+    subscription?.status === 'error' ? subscription.error || t('common.unknown_error') : '';
   const showSubscriptionRefreshButton =
     isAntigravity &&
     !isRuntimeOnly &&
@@ -393,6 +390,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
                 quotaType={quotaType}
                 disableControls={disableControls}
                 quotaOverride={quotaType === 'codex' ? (codexDisplayQuota ?? null) : undefined}
+                onRefreshQuota={onRefreshQuota}
               />
             )}
           </div>

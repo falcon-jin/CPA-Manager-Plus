@@ -1,6 +1,7 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Select } from '@/components/ui/Select';
+import type { AuthFileItem } from '@/types';
 import { AuthFilesPage } from './AuthFilesPage';
 
 const { mocks } = vi.hoisted(() => {
@@ -25,6 +26,12 @@ const { mocks } = vi.hoisted(() => {
       apiCallRequest: vi.fn(),
       setCodexQuota: vi.fn(),
       intervalCallbacks: [] as Array<{ callback: () => void; delay: number | null }>,
+      headerRefresh: null as null | (() => Promise<void>),
+      refreshQuotaForFile: vi.fn(async (_file: AuthFileItem) => true),
+      refreshQuotaForFiles: vi.fn(async (_files: AuthFileItem[]) => undefined),
+      refreshingQuotaFiles: false,
+      persistedCompactMode: null as boolean | null,
+      persistedUiState: null as null | { compactPageSize: number },
       codexQuota: {} as Record<string, unknown>,
       panelFeatureAvailability: {
         checking: false,
@@ -71,7 +78,9 @@ vi.mock('@/hooks/useInterval', () => ({
 }));
 
 vi.mock('@/hooks/useHeaderRefresh', () => ({
-  useHeaderRefresh: () => {},
+  useHeaderRefresh: (callback: () => Promise<void>) => {
+    mocks.headerRefresh = callback;
+  },
 }));
 
 vi.mock('@/components/common/PageTransitionLayer', () => ({
@@ -183,6 +192,14 @@ vi.mock('@/features/authFiles/hooks/useAuthFilesData', () => ({
   }),
 }));
 
+vi.mock('@/features/authFiles/hooks/useAuthFileQuotaRefresh', () => ({
+  useAuthFileQuotaRefresh: () => ({
+    refreshQuotaForFile: mocks.refreshQuotaForFile,
+    refreshQuotaForFiles: mocks.refreshQuotaForFiles,
+    refreshingQuotaFiles: mocks.refreshingQuotaFiles,
+  }),
+}));
+
 vi.mock('@/features/authFiles/hooks/useAuthFilesOauth', () => ({
   useAuthFilesOauth: () => ({
     excluded: [],
@@ -240,8 +257,8 @@ vi.mock('@/features/authFiles/uiState', () => ({
   normalizeAuthFilesSortMode: (value: string) => (value === 'default' ? 'default' : null),
   normalizeAuthFilesViewMode: (value: string) =>
     value === 'diagram' || value === 'list' ? value : null,
-  readAuthFilesUiState: () => null,
-  readPersistedAuthFilesCompactMode: () => null,
+  readAuthFilesUiState: () => mocks.persistedUiState,
+  readPersistedAuthFilesCompactMode: () => mocks.persistedCompactMode,
   writeAuthFilesUiState: vi.fn(),
   writePersistedAuthFilesCompactMode: vi.fn(),
 }));
@@ -359,6 +376,14 @@ const createDeferred = () => {
   return { promise, resolve };
 };
 
+const renderPage = () => {
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(<AuthFilesPage />);
+  });
+  return renderer;
+};
+
 describe('AuthFilesPage quota cooldown derived badge', () => {
   beforeEach(() => {
     mocks.list.mockReset();
@@ -367,6 +392,14 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
     mocks.getCodexInspectionRun.mockReset();
     mocks.getHeaderSnapshots.mockReset();
     mocks.apiCallRequest.mockReset();
+    mocks.headerRefresh = null;
+    mocks.refreshQuotaForFile.mockReset();
+    mocks.refreshQuotaForFile.mockResolvedValue(true);
+    mocks.refreshQuotaForFiles.mockReset();
+    mocks.refreshQuotaForFiles.mockResolvedValue(undefined);
+    mocks.refreshingQuotaFiles = false;
+    mocks.persistedCompactMode = null;
+    mocks.persistedUiState = null;
     mocks.intervalCallbacks = [];
     mocks.codexQuota = {};
     mocks.setCodexQuota = vi.fn((updater: unknown) => {
@@ -387,6 +420,7 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
     ]);
     mocks.listCodexInspectionRuns.mockResolvedValue({ items: [] });
     mocks.getCodexInspectionRun.mockResolvedValue({ run: { id: 1 }, results: [], logs: [] });
+    mocks.getActiveQuotaCooldowns.mockResolvedValue([]);
     mocks.getHeaderSnapshots.mockResolvedValue({
       generated_at_ms: 1_700_000_000_000,
       from_ms: 1_700_000_000_000,
@@ -395,6 +429,47 @@ describe('AuthFilesPage quota cooldown derived badge', () => {
     });
 
     setManagerServiceBase('http://manager.local:18317');
+  });
+
+  it('refreshes quota only for credentials rendered on the current page', async () => {
+    mocks.list.mockReturnValue(
+      Array.from({ length: 10 }, (_, index) => ({
+        name: `team-${String(index).padStart(2, '0')}.json`,
+        type: 'codex',
+        authIndex: index,
+      }))
+    );
+    const renderer = renderPage();
+    const visibleNames = renderer.root
+      .findAll((node) => typeof node.props['data-auth-card'] === 'string')
+      .map((node) => node.props['data-auth-card'] as string);
+
+    await act(async () => {
+      await mocks.headerRefresh?.();
+    });
+
+    const refreshed = mocks.refreshQuotaForFiles.mock.calls[0][0] as Array<{ name: string }>;
+    expect(refreshed.map((item) => item.name)).toEqual(visibleNames);
+    expect(refreshed).toHaveLength(9);
+  });
+
+  it('refreshes compact-mode current-page quota without inline quota sections', async () => {
+    mocks.persistedCompactMode = true;
+    mocks.persistedUiState = { compactPageSize: 30 };
+    mocks.list.mockReturnValue(
+      Array.from({ length: 31 }, (_, index) => ({
+        name: `compact-${String(index).padStart(2, '0')}.json`,
+        type: 'codex',
+        authIndex: index,
+      }))
+    );
+    renderPage();
+
+    await act(async () => {
+      await mocks.headerRefresh?.();
+    });
+
+    expect(mocks.refreshQuotaForFiles.mock.calls[0][0]).toHaveLength(30);
   });
 
   it('loads active quota cooldowns when the Manager Server is available', async () => {

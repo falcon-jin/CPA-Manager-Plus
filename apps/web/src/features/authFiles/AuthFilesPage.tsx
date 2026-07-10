@@ -73,6 +73,7 @@ import {
   isUsageHeaderQuotaSnapshotExpired,
 } from '@/utils/usageHeaderSnapshots';
 import { useAuthFilesData } from '@/features/authFiles/hooks/useAuthFilesData';
+import { useAuthFileQuotaRefresh } from '@/features/authFiles/hooks/useAuthFileQuotaRefresh';
 import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModels';
 import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth';
 import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
@@ -293,6 +294,8 @@ export function AuthFilesPage() {
     batchPatchFields,
     batchDelete,
   } = useAuthFilesData();
+  const { refreshQuotaForFile, refreshQuotaForFiles, refreshingQuotaFiles } =
+    useAuthFileQuotaRefresh();
 
   const statusBarCache = useAuthFilesStatusBarCache(files);
   const uniqueAuthFileKeyByFallbackCooldownKey = useMemo(() => {
@@ -611,17 +614,6 @@ export function AuthFilesPage() {
     },
     [savePastedAuthJson]
   );
-
-  const handleHeaderRefresh = useCallback(async () => {
-    await Promise.all([
-      loadFiles({ force: true }),
-      loadExcluded(),
-      loadModelAlias(),
-      loadCodexInspectionSnapshots(),
-    ]);
-  }, [loadFiles, loadExcluded, loadModelAlias, loadCodexInspectionSnapshots]);
-
-  useHeaderRefresh(handleHeaderRefresh);
 
   useEffect(() => {
     if (!isCurrentLayer) return;
@@ -1184,6 +1176,26 @@ export function AuthFilesPage() {
   const currentPage = Math.min(page, totalPages);
   const start = (currentPage - 1) * pageSize;
   const pageItems = useMemo(() => sorted.slice(start, start + pageSize), [sorted, start, pageSize]);
+  const handleHeaderRefresh = useCallback(async () => {
+    const quotaTargets = pageItems;
+    await Promise.all([
+      loadFiles({ force: true }),
+      loadExcluded(),
+      loadModelAlias(),
+      loadCodexInspectionSnapshots(),
+      refreshQuotaForFiles(quotaTargets),
+    ]);
+  }, [
+    loadFiles,
+    loadExcluded,
+    loadModelAlias,
+    loadCodexInspectionSnapshots,
+    pageItems,
+    refreshQuotaForFiles,
+  ]);
+
+  useHeaderRefresh(handleHeaderRefresh);
+
   const codexStatusByPageAuthFileKey = useMemo(() => {
     const statusMap = new Map<string, ReturnType<typeof getAuthFileCodexStatus>>();
     pageItems.forEach((file) => {
@@ -1513,7 +1525,8 @@ export function AuthFilesPage() {
                   variant="secondary"
                   size="sm"
                   onClick={handleHeaderRefresh}
-                  disabled={loading}
+                  disabled={loading || refreshingQuotaFiles}
+                  loading={loading || refreshingQuotaFiles}
                 >
                   {t('common.refresh')}
                 </Button>
@@ -1751,6 +1764,7 @@ export function AuthFilesPage() {
                       antigravitySubscription={antigravitySubscriptions[file.name]}
                       onRefreshAntigravitySubscription={refreshSubscription}
                       quotaCooldown={getQuotaCooldownForFile(file)}
+                      onRefreshQuota={refreshQuotaForFile}
                       onShowModels={showModels}
                       onReauth={(targetFile) =>
                         setCodexReauthTarget(createCodexReauthTargetFromAuthFile(targetFile))
