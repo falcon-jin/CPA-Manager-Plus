@@ -9,17 +9,10 @@ const { mocks } = vi.hoisted(() => {
     codexQuota: {},
   };
 
-  quotaStoreState.setCodexQuota = vi.fn((updater: unknown) => {
-    const current = quotaStoreState.codexQuota as Record<string, unknown>;
-    quotaStoreState.codexQuota =
-      typeof updater === 'function' ? (updater as (prev: typeof current) => typeof current)(current) : updater;
-  });
-
   return {
     mocks: {
-      fetchCodexQuota: vi.fn(),
       quotaStoreState,
-      showNotification: vi.fn(),
+      refreshQuota: vi.fn(),
     },
   };
 });
@@ -32,19 +25,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('@/utils/quota', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/utils/quota')>();
-  return {
-    ...actual,
-    fetchCodexQuota: mocks.fetchCodexQuota,
-  };
-});
-
 vi.mock('@/stores', () => ({
-  useNotificationStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      showNotification: mocks.showNotification,
-    }),
   useQuotaStore: (selector: (state: unknown) => unknown) => selector(mocks.quotaStoreState),
 }));
 
@@ -93,15 +74,19 @@ const findButtonByText = (renderer: ReactTestRenderer, text: string) => {
   return button;
 };
 
-const renderSection = (quotaOverride?: CodexQuotaState | null) => {
+const renderSection = (
+  quotaOverride?: CodexQuotaState | null,
+  fileOverride: AuthFileItem = file
+) => {
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
       <AuthFileQuotaSection
-        file={file}
+        file={fileOverride}
         quotaType="codex"
         disableControls={false}
         quotaOverride={quotaOverride}
+        onRefreshQuota={mocks.refreshQuota}
       />
     );
   });
@@ -110,10 +95,8 @@ const renderSection = (quotaOverride?: CodexQuotaState | null) => {
 
 describe('AuthFileQuotaSection Codex quota scoping', () => {
   beforeEach(() => {
-    mocks.fetchCodexQuota.mockReset();
-    mocks.showNotification.mockReset();
+    mocks.refreshQuota.mockReset();
     mocks.quotaStoreState.codexQuota = {};
-    (mocks.quotaStoreState.setCodexQuota as ReturnType<typeof vi.fn>).mockClear();
   });
 
   it('does not fall back to stored Codex quota when override explicitly clears display quota', () => {
@@ -164,47 +147,43 @@ describe('AuthFileQuotaSection Codex quota scoping', () => {
     expect(text).not.toContain('codex_quota.plan_pro');
   });
 
-  it('keeps previous Codex quota data when inline refresh fails', async () => {
-    mocks.fetchCodexQuota.mockRejectedValue(new Error('refresh failed'));
-    mocks.quotaStoreState.codexQuota = {
-      [matchingQuota.authFileKey as string]: {
-        ...matchingQuota,
-        windows: [
-          {
-            id: 'spark-five-hour-0',
-            label: 'Spark 5-hour limit',
-            usedPercent: 30,
-            resetLabel: '07/01 01:00',
-            limitWindowSeconds: 18_000,
-          },
-        ],
-      },
-    };
-    const renderer = renderSection(null);
+  it('shows an explicit refresh button when quota is already loaded', () => {
+    const renderer = renderSection(matchingQuota);
+
+    expect(getText(renderer.root)).toContain('codex_quota.plan_pro');
+    expect(findButtonByText(renderer, 'auth_files.quota_refresh_single')).toBeDefined();
+  });
+
+  it('keeps the visible refresh label in the accessible name while retaining the hint title', () => {
+    const renderer = renderSection(matchingQuota);
+    const button = findButtonByText(renderer, 'auth_files.quota_refresh_single');
+
+    expect(button.props.title).toBe('auth_files.quota_refresh_hint');
+    expect(button.props['aria-label']).toBe('auth_files.quota_refresh_single');
+  });
+
+  it('delegates refresh for the current credential', async () => {
+    const renderer = renderSection(matchingQuota);
 
     await act(async () => {
-      findButtonByText(renderer, 'codex_quota.idle').props.onClick();
-      await Promise.resolve();
+      findButtonByText(renderer, 'auth_files.quota_refresh_single').props.onClick();
     });
 
-    expect(mocks.quotaStoreState.codexQuota).toMatchObject({
-      [matchingQuota.authFileKey as string]: {
-        status: 'error',
-        error: 'refresh failed',
-        windows: [
-          {
-            id: 'spark-five-hour-0',
-            usedPercent: 30,
-            limitWindowSeconds: 18_000,
-          },
-        ],
-        rateLimitResetCreditsAvailableCount: 2,
-      },
-    });
-    expect(
-      (mocks.quotaStoreState.codexQuota as Record<string, CodexQuotaState>)[
-        matchingQuota.authFileKey as string
-      ].failedAtMs
-    ).toEqual(expect.any(Number));
+    expect(mocks.refreshQuota).toHaveBeenCalledWith(file);
+  });
+
+  it('disables the refresh button while quota is loading', () => {
+    const renderer = renderSection({ ...matchingQuota, status: 'loading' });
+
+    expect(findButtonByText(renderer, 'auth_files.quota_refresh_single').props.disabled).toBe(true);
+  });
+
+  it.each([
+    ['status disabled', { status: 'disabled' }],
+    ['state inactive', { state: 'inactive' }],
+  ])('disables the refresh button for normalized %s auth files', (_label, disabledState) => {
+    const renderer = renderSection(matchingQuota, { ...file, ...disabledState });
+
+    expect(findButtonByText(renderer, 'auth_files.quota_refresh_single').props.disabled).toBe(true);
   });
 });

@@ -25,14 +25,9 @@ import { Select } from '@/components/ui/Select';
 import { IconFilterAll, IconSearch } from '@/components/ui/icons';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
-import {
-  CODEX_CONFIG,
-  buildObservedCodexQuotaState,
-  getQuotaStoreKey,
-  resolveQuotaDisplayState,
-} from '@/components/quota';
+import { buildObservedCodexQuotaState, resolveQuotaDisplayState } from '@/components/quota';
 import { copyToClipboard } from '@/utils/clipboard';
-import { getStatusFromError, resolveAuthProvider } from '@/utils/quota';
+import { resolveAuthProvider } from '@/utils/quota';
 import {
   MAX_CARD_PAGE_SIZE,
   MIN_CARD_PAGE_SIZE,
@@ -73,6 +68,7 @@ import {
   isUsageHeaderQuotaSnapshotExpired,
 } from '@/utils/usageHeaderSnapshots';
 import { useAuthFilesData } from '@/features/authFiles/hooks/useAuthFilesData';
+import { useAuthFileQuotaRefresh } from '@/features/authFiles/hooks/useAuthFileQuotaRefresh';
 import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModels';
 import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth';
 import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
@@ -198,7 +194,6 @@ export function AuthFilesPage() {
   const managementKey = useAuthStore((state) => state.managementKey);
   const resolvedTheme: ResolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const codexQuota = useQuotaStore((state) => state.codexQuota);
-  const setCodexQuota = useQuotaStore((state) => state.setCodexQuota);
   const featureAvailability = usePanelFeatureAvailability();
   const managerServiceBase = featureAvailability.managerServiceBase;
   const pageTransitionLayer = usePageTransitionLayer();
@@ -246,7 +241,6 @@ export function AuthFilesPage() {
     items: new Map(),
   });
   const pendingRecoveredCodexQuotaRefreshRef = useRef<Set<string>>(new Set());
-  const autoRefreshingCodexQuotaRef = useRef<Set<string>>(new Set());
   const expiredHeaderCodexQuotaRefreshRef = useRef<Set<string>>(new Set());
   const skipNextRecoveredCooldownRefreshRef = useRef(false);
   // Generation token for in-flight cooldown fetches. Every fetch and every
@@ -293,6 +287,8 @@ export function AuthFilesPage() {
     batchPatchFields,
     batchDelete,
   } = useAuthFilesData();
+  const { refreshQuotaForFile, refreshQuotaForFiles, refreshingQuotaFiles } =
+    useAuthFileQuotaRefresh();
 
   const statusBarCache = useAuthFilesStatusBarCache(files);
   const uniqueAuthFileKeyByFallbackCooldownKey = useMemo(() => {
@@ -612,17 +608,6 @@ export function AuthFilesPage() {
     [savePastedAuthJson]
   );
 
-  const handleHeaderRefresh = useCallback(async () => {
-    await Promise.all([
-      loadFiles({ force: true }),
-      loadExcluded(),
-      loadModelAlias(),
-      loadCodexInspectionSnapshots(),
-    ]);
-  }, [loadFiles, loadExcluded, loadModelAlias, loadCodexInspectionSnapshots]);
-
-  useHeaderRefresh(handleHeaderRefresh);
-
   useEffect(() => {
     if (!isCurrentLayer) return;
     loadFiles();
@@ -696,48 +681,6 @@ export function AuthFilesPage() {
     }
   }, [managementKey, managerServiceBase]);
 
-  const refreshRecoveredCodexQuotaForFile = useCallback(
-    async (file: AuthFileItem) => {
-      if (resolveAuthProvider(file) !== 'codex') return false;
-      if (isRuntimeOnlyAuthFile(file) || file.disabled) return false;
-
-      const authFileKey = getAuthFileCodexInspectionKeyForFile(file);
-      if (autoRefreshingCodexQuotaRef.current.has(authFileKey)) return false;
-      autoRefreshingCodexQuotaRef.current.add(authFileKey);
-
-      const storeKey = getQuotaStoreKey(CODEX_CONFIG, file);
-      const previousQuota =
-        (codexQuota[storeKey] as CodexQuotaState | undefined) ??
-        (codexQuota[file.name] as CodexQuotaState | undefined);
-      setCodexQuota((prev) => ({
-        ...prev,
-        [storeKey]: CODEX_CONFIG.buildLoadingState(file),
-      }));
-
-      try {
-        const data = await CODEX_CONFIG.fetchQuota(file, t);
-        setCodexQuota((prev) => ({
-          ...prev,
-          [storeKey]: CODEX_CONFIG.buildSuccessState(data, file),
-        }));
-        return true;
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : t('common.unknown_error');
-        const status = getStatusFromError(err);
-        setCodexQuota((prev) => ({
-          ...prev,
-          [storeKey]: CODEX_CONFIG.buildFailureState
-            ? CODEX_CONFIG.buildFailureState(message, status, file, previousQuota, Date.now())
-            : CODEX_CONFIG.buildErrorState(message, status, file),
-        }));
-        return false;
-      } finally {
-        autoRefreshingCodexQuotaRef.current.delete(authFileKey);
-      }
-    },
-    [codexQuota, setCodexQuota, t]
-  );
-
   const refreshPendingRecoveredCodexQuotas = useCallback(() => {
     if (pendingRecoveredCodexQuotaRefreshRef.current.size === 0) return;
 
@@ -755,9 +698,9 @@ export function AuthFilesPage() {
       }
       if (hasExactPending) pendingRecoveredCodexQuotaRefreshRef.current.delete(authFileKey);
       if (hasFallbackPending) pendingRecoveredCodexQuotaRefreshRef.current.delete(fallbackKey);
-      void refreshRecoveredCodexQuotaForFile(file);
+      void refreshQuotaForFile(file, { notify: false });
     }
-  }, [files, refreshRecoveredCodexQuotaForFile, uniqueAuthFileKeyByFallbackCooldownKey]);
+  }, [files, refreshQuotaForFile, uniqueAuthFileKeyByFallbackCooldownKey]);
 
   // Synchronously invalidate in-flight cooldown requests when the context
   // (managerServiceBase or managementKey) changes, regardless of direction
@@ -912,7 +855,7 @@ export function AuthFilesPage() {
       const marker = `${authFileKey}:${headerSnapshot?.event_hash ?? ''}:${headerAtMs}`;
       if (expiredHeaderCodexQuotaRefreshRef.current.has(marker)) continue;
       expiredHeaderCodexQuotaRefreshRef.current.add(marker);
-      void refreshRecoveredCodexQuotaForFile(file);
+      void refreshQuotaForFile(file, { notify: false });
     }
   }, [
     files,
@@ -921,7 +864,7 @@ export function AuthFilesPage() {
     headerSnapshotLookup,
     isCurrentLayer,
     managerServiceBase,
-    refreshRecoveredCodexQuotaForFile,
+    refreshQuotaForFile,
   ]);
 
   const codexStatusSourcesByAuthFileKey = useMemo(() => {
@@ -1184,6 +1127,26 @@ export function AuthFilesPage() {
   const currentPage = Math.min(page, totalPages);
   const start = (currentPage - 1) * pageSize;
   const pageItems = useMemo(() => sorted.slice(start, start + pageSize), [sorted, start, pageSize]);
+  const handleHeaderRefresh = useCallback(async () => {
+    const quotaTargets = pageItems;
+    await Promise.all([
+      loadFiles({ force: true }),
+      loadExcluded(),
+      loadModelAlias(),
+      loadCodexInspectionSnapshots(),
+      refreshQuotaForFiles(quotaTargets),
+    ]);
+  }, [
+    loadFiles,
+    loadExcluded,
+    loadModelAlias,
+    loadCodexInspectionSnapshots,
+    pageItems,
+    refreshQuotaForFiles,
+  ]);
+
+  useHeaderRefresh(handleHeaderRefresh);
+
   const codexStatusByPageAuthFileKey = useMemo(() => {
     const statusMap = new Map<string, ReturnType<typeof getAuthFileCodexStatus>>();
     pageItems.forEach((file) => {
@@ -1513,7 +1476,8 @@ export function AuthFilesPage() {
                   variant="secondary"
                   size="sm"
                   onClick={handleHeaderRefresh}
-                  disabled={loading}
+                  disabled={loading || refreshingQuotaFiles}
+                  loading={loading || refreshingQuotaFiles}
                 >
                   {t('common.refresh')}
                 </Button>
@@ -1751,6 +1715,7 @@ export function AuthFilesPage() {
                       antigravitySubscription={antigravitySubscriptions[file.name]}
                       onRefreshAntigravitySubscription={refreshSubscription}
                       quotaCooldown={getQuotaCooldownForFile(file)}
+                      onRefreshQuota={refreshQuotaForFile}
                       onShowModels={showModels}
                       onReauth={(targetFile) =>
                         setCodexReauthTarget(createCodexReauthTargetFromAuthFile(targetFile))
