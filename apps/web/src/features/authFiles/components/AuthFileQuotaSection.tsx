@@ -12,6 +12,7 @@ import {
 import { IconRefreshCw } from '@/components/ui/icons';
 import { useQuotaStore } from '@/stores';
 import type { AuthFileItem } from '@/types';
+import { isDisabledAuthFile } from '@/utils/quota';
 import { resolveQuotaErrorMessage, type QuotaProviderType } from '@/features/authFiles/constants';
 import { QuotaProgressBar } from '@/features/authFiles/components/QuotaProgressBar';
 import styles from '@/features/authFiles/AuthFilesPage.module.scss';
@@ -59,7 +60,7 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
 
   const displayQuota = quotaOverride === undefined ? quota : (quotaOverride ?? undefined);
   const quotaStatus = displayQuota?.status ?? 'idle';
-  const canRefreshQuota = !disableControls && !file.disabled;
+  const canRefreshQuota = !disableControls && !isDisabledAuthFile(file);
   const quotaErrorMessage = resolveQuotaErrorMessage(
     t,
     displayQuota?.errorStatus,
@@ -75,7 +76,7 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
           onClick={() => void onRefreshQuota(file)}
           disabled={!canRefreshQuota || quotaStatus === 'loading'}
           title={t('auth_files.quota_refresh_hint')}
-          aria-label={t('auth_files.quota_refresh_hint')}
+          aria-label={t('auth_files.quota_refresh_single')}
         >
           <IconRefreshCw size={13} aria-hidden="true" />
           {t('auth_files.quota_refresh_single')}

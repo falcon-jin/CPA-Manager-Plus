@@ -74,12 +74,15 @@ const findButtonByText = (renderer: ReactTestRenderer, text: string) => {
   return button;
 };
 
-const renderSection = (quotaOverride?: CodexQuotaState | null) => {
+const renderSection = (
+  quotaOverride?: CodexQuotaState | null,
+  fileOverride: AuthFileItem = file
+) => {
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
       <AuthFileQuotaSection
-        file={file}
+        file={fileOverride}
         quotaType="codex"
         disableControls={false}
         quotaOverride={quotaOverride}
@@ -151,6 +154,14 @@ describe('AuthFileQuotaSection Codex quota scoping', () => {
     expect(findButtonByText(renderer, 'auth_files.quota_refresh_single')).toBeDefined();
   });
 
+  it('keeps the visible refresh label in the accessible name while retaining the hint title', () => {
+    const renderer = renderSection(matchingQuota);
+    const button = findButtonByText(renderer, 'auth_files.quota_refresh_single');
+
+    expect(button.props.title).toBe('auth_files.quota_refresh_hint');
+    expect(button.props['aria-label']).toBe('auth_files.quota_refresh_single');
+  });
+
   it('delegates refresh for the current credential', async () => {
     const renderer = renderSection(matchingQuota);
 
@@ -163,6 +174,15 @@ describe('AuthFileQuotaSection Codex quota scoping', () => {
 
   it('disables the refresh button while quota is loading', () => {
     const renderer = renderSection({ ...matchingQuota, status: 'loading' });
+
+    expect(findButtonByText(renderer, 'auth_files.quota_refresh_single').props.disabled).toBe(true);
+  });
+
+  it.each([
+    ['status disabled', { status: 'disabled' }],
+    ['state inactive', { state: 'inactive' }],
+  ])('disables the refresh button for normalized %s auth files', (_label, disabledState) => {
+    const renderer = renderSection(matchingQuota, { ...file, ...disabledState });
 
     expect(findButtonByText(renderer, 'auth_files.quota_refresh_single').props.disabled).toBe(true);
   });
