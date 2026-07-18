@@ -11,6 +11,7 @@ import (
 
 	collectorpkg "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/collector"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/credentialpolicy"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
@@ -79,6 +80,89 @@ func TestAccountActionCandidateFromEventUsesHeaderErrorCode(t *testing.T) {
 	}
 	if evidence["headerErrorCode"] != "token_invalidated" || evidence["headerTraceId"] != "req-header-auth" {
 		t.Fatalf("evidence = %#v", evidence)
+	}
+}
+
+func TestAccountActionCandidateFromEventClassifiesXAIAuthenticationFailures(t *testing.T) {
+	shouldNotRetry := false
+	tests := []struct {
+		name            string
+		statusCode      int
+		body            string
+		metadata        *usage.ResponseHeaderMetadata
+		wantAction      string
+		wantReasonCode  string
+		wantAutoDisable bool
+	}{
+		{
+			name:            "expired credentials",
+			statusCode:      http.StatusUnauthorized,
+			body:            `{"error":"Invalid or expired credentials (auth_kind=bearer, x_xai_token_auth=xai-grok-cli, upstream=PermissionDenied, reason=no auth context)"}`,
+			wantAction:      model.AccountActionTypeReauth,
+			wantReasonCode:  credentialpolicy.ReasonInvalidCredentials,
+			wantAutoDisable: true,
+		},
+		{
+			name:       "chat endpoint permission denied",
+			statusCode: http.StatusForbidden,
+			body:       `{"code":"permission-denied","error":"Access to the chat endpoint is denied. Please ensure you’re using the correct credentials. If you believe this is a mistake, update the permissions or contact support."}`,
+			metadata: &usage.ResponseHeaderMetadata{Errors: &usage.HeaderErrorMetadata{
+				ShouldRetry: &shouldNotRetry,
+			}},
+			wantAction:      model.AccountActionTypeReview,
+			wantReasonCode:  credentialpolicy.ReasonCredentialPermission,
+			wantAutoDisable: true,
+		},
+		{
+			name:            "regional permission denied",
+			statusCode:      http.StatusForbidden,
+			body:            `{"code":"permission-denied","error":"The model is not available in your region."}`,
+			wantAction:      model.AccountActionTypeReview,
+			wantReasonCode:  credentialpolicy.ReasonAuthenticationReview,
+			wantAutoDisable: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := usage.Event{
+				Failed:           true,
+				FailStatusCode:   tt.statusCode,
+				EventHash:        "evt-xai-auth",
+				Provider:         "xai",
+				AuthFileSnapshot: "xai-auth.json",
+				AuthIndex:        "xai-1",
+				FailBody:         tt.body,
+				FailSummary:      tt.body,
+				ResponseMetadata: tt.metadata,
+			}
+			candidate, ok := accountActionCandidateFromEvent(event, time.Now())
+			if !ok {
+				t.Fatal("candidate not detected")
+			}
+			if candidate.ActionType != tt.wantAction || candidate.ReasonCode != tt.wantReasonCode || candidate.AutoDisableEligible != tt.wantAutoDisable {
+				t.Fatalf("candidate = %#v", candidate)
+			}
+		})
+	}
+}
+
+func TestAccountActionCandidateFromEventNormalizesXAIProviderAlias(t *testing.T) {
+	event := usage.Event{
+		Failed:           true,
+		FailStatusCode:   http.StatusUnauthorized,
+		EventHash:        "evt-grok-auth",
+		Provider:         "grok",
+		AuthFileSnapshot: "xai-auth.json",
+		AuthIndex:        "xai-1",
+		FailSummary:      `{"error":"Invalid or expired credentials (reason=no auth context)"}`,
+	}
+	candidate, ok := accountActionCandidateFromEvent(event, time.Now())
+	if !ok {
+		t.Fatal("candidate not detected")
+	}
+	if candidate.Provider != "xai" {
+		t.Fatalf("provider = %q, want xai", candidate.Provider)
 	}
 }
 
@@ -181,15 +265,16 @@ func TestAccountActionCandidateWorkerAutoDisablesMatchingIdentity(t *testing.T) 
 
 	worker := NewAccountActionCandidateWorker(st, true)
 	worker.handleCandidate(context.Background(), accountActionCandidate{
-		BaseURL:        server.URL,
-		ManagementKey:  "mgmt",
-		FileName:       "codex-auth.json",
-		AuthIndex:      "7",
-		DisplayAccount: "user@example.com",
-		AccountID:      "acct-123",
-		Provider:       "codex",
-		ActionType:     model.AccountActionTypeDelete,
-		Reason:         "token revoked",
+		BaseURL:             server.URL,
+		ManagementKey:       "mgmt",
+		FileName:            "codex-auth.json",
+		AuthIndex:           "7",
+		DisplayAccount:      "user@example.com",
+		AccountID:           "acct-123",
+		Provider:            "codex",
+		ActionType:          model.AccountActionTypeDelete,
+		AutoDisableEligible: true,
+		Reason:              "token revoked",
 	})
 
 	if !patched {
@@ -199,8 +284,63 @@ func TestAccountActionCandidateWorkerAutoDisablesMatchingIdentity(t *testing.T) 
 	if err != nil {
 		t.Fatalf("list candidates: %v", err)
 	}
-	if len(items) != 1 || items[0].Status != model.AccountActionStatusPending || items[0].LastError != "" {
+	if len(items) != 1 || items[0].Status != model.AccountActionStatusPending || items[0].LastError != "" || items[0].AutoDisabledAtMS == 0 {
 		t.Fatalf("items = %#v", items)
+	}
+}
+
+func TestAccountActionCandidateWorkerRollsBackWhenAutoDisableMarkerFails(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/usage.sqlite")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	patchStates := make([]bool, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v0/management/auth-files":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"name":       "codex-auth.json",
+				"auth_index": "7",
+				"provider":   "codex",
+				"account":    "user@example.com",
+				"account_id": "acct-123",
+				"disabled":   false,
+			}})
+		case "PATCH /v0/management/auth-files/status":
+			var payload struct {
+				Disabled bool `json:"disabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			patchStates = append(patchStates, payload.Disabled)
+			if payload.Disabled {
+				_ = st.Close()
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	NewAccountActionCandidateWorker(st, true).handleCandidate(context.Background(), accountActionCandidate{
+		BaseURL:             server.URL,
+		ManagementKey:       "mgmt",
+		FileName:            "codex-auth.json",
+		AuthIndex:           "7",
+		DisplayAccount:      "user@example.com",
+		AccountID:           "acct-123",
+		Provider:            "codex",
+		ActionType:          model.AccountActionTypeDelete,
+		AutoDisableEligible: true,
+		Reason:              "token revoked",
+	})
+
+	if len(patchStates) != 2 || !patchStates[0] || patchStates[1] {
+		t.Fatalf("patch states = %#v, want [true false]", patchStates)
 	}
 }
 
@@ -233,15 +373,16 @@ func TestAccountActionCandidateWorkerAutoDisableRejectsIdentityMismatch(t *testi
 
 	worker := NewAccountActionCandidateWorker(st, true)
 	worker.handleCandidate(context.Background(), accountActionCandidate{
-		BaseURL:        server.URL,
-		ManagementKey:  "mgmt",
-		FileName:       "codex-auth.json",
-		AuthIndex:      "7",
-		DisplayAccount: "user@example.com",
-		AccountID:      "acct-123",
-		Provider:       "codex",
-		ActionType:     model.AccountActionTypeDelete,
-		Reason:         "token revoked",
+		BaseURL:             server.URL,
+		ManagementKey:       "mgmt",
+		FileName:            "codex-auth.json",
+		AuthIndex:           "7",
+		DisplayAccount:      "user@example.com",
+		AccountID:           "acct-123",
+		Provider:            "codex",
+		ActionType:          model.AccountActionTypeDelete,
+		AutoDisableEligible: true,
+		Reason:              "token revoked",
 	})
 
 	if patched {
@@ -279,15 +420,16 @@ func TestAccountActionCandidateWorkerAutoDisableRecordsVerificationTransportErro
 
 	worker := NewAccountActionCandidateWorker(st, true)
 	worker.handleCandidate(context.Background(), accountActionCandidate{
-		BaseURL:        server.URL,
-		ManagementKey:  "mgmt",
-		FileName:       "codex-auth.json",
-		AuthIndex:      "7",
-		DisplayAccount: "user@example.com",
-		AccountID:      "acct-123",
-		Provider:       "codex",
-		ActionType:     model.AccountActionTypeDelete,
-		Reason:         "token revoked",
+		BaseURL:             server.URL,
+		ManagementKey:       "mgmt",
+		FileName:            "codex-auth.json",
+		AuthIndex:           "7",
+		DisplayAccount:      "user@example.com",
+		AccountID:           "acct-123",
+		Provider:            "codex",
+		ActionType:          model.AccountActionTypeDelete,
+		AutoDisableEligible: true,
+		Reason:              "token revoked",
 	})
 
 	if patched {
@@ -332,15 +474,16 @@ func TestAccountActionCandidateWorkerAutoDisablesReauth(t *testing.T) {
 
 	worker := NewAccountActionCandidateWorker(st, true)
 	worker.handleCandidate(context.Background(), accountActionCandidate{
-		BaseURL:        server.URL,
-		ManagementKey:  "mgmt",
-		FileName:       "codex-auth.json",
-		AuthIndex:      "7",
-		DisplayAccount: "user@example.com",
-		AccountID:      "acct-123",
-		Provider:       "codex",
-		ActionType:     model.AccountActionTypeReauth,
-		Reason:         "reauth required",
+		BaseURL:             server.URL,
+		ManagementKey:       "mgmt",
+		FileName:            "codex-auth.json",
+		AuthIndex:           "7",
+		DisplayAccount:      "user@example.com",
+		AccountID:           "acct-123",
+		Provider:            "codex",
+		ActionType:          model.AccountActionTypeReauth,
+		AutoDisableEligible: true,
+		Reason:              "reauth required",
 	})
 
 	if !patched {
@@ -351,6 +494,69 @@ func TestAccountActionCandidateWorkerAutoDisablesReauth(t *testing.T) {
 		t.Fatalf("list candidates: %v", err)
 	}
 	if len(items) != 1 || items[0].ActionType != model.AccountActionTypeReauth || items[0].LastError != "" {
+		t.Fatalf("items = %#v", items)
+	}
+}
+
+func TestAccountActionCandidateWorkerAutoDisablesEligibleXAIReviewWithProviderAlias(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/usage.sqlite")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	var patched bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v0/management/auth-files":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"name":       "xai-auth.json",
+				"auth_index": "xai-1",
+				"provider":   "xai",
+				"account":    "xai-user",
+				"disabled":   false,
+			}})
+		case "PATCH /v0/management/auth-files/status":
+			patched = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	shouldNotRetry := false
+	event := usage.Event{
+		Failed:           true,
+		FailStatusCode:   http.StatusForbidden,
+		EventHash:        "evt-grok-permission",
+		Provider:         "grok",
+		AuthFileSnapshot: "xai-auth.json",
+		AuthIndex:        "xai-1",
+		AccountSnapshot:  "xai-user",
+		FailBody:         `{"code":"permission-denied","error":"Access to the chat endpoint is denied. Please ensure you're using the correct credentials and update the permissions."}`,
+		FailSummary:      `{"code":"permission-denied","error":"Access to the chat endpoint is denied. Please ensure you're using the correct credentials and update the permissions."}`,
+		ResponseMetadata: &usage.ResponseHeaderMetadata{Errors: &usage.HeaderErrorMetadata{
+			ShouldRetry: &shouldNotRetry,
+		}},
+	}
+	candidate, ok := accountActionCandidateFromEvent(event, time.Now())
+	if !ok {
+		t.Fatal("candidate not detected")
+	}
+	candidate.BaseURL = server.URL
+	candidate.ManagementKey = "mgmt"
+
+	NewAccountActionCandidateWorker(st, true).handleCandidate(context.Background(), candidate)
+
+	if !patched {
+		t.Fatal("expected eligible xAI review to auto-disable")
+	}
+	items, err := st.ListAccountActionCandidates(context.Background(), model.AccountActionStatusPending, 10)
+	if err != nil {
+		t.Fatalf("list candidates: %v", err)
+	}
+	if len(items) != 1 || items[0].Provider != "xai" || items[0].ActionType != model.AccountActionTypeReview || items[0].AutoDisabledAtMS == 0 {
 		t.Fatalf("items = %#v", items)
 	}
 }
@@ -385,15 +591,16 @@ func TestAccountActionCandidateWorkerAutoDisableSkipsAlreadyDisabled(t *testing.
 
 	worker := NewAccountActionCandidateWorker(st, true)
 	worker.handleCandidate(context.Background(), accountActionCandidate{
-		BaseURL:        server.URL,
-		ManagementKey:  "mgmt",
-		FileName:       "codex-auth.json",
-		AuthIndex:      "7",
-		DisplayAccount: "user@example.com",
-		AccountID:      "acct-123",
-		Provider:       "codex",
-		ActionType:     model.AccountActionTypeDelete,
-		Reason:         "token revoked",
+		BaseURL:             server.URL,
+		ManagementKey:       "mgmt",
+		FileName:            "codex-auth.json",
+		AuthIndex:           "7",
+		DisplayAccount:      "user@example.com",
+		AccountID:           "acct-123",
+		Provider:            "codex",
+		ActionType:          model.AccountActionTypeDelete,
+		AutoDisableEligible: true,
+		Reason:              "token revoked",
 	})
 
 	if patched {
@@ -417,13 +624,14 @@ func TestAccountActionCandidateWorkerAutoDisableRecordsMissingRuntimeConfig(t *t
 
 	worker := NewAccountActionCandidateWorker(st, true)
 	worker.handleCandidate(context.Background(), accountActionCandidate{
-		FileName:       "codex-auth.json",
-		AuthIndex:      "7",
-		DisplayAccount: "user@example.com",
-		AccountID:      "acct-123",
-		Provider:       "codex",
-		ActionType:     model.AccountActionTypeDelete,
-		Reason:         "token revoked",
+		FileName:            "codex-auth.json",
+		AuthIndex:           "7",
+		DisplayAccount:      "user@example.com",
+		AccountID:           "acct-123",
+		Provider:            "codex",
+		ActionType:          model.AccountActionTypeDelete,
+		AutoDisableEligible: true,
+		Reason:              "token revoked",
 	})
 
 	items, err := st.ListAccountActionCandidates(context.Background(), model.AccountActionStatusPending, 10)

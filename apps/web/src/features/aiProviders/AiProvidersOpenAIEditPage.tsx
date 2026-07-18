@@ -586,6 +586,11 @@ export function AiProvidersOpenAIEditPage() {
                 removeButtonClassName={styles.modelRowRemoveButton}
                 removeButtonTitle={t('common.delete')}
                 removeButtonAriaLabel={t('common.delete')}
+                showForceMapping
+                showModalities
+                forceMappingLabel={t('ai_providers.force_mapping_label')}
+                inputModalitiesPlaceholder={t('ai_providers.input_modalities_placeholder')}
+                outputModalitiesPlaceholder={t('ai_providers.output_modalities_placeholder')}
               />
 
               {/* 测试区域 */}

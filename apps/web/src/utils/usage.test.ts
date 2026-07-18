@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildCandidateUsageSourceIds,
+  calculateCacheHitRate,
+  calculateCacheHitRateFromTotals,
   calculateCost,
   collectUsageDetails,
   collectUsageDetailsWithEndpoint,
@@ -9,9 +11,12 @@ import {
   extractTotalTokens,
   formatCompactNumber,
   getServiceTierMultiplier,
+  inferCacheInputMode,
+  normalizeCacheAccounting,
   normalizeUsageSourceId,
 } from './usage';
 import { maskSensitiveText } from './format';
+import cacheInputAccountingFixtures from './cacheInputAccounting.fixtures.json';
 
 describe('formatCompactNumber', () => {
   it('keeps large values compact as data grows beyond millions', () => {
@@ -291,6 +296,40 @@ describe('usage token helpers', () => {
     expect(compatibleCachedTokens(0, 8, 3, 0)).toBe(5);
   });
 
+  it('normalizes cache hit rates across legacy, Anthropic, and GPT-5.6 usage', () => {
+    expect(
+      calculateCacheHitRate({
+        modelName: 'gpt-5.4',
+        inputTokens: 1_000,
+        cachedTokens: 400,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+      })
+    ).toBeCloseTo(0.4, 6);
+    expect(
+      calculateCacheHitRate({
+        modelName: 'claude-sonnet-4',
+        inputTokens: 450,
+        cachedTokens: 0,
+        cacheReadTokens: 300,
+        cacheCreationTokens: 50,
+      })
+    ).toBeCloseTo(300 / 450, 6);
+    expect(
+      calculateCacheHitRate({
+        modelName: 'openai/gpt-5.6-sol',
+        inputTokens: 152_600,
+        cachedTokens: 0,
+        cacheReadTokens: 151_000,
+        cacheCreationTokens: 1_000,
+      })
+    ).toBeCloseTo(151_000 / 152_600, 6);
+  });
+
+  it('clamps aggregated malformed cache ratios to 100%', () => {
+    expect(calculateCacheHitRateFromTotals(1_500, 1_000)).toBe(1);
+  });
+
   it('uses fine-grained cache fields when total tokens are missing', () => {
     expect(
       extractTotalTokens({
@@ -321,6 +360,194 @@ describe('usage token helpers', () => {
   });
 });
 
+describe('cache input accounting semantics', () => {
+  it.each(cacheInputAccountingFixtures)('matches shared fixture: $name', (fixture) => {
+    const accounting = normalizeCacheAccounting({
+      context: fixture.context,
+      inputTokens: fixture.tokens.input,
+      cachedTokens: fixture.tokens.cached,
+      cacheTokens: fixture.tokens.cache,
+      cacheReadTokens: fixture.tokens.read,
+      cacheCreationTokens: fixture.tokens.creation,
+    });
+
+    expect(accounting).toMatchObject({
+      mode: fixture.expected.mode,
+      uncachedInputTokens: fixture.expected.uncached,
+      totalInputTokens: fixture.expected.totalInput,
+      cacheCreationTokens: fixture.expected.cacheCreation,
+    });
+    expect(accounting.legacyRead + accounting.cacheReadTokens).toBe(
+      fixture.expected.cacheRead
+    );
+  });
+
+  it.each([
+    {
+      name: 'OpenAICompat executor beats Claude alias',
+      context: { executorType: 'OpenAICompatExecutor', resolvedModel: 'claude-sonnet-4' },
+      mode: 'included_in_input',
+    },
+    {
+      name: 'Claude executor beats Grok alias',
+      context: { executorType: 'ClaudeExecutor', resolvedModel: 'grok-4' },
+      mode: 'separate_from_input',
+    },
+    {
+      name: 'XAI executor beats Claude alias',
+      context: { executorType: 'XAIWebsocketsExecutor', displayModel: 'claude-alias' },
+      mode: 'included_in_input',
+    },
+    {
+      name: 'provider snapshot beats model',
+      context: { providerSnapshot: 'moonshot', resolvedModel: 'claude-sonnet' },
+      mode: 'included_in_input',
+    },
+    {
+      name: 'resolved model beats requested model',
+      context: { resolvedModel: 'claude-sonnet', requestedModel: 'gpt-5' },
+      mode: 'separate_from_input',
+    },
+  ])('$name', ({ context, mode }) => {
+    expect(inferCacheInputMode(context, 20, 10)).toBe(mode);
+  });
+
+  it('keeps a valid explicit mode above executor classification', () => {
+    expect(
+      inferCacheInputMode(
+        { explicitMode: 'separate_from_input', executorType: 'XAIExecutor' },
+        20,
+        0
+      )
+    ).toBe('separate_from_input');
+  });
+
+  it('normalizes included and separate totals with the mirrored Go formulas', () => {
+    expect(
+      normalizeCacheAccounting({
+        context: { executorType: 'XAIExecutor' },
+        inputTokens: 100,
+        cachedTokens: 0,
+        cacheTokens: 0,
+        cacheReadTokens: 20,
+        cacheCreationTokens: 10,
+      })
+    ).toMatchObject({
+      mode: 'included_in_input',
+      uncachedInputTokens: 70,
+      totalInputTokens: 100,
+    });
+    expect(
+      normalizeCacheAccounting({
+        context: { executorType: 'ClaudeExecutor' },
+        inputTokens: 100,
+        cachedTokens: 0,
+        cacheTokens: 0,
+        cacheReadTokens: 20,
+        cacheCreationTokens: 10,
+      })
+    ).toMatchObject({
+      mode: 'separate_from_input',
+      uncachedInputTokens: 100,
+      totalInputTokens: 130,
+    });
+  });
+
+  it.each([
+    {
+      name: 'xAI included input',
+      model: 'grok-4',
+      detail: { executor_type: 'XAIExecutor' },
+      totalInput: 100,
+    },
+    {
+      name: 'Kimi provider included input',
+      model: 'claude-alias',
+      detail: { provider: 'moonshot' },
+      totalInput: 100,
+    },
+    {
+      name: 'Claude executor separate input',
+      model: 'grok-alias',
+      detail: { executor_type: 'ClaudeExecutor' },
+      totalInput: 130,
+    },
+    {
+      name: 'nested explicit mode',
+      model: 'grok-4',
+      detail: {},
+      tokenMode: 'separate_from_input',
+      totalInput: 130,
+    },
+  ])('$name is applied by readTokens', ({ model, detail, tokenMode, totalInput }) => {
+    const usageData = {
+      apis: {
+        'POST /v1/chat/completions': {
+          models: {
+            [model]: {
+              details: [
+                {
+                  timestamp: '2026-07-15T00:00:00Z',
+                  source: 'account',
+                  auth_index: 'auth-1',
+                  ...detail,
+                  tokens: {
+                    input_tokens: 100,
+                    cache_read_tokens: 20,
+                    cache_creation_tokens: 10,
+                    cache_input_mode: tokenMode,
+                  },
+                  failed: false,
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const [normalized] = collectUsageDetails(usageData);
+
+    expect(normalized.tokens.input_tokens).toBe(totalInput);
+    expect(normalized.tokens.total_tokens).toBe(totalInput);
+  });
+
+  it('prices xAI cache without double-counting included input', () => {
+    const usageData = {
+      apis: {
+        'POST /v1/chat/completions': {
+          models: {
+            'grok-4': {
+              details: [
+                {
+                  timestamp: '2026-07-15T00:00:00Z',
+                  source: 'account',
+                  auth_index: 'auth-1',
+                  executor_type: 'XAIExecutor',
+                  tokens: { input_tokens: 100, cache_read_tokens: 40 },
+                  failed: false,
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const [detail] = collectUsageDetails(usageData);
+    const cost = calculateCost(detail, {
+      'grok-4': { prompt: 1, completion: 2, cache: 0.1, cacheRead: 0.1 },
+    });
+
+    expect(detail.tokens.input_tokens).toBe(100);
+    expect(calculateCacheHitRate({
+      inputTokens: detail.tokens.input_tokens,
+      cachedTokens: detail.tokens.cached_tokens,
+      cacheReadTokens: detail.tokens.cache_read_tokens,
+      cacheCreationTokens: detail.tokens.cache_creation_tokens,
+    })).toBeCloseTo(0.4);
+    expect(cost).toBeCloseTo(0.000064);
+  });
+});
+
 describe('sensitive text masking', () => {
   it('does not redact ordinary AI-prefixed diagnostics or swallow JSON after cookie fields', () => {
     const text = `AImproved fallback AIServer down {"cookie":"session=secret","status":"401","detail":"upstream denied","retry_after":30}`;
@@ -344,24 +571,24 @@ describe('calculateCost model price preference', () => {
   it('prefers resolved upstream model when present', () => {
     const cost = calculateCost(
       {
-        tokens: { input_tokens: 1_000_000, output_tokens: 0 },
+        tokens: { input_tokens: 100_000, output_tokens: 0 },
         __modelName: 'gpt-5.4',
         __resolvedModel: 'gpt-5.5',
       },
       prices
     );
-    expect(cost).toBeCloseTo(5);
+    expect(cost).toBeCloseTo(0.5);
   });
 
   it('falls back to requested alias when resolved is absent', () => {
     const cost = calculateCost(
       {
-        tokens: { input_tokens: 1_000_000, output_tokens: 0 },
+        tokens: { input_tokens: 100_000, output_tokens: 0 },
         __modelName: 'gpt-5.4',
       },
       prices
     );
-    expect(cost).toBeCloseTo(50);
+    expect(cost).toBeCloseTo(5);
   });
 
   it('falls back to requested alias when resolved has no price entry', () => {
@@ -376,7 +603,7 @@ describe('calculateCost model price preference', () => {
     expect(cost).toBeCloseTo(50);
   });
 
-  it('applies the tier multiplier to the requested price fallback', () => {
+  it('keeps resolved model tier behavior when using a requested price fallback', () => {
     const cost = calculateCost(
       {
         tokens: { input_tokens: 1_000_000, output_tokens: 0 },
@@ -387,16 +614,16 @@ describe('calculateCost model price preference', () => {
       prices
     );
 
-    expect(cost).toBeCloseTo(100);
+    expect(cost).toBeCloseTo(50);
   });
 
   it('charges cached input tokens only at the cache price', () => {
     const cost = calculateCost(
       {
         tokens: {
-          input_tokens: 1_000_000,
-          output_tokens: 500_000,
-          cached_tokens: 250_000,
+          input_tokens: 100_000,
+          output_tokens: 50_000,
+          cached_tokens: 25_000,
         },
         __modelName: 'gpt-5.5',
       },
@@ -404,14 +631,14 @@ describe('calculateCost model price preference', () => {
         'gpt-5.5': { prompt: 2, completion: 4, cache: 1 },
       }
     );
-    expect(cost).toBeCloseTo(3.75);
+    expect(cost).toBeCloseTo(0.375);
   });
 
   it('prices fine-grained cache buckets outside input while preserving residual cached input', () => {
     const cost = calculateCost(
       {
         tokens: {
-          input_tokens: 1_000_000,
+          input_tokens: 1_300_000,
           cached_tokens: 100_000,
           cache_read_tokens: 200_000,
           cache_creation_tokens: 100_000,
@@ -435,7 +662,7 @@ describe('calculateCost model price preference', () => {
   it('applies gpt-5.4 priority service tier multiplier', () => {
     const cost = calculateCost(
       {
-        tokens: { input_tokens: 1_000_000 },
+        tokens: { input_tokens: 100_000 },
         __modelName: 'gpt-5.4',
         service_tier: 'priority',
       },
@@ -444,13 +671,13 @@ describe('calculateCost model price preference', () => {
       }
     );
 
-    expect(cost).toBeCloseTo(5);
+    expect(cost).toBeCloseTo(0.5);
   });
 
   it('applies gpt-5.5 priority service tier multiplier', () => {
     const cost = calculateCost(
       {
-        tokens: { input_tokens: 1_000_000 },
+        tokens: { input_tokens: 100_000 },
         __modelName: 'gpt-5.5',
         serviceTier: 'priority',
       },
@@ -459,7 +686,42 @@ describe('calculateCost model price preference', () => {
       }
     );
 
-    expect(cost).toBeCloseTo(5);
+    expect(cost).toBeCloseTo(0.5);
+  });
+
+  it('uses the response service tier for billing', () => {
+    const cost = calculateCost(
+      {
+        tokens: { input_tokens: 100_000 },
+        __modelName: 'gpt-5.4',
+        request_service_tier: 'priority',
+        response_service_tier: 'default',
+      },
+      { 'gpt-5.4': { prompt: 2.5, completion: 5, cache: 1 } }
+    );
+    expect(cost).toBeCloseTo(0.25);
+  });
+
+  it('does not stack priority pricing with long-context pricing', () => {
+    const modelPrices = { 'gpt-5.5': { prompt: 2, completion: 4, cache: 1 } };
+    const tokens = { input_tokens: 1_000_000, output_tokens: 100_000 };
+    const standard = calculateCost(
+      { tokens, __modelName: 'gpt-5.5', service_tier: 'default' },
+      modelPrices
+    );
+    const priority = calculateCost(
+      { tokens, __modelName: 'gpt-5.5', service_tier: 'priority' },
+      modelPrices
+    );
+    expect(priority).toBeCloseTo(standard);
+  });
+
+  it('uses flex pricing at half the standard rate', () => {
+    const cost = calculateCost(
+      { tokens: { input_tokens: 100_000 }, __modelName: 'gpt-5.5', service_tier: 'flex' },
+      { 'gpt-5.5': { prompt: 2, completion: 4, cache: 1 } }
+    );
+    expect(cost).toBeCloseTo(0.1);
   });
 
   it('keeps default and missing service tier at standard cost', () => {
@@ -476,7 +738,7 @@ describe('calculateCost model price preference', () => {
         },
         modelPrices
       )
-    ).toBeCloseTo(2.5);
+    ).toBeCloseTo(5);
     expect(
       calculateCost(
         {
@@ -485,7 +747,155 @@ describe('calculateCost model price preference', () => {
         },
         modelPrices
       )
-    ).toBeCloseTo(2.5);
+    ).toBeCloseTo(5);
+  });
+
+  it('uses official gpt-5.6 prices when the current price book has no entry', () => {
+    const cost = calculateCost(
+      {
+        tokens: {
+          input_tokens: 200_000,
+          output_tokens: 20_000,
+          cached_tokens: 20_000,
+          cache_read_tokens: 40_000,
+          cache_creation_tokens: 20_000,
+        },
+        __modelName: 'openai/gpt-5.6-sol',
+      },
+      {}
+    );
+
+    expect(cost).toBeCloseTo(1.355);
+  });
+
+  it('prefers configured gpt-5.6 base prices over the official fallback', () => {
+    const cost = calculateCost(
+      {
+        tokens: { input_tokens: 100_000 },
+        __modelName: 'gpt-5.6-sol',
+      },
+      {
+        'gpt-5.6-sol': { prompt: 9, completion: 18, cache: 0 },
+      }
+    );
+
+    expect(cost).toBeCloseTo(0.9);
+  });
+
+  it('applies gpt-5.6 long-context multipliers above 272K', () => {
+    const cost = calculateCost(
+      {
+        tokens: {
+          input_tokens: 1_000_000,
+          output_tokens: 100_000,
+          cache_read_tokens: 200_000,
+          cache_creation_tokens: 100_000,
+        },
+        __modelName: 'gpt-5.6-sol',
+      },
+      {}
+    );
+
+    expect(cost).toBeCloseTo(12.95);
+  });
+
+  it('keeps exactly 272K of gpt-5.6 input at standard rates', () => {
+    const cost = calculateCost(
+      {
+        tokens: { input_tokens: 272_000, output_tokens: 100_000 },
+        __modelName: 'gpt-5.6-luna',
+      },
+      {}
+    );
+
+    expect(cost).toBeCloseTo(0.872);
+  });
+
+  it('uses resolved gpt-5.6 behavior with a configured alias price', () => {
+    const cost = calculateCost(
+      {
+        tokens: {
+          input_tokens: 200_000,
+          cache_read_tokens: 40_000,
+          cache_creation_tokens: 20_000,
+        },
+        __modelName: 'internal-fast',
+        __resolvedModel: 'openai/gpt-5.6-luna',
+      },
+      {
+        'internal-fast': { prompt: 2, completion: 4, cache: 0 },
+      }
+    );
+
+    expect(cost).toBeCloseTo(0.338);
+  });
+
+  it('ignores the legacy cache price when gpt-5.6 cache-read pricing is missing', () => {
+    const cost = calculateCost(
+      {
+        tokens: {
+          input_tokens: 200_000,
+          cache_read_tokens: 40_000,
+          cache_creation_tokens: 20_000,
+        },
+        __modelName: 'gpt-5.6-terra',
+      },
+      {
+        'gpt-5.6-terra': {
+          prompt: 10,
+          completion: 20,
+          cache: 10,
+          promptConfigured: true,
+          completionConfigured: true,
+        },
+      }
+    );
+
+    expect(cost).toBeCloseTo(1.69);
+  });
+
+  it('respects explicitly configured zero prices for gpt-5.6', () => {
+    const cost = calculateCost(
+      {
+        tokens: {
+          input_tokens: 250_000,
+          cache_read_tokens: 150_000,
+          cache_creation_tokens: 100_000,
+        },
+        __modelName: 'gpt-5.6-sol',
+      },
+      {
+        'gpt-5.6-sol': {
+          prompt: 5,
+          completion: 30,
+          cache: 0.5,
+          cacheRead: 0,
+          cacheCreation: 0,
+          promptConfigured: true,
+          completionConfigured: true,
+          cacheReadConfigured: true,
+          cacheCreationConfigured: true,
+        },
+      }
+    );
+
+    expect(cost).toBe(0);
+  });
+
+  it('keeps resolved non-gpt behavior when the requested alias is gpt-5.6', () => {
+    const cost = calculateCost(
+      {
+        tokens: { input_tokens: 1_000_000 },
+        __modelName: 'gpt-5.6-sol',
+        __resolvedModel: 'resolved-other',
+        service_tier: 'priority',
+      },
+      {
+        'resolved-other': { prompt: 2, completion: 4, cache: 0 },
+      }
+    );
+
+    expect(cost).toBeCloseTo(2);
   });
 
   it('does not guess priority multiplier for unknown models', () => {
@@ -507,6 +917,7 @@ describe('calculateCost model price preference', () => {
 describe('getServiceTierMultiplier', () => {
   it('matches backend priority tier rules', () => {
     expect(getServiceTierMultiplier('gpt-5.4', 'default')).toBe(1);
+    expect(getServiceTierMultiplier('openai/gpt-5.6-sol', 'priority')).toBe(2);
     expect(getServiceTierMultiplier('gpt-5.4', 'priority')).toBe(2);
     expect(getServiceTierMultiplier('gpt-5.4', 'fast')).toBe(2);
     expect(getServiceTierMultiplier('gpt-5.4-mini', 'priority')).toBe(2);

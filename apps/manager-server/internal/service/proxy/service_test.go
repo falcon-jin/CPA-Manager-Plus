@@ -1,19 +1,25 @@
 package proxy
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/managerconfig"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 )
 
 func testProxyErrorWriter(t *testing.T) func(http.ResponseWriter, int, error) {
@@ -185,6 +191,194 @@ func TestProxyManagementInvalidationPreventsInflightListFromRefillingCache(t *te
 	}
 	if got := atomic.LoadInt32(&authFilesCalls); got != 2 {
 		t.Fatalf("auth files upstream calls = %d, want 2", got)
+	}
+}
+
+func TestInspectAuthFileOwnershipMutationRestoresStatusBody(t *testing.T) {
+	body := `{"name":"auth-a.json","disabled":false}`
+	req, err := http.NewRequest(http.MethodPatch, "/v0/management/auth-files/status", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	mutation, err := inspectAuthFileOwnershipMutation(req)
+	if err != nil {
+		t.Fatalf("inspect mutation: %v", err)
+	}
+	if len(mutation.fileNames) != 1 || mutation.fileNames[0] != "auth-a.json" || mutation.clearAll {
+		t.Fatalf("mutation = %#v", mutation)
+	}
+	raw, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read restored body: %v", err)
+	}
+	if string(raw) != body {
+		t.Fatalf("restored body = %q, want %q", raw, body)
+	}
+}
+
+func TestInspectAuthFileOwnershipMutationReadsMultipartUpload(t *testing.T) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "auth-a.json")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write([]byte(`{"type":"codex"}`)); err != nil {
+		t.Fatalf("write form file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, "/v0/management/auth-files", bytes.NewReader(body.Bytes()))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	mutation, err := inspectAuthFileOwnershipMutation(req)
+	if err != nil {
+		t.Fatalf("inspect mutation: %v", err)
+	}
+	if len(mutation.fileNames) != 1 || mutation.fileNames[0] != "auth-a.json" {
+		t.Fatalf("mutation = %#v", mutation)
+	}
+	restored, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read restored request: %v", err)
+	}
+	if !bytes.Equal(restored, body.Bytes()) {
+		t.Fatal("multipart request body was not restored")
+	}
+}
+
+func TestSuccessfulAuthFileOwnershipMutationKeepsOnlySuccessfulFiles(t *testing.T) {
+	response := &http.Response{
+		Body: io.NopCloser(strings.NewReader(`{"files":["auth-a.json"],"failed":[{"name":"auth-b.json"}]}`)),
+	}
+	mutation, err := successfulAuthFileOwnershipMutation(response, authFileOwnershipMutation{
+		fileNames: []string{"auth-a.json", "auth-b.json"},
+	})
+	if err != nil {
+		t.Fatalf("resolve successful mutation: %v", err)
+	}
+	if len(mutation.fileNames) != 1 || mutation.fileNames[0] != "auth-a.json" {
+		t.Fatalf("mutation = %#v", mutation)
+	}
+	raw, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read restored response: %v", err)
+	}
+	if !bytes.Contains(raw, []byte("auth-b.json")) {
+		t.Fatalf("restored response = %q", raw)
+	}
+}
+
+func TestSuccessfulAuthFileOwnershipMutationDerivesClearAllPartialSuccess(t *testing.T) {
+	response := &http.Response{
+		Body: io.NopCloser(strings.NewReader(`{"deleted":1,"failed":[{"name":"auth-b.json"}]}`)),
+	}
+	mutation, err := successfulAuthFileOwnershipMutation(response, authFileOwnershipMutation{
+		fileNames: []string{"auth-a.json", "auth-b.json"},
+		clearAll:  true,
+	})
+	if err != nil {
+		t.Fatalf("resolve clear-all mutation: %v", err)
+	}
+	if mutation.clearAll || len(mutation.fileNames) != 1 || mutation.fileNames[0] != "auth-a.json" {
+		t.Fatalf("mutation = %#v", mutation)
+	}
+}
+
+func TestSuccessfulAuthFileOwnershipMutationRejectsLogicalFailure(t *testing.T) {
+	response := &http.Response{
+		Body: io.NopCloser(strings.NewReader(`{"status":"error","deleted":0}`)),
+	}
+	mutation, err := successfulAuthFileOwnershipMutation(response, authFileOwnershipMutation{
+		fileNames: []string{"auth-a.json"},
+	})
+	if err != nil {
+		t.Fatalf("resolve logical failure: %v", err)
+	}
+	if mutation.clearAll || len(mutation.fileNames) != 0 {
+		t.Fatalf("logical failure mutation = %#v, want empty", mutation)
+	}
+}
+
+func TestSuccessfulAuthFileOwnershipMutationRejectsEncodedResponse(t *testing.T) {
+	response := &http.Response{
+		Header: http.Header{"Content-Encoding": []string{"gzip"}},
+		Body:   io.NopCloser(strings.NewReader("compressed")),
+	}
+	if _, err := successfulAuthFileOwnershipMutation(response, authFileOwnershipMutation{
+		fileNames: []string{"auth-a.json"},
+	}); err == nil {
+		t.Fatal("encoded response succeeded, want error")
+	}
+}
+
+func TestRevokeAndRestoreInspectionOwnership(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.UpsertCodexInspectionDisableOwnership(context.Background(), model.CodexInspectionDisableOwnership{
+		FileName:  "auth-a.json",
+		AuthIndex: "auth-1",
+	}); err != nil {
+		t.Fatalf("save ownership: %v", err)
+	}
+	if err := st.UpsertCodexInspectionDisableOwnership(context.Background(), model.CodexInspectionDisableOwnership{
+		FileName:  "auth-b.json",
+		AuthIndex: "auth-2",
+	}); err != nil {
+		t.Fatalf("save second ownership: %v", err)
+	}
+	service := New(nil, st)
+	revoked, err := service.revokeInspectionOwnership(context.Background(), authFileOwnershipMutation{fileNames: []string{"auth-a.json"}})
+	if err != nil {
+		t.Fatalf("revoke ownership: %v", err)
+	}
+	if len(revoked) != 1 || revoked[0].FileName != "auth-a.json" {
+		t.Fatalf("revoked ownership = %#v", revoked)
+	}
+	items, err := st.ListCodexInspectionDisableOwnership(context.Background())
+	if err != nil {
+		t.Fatalf("list ownership: %v", err)
+	}
+	if len(items) != 1 || items[0].FileName != "auth-b.json" {
+		t.Fatalf("ownership = %#v, want auth-b.json", items)
+	}
+	if err := service.restoreInspectionOwnership(context.Background(), revoked); err != nil {
+		t.Fatalf("restore ownership: %v", err)
+	}
+	items, err = st.ListCodexInspectionDisableOwnership(context.Background())
+	if err != nil {
+		t.Fatalf("list ownership after restore: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("ownership after restore = %#v, want 2 items", items)
+	}
+}
+
+func TestReadAndRestoreRequestBodyRejectsOversizedBody(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "/v0/management/auth-files", strings.NewReader("12345"))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if _, err := readAndRestoreRequestBody(req, 4); !errors.Is(err, errAuthFileMutationBodyTooLarge) {
+		t.Fatalf("read oversized body error = %v", err)
+	}
+}
+
+func TestOwnershipItemsNotMutatedRestoresOnlyFailedFiles(t *testing.T) {
+	items := []store.CodexInspectionDisableOwnership{
+		{FileName: "auth-a.json"},
+		{FileName: "auth-b.json"},
+	}
+	remaining := ownershipItemsNotMutated(items, authFileOwnershipMutation{fileNames: []string{"auth-a.json"}})
+	if len(remaining) != 1 || remaining[0].FileName != "auth-b.json" {
+		t.Fatalf("remaining ownership = %#v", remaining)
 	}
 }
 

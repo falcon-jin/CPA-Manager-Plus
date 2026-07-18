@@ -113,6 +113,7 @@ func TestParseResponseHeaderMetadataErrors(t *testing.T) {
 		"X-OpenAI-Authorization-Error": []any{"identity_edge_internal_error"},
 		"X-OpenAI-IDE-Root-Error-Code": []any{"token_revoked"},
 		"X-RateLimit-Bypass":           []any{"ModelRequestRateLimit"},
+		"X-Should-Retry":               []any{"false"},
 		"X-CloudAICompanion-Trace-ID":  []any{"ag-trace"},
 		"Server-Timing":                []any{"dur=42"},
 		"X-MiFE-Upstream-Status":       []any{"200"},
@@ -127,6 +128,9 @@ func TestParseResponseHeaderMetadataErrors(t *testing.T) {
 	}
 	if metadata.Errors.RetryAfterRecoverAtMS != base.Add(120*time.Second).UnixMilli() {
 		t.Fatalf("retry-after recover = %d", metadata.Errors.RetryAfterRecoverAtMS)
+	}
+	if metadata.Errors.ShouldRetry == nil || *metadata.Errors.ShouldRetry {
+		t.Fatalf("should retry = %#v, want false", metadata.Errors.ShouldRetry)
 	}
 	if metadata.Providers == nil ||
 		metadata.Providers.AntigravityTraceID != "ag-trace" ||

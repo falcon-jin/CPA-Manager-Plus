@@ -28,7 +28,9 @@ import {
   buildUsageHeatmapRangeContext,
   buildUsageMatrix,
   buildUsageSummaryDelta,
+  buildUsageCredentialTimeline,
   buildUsageAnalyticsFilters,
+  buildUsageAnalyticsFilterSelectorsInclude,
   buildUsageAnalyticsInclude,
   buildUsageTimeline,
   getUsageRangeBounds,
@@ -93,10 +95,7 @@ export function useUsageAnalytics() {
   );
   const [searchParams, setSearchParams] = useSearchParams();
   const [initialUiState] = useState<UsageAnalyticsUiState>(() =>
-    buildUsageAnalyticsUiStateFromSearchParams(
-      searchParams,
-      readUsageAnalyticsUiState()
-    )
+    buildUsageAnalyticsUiStateFromSearchParams(searchParams, readUsageAnalyticsUiState())
   );
   const [filters, setFiltersState] = useState<UsageAnalyticsFiltersState>(
     () => initialUiState.filters
@@ -176,6 +175,7 @@ export function useUsageAnalytics() {
         geminiApiKeys: config?.geminiApiKeys || [],
         claudeApiKeys: config?.claudeApiKeys || [],
         codexApiKeys: config?.codexApiKeys || [],
+        xaiApiKeys: config?.xaiApiKeys || [],
         vertexApiKeys: config?.vertexApiKeys || [],
         openaiCompatibility: config?.openaiCompatibility || [],
       }),
@@ -251,19 +251,27 @@ export function useUsageAnalytics() {
     };
   }, [resolvedGranularity, selectedBucketMs]);
   const include = useMemo(
-    () => buildUsageAnalyticsInclude(resolvedGranularity, drilldownPreview),
-    [drilldownPreview, resolvedGranularity]
+    () => buildUsageAnalyticsInclude(activeTabState, resolvedGranularity, drilldownPreview),
+    [activeTabState, drilldownPreview, resolvedGranularity]
   );
   const dataScopeKey = useMemo(
     () =>
       JSON.stringify({
+        activeTab: activeTabState,
         bounds,
         drilldownPreview,
         filters: analyticsFilters,
         granularity: resolvedGranularity,
         searchQuery: debouncedSearchQuery,
       }),
-    [analyticsFilters, bounds, debouncedSearchQuery, drilldownPreview, resolvedGranularity]
+    [
+      activeTabState,
+      analyticsFilters,
+      bounds,
+      debouncedSearchQuery,
+      drilldownPreview,
+      resolvedGranularity,
+    ]
   );
 
   const analytics = useMonitoringAnalytics({
@@ -274,6 +282,25 @@ export function useUsageAnalytics() {
     searchQuery: debouncedSearchQuery,
     filters: analyticsFilters,
     include,
+    throttleMs: 0,
+  });
+
+  const filterSelectorsInclude = useMemo(() => buildUsageAnalyticsFilterSelectorsInclude(), []);
+  const filterSelectorsDataScopeKey = useMemo(
+    () =>
+      JSON.stringify({
+        bounds,
+        searchQuery: debouncedSearchQuery,
+      }),
+    [bounds, debouncedSearchQuery]
+  );
+  const filterSelectorsAnalytics = useMonitoringAnalytics({
+    fromMs: bounds?.fromMs,
+    toMs: bounds?.toMs,
+    nowMs,
+    dataScopeKey: filterSelectorsDataScopeKey,
+    searchQuery: debouncedSearchQuery,
+    include: filterSelectorsInclude,
     throttleMs: 0,
   });
 
@@ -311,6 +338,9 @@ export function useUsageAnalytics() {
   });
 
   const analyticsData = analytics.dataStale ? null : analytics.data;
+  const filterSelectorsData = filterSelectorsAnalytics.dataStale
+    ? null
+    : filterSelectorsAnalytics.data;
   const adapted = useMemo(
     () =>
       adaptUsageAnalyticsData(
@@ -433,14 +463,82 @@ export function useUsageAnalytics() {
     () => buildSelectedApiKeyTrendSeries(selectedApiKey, selectedApiKeyTimeline, trendMetric),
     [selectedApiKey, selectedApiKeyTimeline, trendMetric]
   );
+  const selectedCredentialFilterID = selectedCredential?.id || '';
+  const selectedCredentialTimelineFilters = useMemo(
+    () =>
+      selectedCredentialFilterID
+        ? { ...analyticsFilters, credential_ids: [selectedCredentialFilterID] }
+        : analyticsFilters,
+    [analyticsFilters, selectedCredentialFilterID]
+  );
+  const selectedCredentialTimelineInclude = useMemo(
+    () => ({
+      granularity: resolvedGranularity,
+      credential_timeline: true,
+    }),
+    [resolvedGranularity]
+  );
+  const selectedCredentialTimelineDataScopeKey = useMemo(
+    () =>
+      JSON.stringify({
+        activeTab: activeTabState,
+        bounds,
+        filters: selectedCredentialTimelineFilters,
+        granularity: resolvedGranularity,
+        searchQuery: debouncedSearchQuery,
+        selectedCredentialID: selectedCredentialFilterID,
+      }),
+    [
+      activeTabState,
+      bounds,
+      debouncedSearchQuery,
+      resolvedGranularity,
+      selectedCredentialFilterID,
+      selectedCredentialTimelineFilters,
+    ]
+  );
+  const selectedCredentialTimelineAnalytics = useMonitoringAnalytics({
+    fromMs:
+      activeTabState === 'credentials' && selectedCredentialFilterID ? bounds?.fromMs : undefined,
+    toMs: activeTabState === 'credentials' && selectedCredentialFilterID ? bounds?.toMs : undefined,
+    nowMs,
+    dataScopeKey: selectedCredentialTimelineDataScopeKey,
+    searchQuery: debouncedSearchQuery,
+    filters: selectedCredentialTimelineFilters,
+    include: selectedCredentialTimelineInclude,
+    throttleMs: 0,
+  });
+  const selectedCredentialTimelineData = selectedCredentialTimelineAnalytics.dataStale
+    ? null
+    : selectedCredentialTimelineAnalytics.data;
+  const credentialTrendLoading = Boolean(
+    activeTabState === 'credentials' &&
+    selectedCredentialFilterID &&
+    (selectedCredentialTimelineAnalytics.loading ||
+      selectedCredentialTimelineAnalytics.dataStale ||
+      (!selectedCredentialTimelineAnalytics.data && !selectedCredentialTimelineAnalytics.error))
+  );
+  const credentialTrendError =
+    activeTabState === 'credentials' && selectedCredentialFilterID
+      ? selectedCredentialTimelineAnalytics.error
+      : '';
+  const selectedCredentialTimeline = useMemo(
+    () =>
+      buildUsageCredentialTimeline(
+        selectedCredentialTimelineData?.credential_timeline ?? [],
+        resolvedGranularity,
+        credentialDisplayContext
+      ),
+    [credentialDisplayContext, resolvedGranularity, selectedCredentialTimelineData]
+  );
   const credentialTrendSeries = useMemo(
     () =>
       buildSelectedCredentialTrendSeries(
         selectedCredential,
-        adapted.credentialTimeline,
+        selectedCredentialTimeline,
         trendMetric
       ),
-    [adapted.credentialTimeline, selectedCredential, trendMetric]
+    [selectedCredential, selectedCredentialTimeline, trendMetric]
   );
   const heatmapDetail = useMemo(
     () => buildUsageHeatmapCellDetail(heatmapDetailSource, selectedHeatmapCell, heatmapMetric),
@@ -537,18 +635,24 @@ export function useUsageAnalytics() {
     void loadApiKeyAliases();
     void loadMonitoringMeta();
     void analytics.refresh({ force: true });
+    void filterSelectorsAnalytics.refresh({ force: true });
     if (selectedApiKeyTimelineAnalytics.enabled) {
       void selectedApiKeyTimelineAnalytics.refresh({ force: true });
+    }
+    if (selectedCredentialTimelineAnalytics.enabled) {
+      void selectedCredentialTimelineAnalytics.refresh({ force: true });
     }
     if (selectedHeatmapDate) {
       void heatmapDateAnalytics.refresh({ force: true });
     }
   }, [
     analytics,
+    filterSelectorsAnalytics,
     heatmapDateAnalytics,
     loadApiKeyAliases,
     loadMonitoringMeta,
     selectedApiKeyTimelineAnalytics,
+    selectedCredentialTimelineAnalytics,
     selectedHeatmapDate,
   ]);
 
@@ -602,13 +706,15 @@ export function useUsageAnalytics() {
     apiKeyTrendSeries,
     selectedApiKeyTrendSeries,
     credentialTrendSeries,
+    credentialTrendLoading,
+    credentialTrendError,
     keyAnomalies,
     credentialAnomalies,
     credentialQuotaRows,
     insights,
     anomalyPoints: adapted.anomalyPoints,
     drilldownPreview: adapted.drilldownPreview,
-    filterOptions: adapted.filterOptions,
+    filterOptions: filterSelectorsData?.filter_options ?? adapted.filterOptions,
     selectedBucket,
     selectBucket,
     anomalyAnalysis,

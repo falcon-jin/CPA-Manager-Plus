@@ -1250,6 +1250,19 @@
   line-height: 1.45;
 }
 
+.realtimeCacheTokenSummary {
+  display: block;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  cursor: help;
+
+  &:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--monitor-accent) 55%, transparent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+}
+
 .realtimeModelCell {
   max-width: 100%;
 }

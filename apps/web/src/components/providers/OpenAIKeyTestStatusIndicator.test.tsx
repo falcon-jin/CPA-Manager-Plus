@@ -1,6 +1,9 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { OpenAIKeyTestStatusIndicator } from './OpenAIKeyTestStatusIndicator';
+import {
+  OpenAIKeyTestStatusIndicator,
+  resolveOpenAIKeyTestTooltipPosition,
+} from './OpenAIKeyTestStatusIndicator';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -18,9 +21,7 @@ describe('OpenAIKeyTestStatusIndicator', () => {
 
   it('shows a tooltip on focus when an error message exists', () => {
     act(() => {
-      renderer = create(
-        <OpenAIKeyTestStatusIndicator status="error" message="invalid api key" />
-      );
+      renderer = create(<OpenAIKeyTestStatusIndicator status="error" message="invalid api key" />);
     });
 
     const trigger = renderer!.root.find(
@@ -76,5 +77,31 @@ describe('OpenAIKeyTestStatusIndicator', () => {
     );
     expect(trigger.props.tabIndex).toBe(-1);
     expect(() => renderer!.root.findByProps({ role: 'tooltip' })).toThrow();
+  });
+
+  it('keeps a long tooltip inside the viewport near the left edge', () => {
+    const position = resolveOpenAIKeyTestTooltipPosition(
+      { bottom: 120, height: 16, left: 20, top: 104, width: 16 },
+      320,
+      640
+    );
+
+    expect(position.placement).toBe('below');
+    expect(position.style.left).toBe(160);
+    expect(position.style.maxWidth).toBe(296);
+    expect(position.style.top).toBe(130);
+  });
+
+  it('places the tooltip above when there is more room above the trigger', () => {
+    const position = resolveOpenAIKeyTestTooltipPosition(
+      { bottom: 620, height: 16, left: 292, top: 604, width: 16 },
+      320,
+      640
+    );
+
+    expect(position.placement).toBe('above');
+    expect(position.style.left).toBe(160);
+    expect(position.style.bottom).toBe(46);
+    expect(position.style.maxHeight).toBe(240);
   });
 });

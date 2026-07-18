@@ -6,6 +6,7 @@ import {
   resolveCodexChatgptAccountId,
   resolveCodexPlanType,
 } from '@/utils/quota';
+import { getXaiProbeIssueKey } from '@/utils/quota/xaiPresentation';
 import {
   getHeaderSnapshotErrorCode,
   getHeaderSnapshotErrorKind,
@@ -111,11 +112,13 @@ export type AuthFileCodexStatusSummary = {
 
 export type AuthFileCodexInspectionSnapshot = {
   fileName: string;
+  provider?: string | null;
   authIndex?: string | number | null;
   statusCode?: number | string | null;
   action?: string | null;
   usedPercent?: number | string | null;
   isQuota?: boolean | null;
+  errorKind?: string | null;
   inspectionAtMs?: number | null;
 };
 
@@ -297,6 +300,38 @@ export const hasPartialSharedAuthFileSelection = (
   });
 };
 
+export const getWholeAuthFileDeleteCandidates = (
+  files: AuthFileItem[],
+  eligibleRows: AuthFileItem[]
+): AuthFileItem[] => {
+  const allRowCountByName = new Map<string, number>();
+  files.forEach((file) => {
+    if (isRuntimeOnlyAuthFile(file)) return;
+    const name = String(file.name ?? '').trim();
+    if (!name) return;
+    allRowCountByName.set(name, (allRowCountByName.get(name) ?? 0) + 1);
+  });
+
+  const eligibleRowCountByName = new Map<string, number>();
+  eligibleRows.forEach((file) => {
+    if (isRuntimeOnlyAuthFile(file)) return;
+    const name = String(file.name ?? '').trim();
+    if (!name) return;
+    eligibleRowCountByName.set(name, (eligibleRowCountByName.get(name) ?? 0) + 1);
+  });
+
+  const emittedNames = new Set<string>();
+  return eligibleRows.filter((file) => {
+    const name = String(file.name ?? '').trim();
+    if (!name || emittedNames.has(name)) return false;
+    const allCount = allRowCountByName.get(name) ?? 0;
+    const eligibleCount = eligibleRowCountByName.get(name) ?? 0;
+    if (allCount === 0 || eligibleCount !== allCount) return false;
+    emittedNames.add(name);
+    return true;
+  });
+};
+
 export const buildAuthFileCodexInspectionMap = (
   items: AuthFileCodexInspectionSnapshot[]
 ): Map<string, AuthFileCodexInspectionSnapshot> => {
@@ -351,14 +386,19 @@ export const getFreshAuthFileCodexStatusSources = (
   inspection?: AuthFileCodexInspectionSnapshot,
   headerSnapshot?: UsageHeaderSnapshot
 ): AuthFileCodexStatusSources => ({
-  inspection: shouldSuppressOlderCodexStatusSource(
-    file,
-    quota,
-    inspection?.inspectionAtMs,
-    headerSnapshot?.timestamp_ms
-  )
-    ? undefined
-    : inspection,
+  inspection:
+    inspection?.provider &&
+    normalizeProviderKey(inspection.provider) !==
+      normalizeProviderKey(file.type ?? file.provider ?? '')
+      ? undefined
+      : shouldSuppressOlderCodexStatusSource(
+            file,
+            quota,
+            inspection?.inspectionAtMs,
+            headerSnapshot?.timestamp_ms
+          )
+        ? undefined
+        : inspection,
   headerSnapshot: shouldSuppressOlderCodexStatusSource(
     file,
     quota,
@@ -375,8 +415,10 @@ export const getAuthFileCodexStatus = (
   inspection?: AuthFileCodexInspectionSnapshot,
   headerSnapshot?: UsageHeaderSnapshot
 ): AuthFileCodexStatusSummary => {
+  const provider = normalizeProviderKey(file.type ?? file.provider ?? '');
   const isCodex = isCodexAuthFile(file);
-  if (!isCodex) {
+  const isXai = provider === 'xai';
+  if (!isCodex && !isXai) {
     return {
       isCodex: false,
       isHttp401: false,
@@ -424,9 +466,7 @@ export const getAuthFileCodexStatus = (
     isObservedQuotaLimitError(observedErrorKind, observedErrorCode);
   const observedLimitWindowKind =
     observedReachedWindowKind ??
-    (observedUsedPercent !== null && observedUsedPercent >= 100
-      ? observedSummaryWindowKind
-      : null);
+    (observedUsedPercent !== null && observedUsedPercent >= 100 ? observedSummaryWindowKind : null);
   const getObservedWindowUsedPercent = (windowKind: 'five_hour' | 'weekly' | 'monthly') =>
     getHeaderSnapshotWindowUsedPercent(headerSnapshot, windowKind) ??
     (observedLimitWindowKind === windowKind ? observedUsedPercent : null);
@@ -468,6 +508,8 @@ export const getAuthFileCodexStatus = (
     ) ??
     normalizeNumber(quota?.errorStatus);
   const action = typeof inspection?.action === 'string' ? inspection.action : '';
+  const inspectionErrorKind =
+    typeof inspection?.errorKind === 'string' ? inspection.errorKind.trim() : '';
   const isHttp401 = statusCode === 401;
   const needsReauth =
     action === 'reauth' || isHttp401 || isObservedAuthError(observedErrorKind, observedErrorCode);
@@ -477,20 +519,21 @@ export const getAuthFileCodexStatus = (
       (longWindowUsedPercent !== null && longWindowUsedPercent >= 100) ||
       (file.disabled === true && action === 'keep'));
   const isWeeklyLimited =
-    (weeklyUsedPercent !== null && weeklyUsedPercent >= 100) ||
-    (inspectionReachedQuota && !monthlyWindow) ||
-    observedWeeklyLimited;
+    isCodex &&
+    ((weeklyUsedPercent !== null && weeklyUsedPercent >= 100) ||
+      (inspectionReachedQuota && !monthlyWindow) ||
+      observedWeeklyLimited);
   const isMonthlyLimited =
-    (monthlyUsedPercent !== null && monthlyUsedPercent >= 100) ||
-    (inspectionReachedQuota && monthlyWindow !== null && !weeklyWindow) ||
-    observedMonthlyLimited;
+    isCodex &&
+    ((monthlyUsedPercent !== null && monthlyUsedPercent >= 100) ||
+      (inspectionReachedQuota && monthlyWindow !== null && !weeklyWindow) ||
+      observedMonthlyLimited);
   const isFiveHourLimited =
-    (fiveHourUsedPercent !== null && fiveHourUsedPercent >= 100) || observedFiveHourLimited;
+    isCodex &&
+    ((fiveHourUsedPercent !== null && fiveHourUsedPercent >= 100) || observedFiveHourLimited);
   const isUnknownQuotaLimited =
-    observedQuotaLimitedStatus &&
-    !isFiveHourLimited &&
-    !isWeeklyLimited &&
-    !isMonthlyLimited;
+    (isXai && inspectionReachedQuota) ||
+    (observedQuotaLimitedStatus && !isFiveHourLimited && !isWeeklyLimited && !isMonthlyLimited);
   const isQuotaLimited =
     isFiveHourLimited || isWeeklyLimited || isMonthlyLimited || isUnknownQuotaLimited;
   const recoveryResetLabel =
@@ -506,10 +549,15 @@ export const getAuthFileCodexStatus = (
     badges.push({
       kind: 'reauth',
       tone: 'danger',
-      labelKey: 'auth_files.codex_status_badge_reauth',
+      labelKey: isXai
+        ? 'auth_files.provider_inspection_badge_reauth'
+        : 'auth_files.codex_status_badge_reauth',
       defaultLabel: 'Needs reauth',
-      titleKey: 'auth_files.codex_status_badge_reauth_title',
+      titleKey: isXai
+        ? 'auth_files.provider_inspection_badge_reauth_title'
+        : 'auth_files.codex_status_badge_reauth_title',
       defaultTitle: 'Latest Codex check returned 401 or suggested reauthorization.',
+      labelParams: { provider: isXai ? 'xAI' : 'Codex' },
     });
   }
 
@@ -558,7 +606,17 @@ export const getAuthFileCodexStatus = (
     });
   }
 
-  if (observedQuotaLimitedStatus) {
+  if (isXai && inspectionReachedQuota) {
+    badges.push({
+      kind: 'observed_quota',
+      tone: 'warning',
+      labelKey: 'auth_files.provider_inspection_badge_quota',
+      defaultLabel: 'Quota unavailable',
+      titleKey: 'auth_files.provider_inspection_badge_quota_title',
+      defaultTitle: 'Latest xAI inspection reported an exhausted quota or spending limit.',
+      labelParams: { provider: 'xAI' },
+    });
+  } else if (observedQuotaLimitedStatus) {
     badges.push({
       kind: 'observed_quota',
       tone: 'warning',
@@ -593,6 +651,23 @@ export const getAuthFileCodexStatus = (
       ]
         .filter(Boolean)
         .join(' '),
+    });
+  } else if (
+    isXai &&
+    inspectionErrorKind &&
+    inspectionErrorKind !== 'billing_healthy' &&
+    inspectionErrorKind !== 'official_api_healthy' &&
+    !needsReauth
+  ) {
+    const issueTitleKey = getXaiProbeIssueKey(inspectionErrorKind);
+    badges.push({
+      kind: 'observed_error',
+      tone: 'info',
+      labelKey: 'auth_files.provider_inspection_badge_error',
+      defaultLabel: 'Inspection warning',
+      titleKey: issueTitleKey ?? 'auth_files.provider_inspection_badge_error_title',
+      defaultTitle: 'The latest xAI inspection found an issue. Review the inspection details.',
+      labelParams: issueTitleKey ? undefined : { provider: 'xAI' },
     });
   }
 

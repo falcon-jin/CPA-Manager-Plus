@@ -9,6 +9,7 @@ import {
   getDemoDashboardSummary,
   getDemoHeaderSnapshots,
   getDemoManagerConfig,
+  getDemoModelPriceUsageSummary,
   getDemoModelPrices,
   getDemoMonitoringAnalytics,
   getDemoQuotaCooldowns,
@@ -115,6 +116,8 @@ export interface QuotaCooldownInfo {
   authIndex?: string;
   provider?: string;
   owner?: string;
+  reasonCode?: string;
+  windowKind?: 'five_hour' | 'weekly' | 'monthly' | 'rolling_24h' | 'unknown' | string;
   recoverAtMs: number;
   disabledAtMs?: number;
   createdAtMs?: number;
@@ -182,6 +185,7 @@ export interface ManagerCodexInspectionConfig {
   usedPercentThreshold?: number;
   sampleSize?: number;
   autoActionMode?: ManagerCodexInspectionAutoActionMode | string;
+  autoRecoverEnabled?: boolean;
 }
 
 export interface ManagerConfig {
@@ -256,6 +260,7 @@ export interface CodexInspectionResult {
   statusCode?: number;
   usedPercent?: number;
   isQuota: boolean;
+  autoRecoverEligible?: boolean;
   error?: string;
   planType?: string | null;
   quotaWindows?: CodexInspectionQuotaWindow[];
@@ -299,8 +304,27 @@ export interface CodexInspectionActionsResponse {
   detail: CodexInspectionRunDetail;
 }
 
+export interface CodexInspectionActionOverride {
+  resultId: number;
+  action: 'delete';
+}
+
 export interface ModelPricesResponse {
   prices: Record<string, ModelPrice>;
+}
+
+export interface ModelPriceUsageStat {
+  model: string;
+  calls: number;
+  requested_calls: number;
+  resolved_calls: number;
+}
+
+export interface ModelPriceUsageSummaryResponse {
+  sampled_events: number;
+  total_events: number;
+  truncated: boolean;
+  models: ModelPriceUsageStat[];
 }
 
 export interface ModelPriceSyncCandidate {
@@ -357,7 +381,10 @@ export interface AccountActionCandidate {
   accountSnapshot?: string;
   accountIdSnapshot?: string;
   authLabel?: string;
+  reasonCode?: string;
   reason: string;
+  autoDisableEligible?: boolean;
+  autoDisabledAtMs?: number;
   evidence?: unknown;
   lastError?: string;
   firstSeenAtMs: number;
@@ -579,6 +606,7 @@ export interface MonitoringAnalyticsFilters {
   models?: string[];
   providers?: string[];
   accounts?: string[];
+  credential_ids?: string[];
   auth_files?: string[];
   auth_indices?: string[];
   api_key_hashes?: string[];
@@ -609,6 +637,8 @@ export interface MonitoringAnalyticsDrilldownPreviewRequest {
 
 export interface MonitoringAnalyticsInclude {
   summary?: boolean;
+  summary_profile?: 'full' | 'compact';
+  summary_percentiles?: boolean;
   summary_comparison?: boolean;
   timeline?: boolean;
   hourly_distribution?: boolean;
@@ -621,6 +651,7 @@ export interface MonitoringAnalyticsInclude {
   credential_timeline?: boolean;
   api_key_stats?: boolean;
   filter_options?: boolean;
+  filter_selectors?: boolean;
   heatmap?: boolean;
   anomaly_points?: boolean;
   task_buckets?: boolean;
@@ -651,6 +682,7 @@ export interface MonitoringAnalyticsSummary {
   cached_tokens: number;
   cache_read_tokens: number;
   cache_creation_tokens: number;
+  cache_hit_rate?: number;
   reasoning_tokens: number;
   total_tokens: number;
   total_cost: number;
@@ -693,6 +725,7 @@ export interface MonitoringAnalyticsTimelinePoint {
   cached_tokens?: number;
   cache_read_tokens?: number;
   cache_creation_tokens?: number;
+  cache_hit_rate?: number;
   reasoning_tokens?: number;
   total_tokens?: number;
   cost?: number;
@@ -773,6 +806,9 @@ export interface MonitoringAnalyticsModelStat {
   cached_tokens: number;
   cache_read_tokens: number;
   cache_creation_tokens: number;
+  cache_hit_tokens?: number;
+  cache_hit_input_tokens?: number;
+  cache_hit_rate?: number;
   total_tokens: number;
   cost: number;
 }
@@ -815,6 +851,9 @@ export interface MonitoringAnalyticsAccountModelStatRow {
   cached_tokens: number;
   cache_read_tokens: number;
   cache_creation_tokens: number;
+  cache_hit_tokens?: number;
+  cache_hit_input_tokens?: number;
+  cache_hit_rate?: number;
   total_tokens: number;
   cost: number;
   last_seen_ms: number;
@@ -950,6 +989,8 @@ export interface MonitoringAnalyticsFilterOptions {
   api_key_stats?: MonitoringAnalyticsApiKeyStatRow[];
   channel_share?: MonitoringAnalyticsChannelShareRow[];
   model_stats?: MonitoringAnalyticsModelStat[];
+  models?: string[];
+  api_key_hashes?: string[];
   providers?: string[];
   auth_files?: string[];
   project_ids?: string[];
@@ -1374,9 +1415,11 @@ const getDemoPatchedAccountProcessingPolicy = (
 };
 
 const getDemoCodexInspectionActionsResponse = (
-  resultIds: number[]
+  resultIds: number[],
+  actionOverrides: CodexInspectionActionOverride[] = []
 ): CodexInspectionActionsResponse => {
   const detail = getDemoCodexInspectionRun();
+  const overrideByID = new Map(actionOverrides.map((item) => [item.resultId, item.action]));
   const selected = resultIds.length
     ? detail.results.filter((result) => resultIds.includes(result.id))
     : detail.results;
@@ -1386,7 +1429,7 @@ const getDemoCodexInspectionActionsResponse = (
       accountKey: result.accountKey,
       fileName: result.fileName,
       displayAccount: result.displayAccount,
-      action: result.action,
+      action: overrideByID.get(result.id) ?? result.action,
       status: 'done',
       success: true,
     })),
@@ -1399,9 +1442,7 @@ const getDemoModelPriceSyncResponse = (models?: string[]): ModelPriceSyncRespons
   const selectedModels = new Set((models || []).map((model) => model.trim()).filter(Boolean));
   const selectedPrices =
     selectedModels.size > 0
-      ? Object.fromEntries(
-          Object.entries(prices).filter(([model]) => selectedModels.has(model))
-        )
+      ? Object.fromEntries(Object.entries(prices).filter(([model]) => selectedModels.has(model)))
       : prices;
 
   return {
@@ -1560,16 +1601,17 @@ export const usageServiceApi = {
     base: string,
     managementKey: string | undefined,
     runId: number,
-    resultIds: number[]
+    resultIds: number[],
+    actionOverrides: CodexInspectionActionOverride[] = []
   ): Promise<CodexInspectionActionsResponse> => {
     if (__DEMO_SITE__ && isDemoMode()) {
-      return getDemoCodexInspectionActionsResponse(resultIds);
+      return getDemoCodexInspectionActionsResponse(resultIds, actionOverrides);
     }
 
     return withUsageServiceError(async () => {
       const response = await axios.post<CodexInspectionActionsResponse>(
         buildUrl(base, `/v0/management/codex-inspection/runs/${runId}/actions`),
-        { resultIds },
+        { resultIds, actionOverrides },
         {
           timeout: CODEX_INSPECTION_RUN_TIMEOUT_MS,
           headers: authHeaders(managementKey),
@@ -1680,6 +1722,28 @@ export const usageServiceApi = {
         {
           timeout: USAGE_SERVICE_TIMEOUT_MS,
           headers: authHeaders(managementKey),
+        }
+      );
+      return response.data;
+    });
+  },
+
+  getModelPriceUsageSummary: async (
+    base: string,
+    managementKey?: string,
+    signal?: AbortSignal
+  ): Promise<ModelPriceUsageSummaryResponse> => {
+    if (__DEMO_SITE__ && isDemoMode()) {
+      return getDemoModelPriceUsageSummary();
+    }
+
+    return withUsageServiceError(async () => {
+      const response = await axios.get<ModelPriceUsageSummaryResponse>(
+        buildUrl(base, '/v0/management/model-prices/usage-summary'),
+        {
+          timeout: USAGE_SERVICE_TIMEOUT_MS,
+          headers: authHeaders(managementKey),
+          signal,
         }
       );
       return response.data;
@@ -2030,7 +2094,8 @@ export const monitoringAnalyticsApi = {
   getAnalytics: async (
     base: string,
     managementKey: string | undefined,
-    request: MonitoringAnalyticsRequest
+    request: MonitoringAnalyticsRequest,
+    signal?: AbortSignal
   ): Promise<MonitoringAnalyticsResponse> => {
     if (__DEMO_SITE__ && isDemoMode()) {
       return getDemoMonitoringAnalytics(request);
@@ -2043,6 +2108,7 @@ export const monitoringAnalyticsApi = {
         {
           timeout: USAGE_SERVICE_TIMEOUT_MS,
           headers: authHeaders(managementKey),
+          signal,
         }
       );
       return response.data;

@@ -5,7 +5,11 @@
 import { useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AuthFileItem } from '@/types';
-import { useQuotaStore } from '@/stores';
+import {
+  captureQuotaCacheGeneration,
+  commitIfQuotaCacheCurrent,
+  useQuotaStore,
+} from '@/stores';
 import { getStatusFromError } from '@/utils/quota';
 import {
   buildQuotaFailureState,
@@ -74,6 +78,7 @@ export function useQuotaLoader<TState, TData>(config: QuotaConfig<TState, TData>
       if (loadingRef.current) return;
       loadingRef.current = true;
       const requestId = ++requestIdRef.current;
+      const cacheGeneration = captureQuotaCacheGeneration();
       setLoading(true, scope);
 
       try {
@@ -108,25 +113,27 @@ export function useQuotaLoader<TState, TData>(config: QuotaConfig<TState, TData>
 
         if (requestId !== requestIdRef.current) return;
 
-        setQuota((prev) => {
-          const nextState = { ...prev };
-          results.forEach((result) => {
-            if (result.status === 'success') {
-              nextState[result.storeKey] = config.buildSuccessState(
-                result.data as TData,
-                result.file
-              );
-            } else {
-              nextState[result.storeKey] = buildQuotaFailureState(
-                config,
-                result.error || t('common.unknown_error'),
-                result.errorStatus,
-                result.file,
-                previousStateByStoreKey.get(result.storeKey)
-              );
-            }
+        commitIfQuotaCacheCurrent(cacheGeneration, () => {
+          setQuota((prev) => {
+            const nextState = { ...prev };
+            results.forEach((result) => {
+              if (result.status === 'success') {
+                nextState[result.storeKey] = config.buildSuccessState(
+                  result.data as TData,
+                  result.file
+                );
+              } else {
+                nextState[result.storeKey] = buildQuotaFailureState(
+                  config,
+                  result.error || t('common.unknown_error'),
+                  result.errorStatus,
+                  result.file,
+                  previousStateByStoreKey.get(result.storeKey)
+                );
+              }
+            });
+            return nextState;
           });
-          return nextState;
         });
       } finally {
         if (requestId === requestIdRef.current) {

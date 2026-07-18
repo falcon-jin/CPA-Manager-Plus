@@ -3,17 +3,15 @@ import { Trans, useTranslation } from 'react-i18next';
 import { authFilesApi } from '@/services/api';
 import { useNotificationStore } from '@/stores';
 import type { AuthFileItem, OAuthModelAliasEntry } from '@/types';
-import type { AuthFileModelItem } from '@/features/authFiles/constants';
+import type { AuthFileModelItem, OAuthConfigLoadState } from '@/features/authFiles/constants';
 import { normalizeProviderKey } from '@/features/authFiles/constants';
-
-type UnsupportedError = 'unsupported' | null;
 type ViewMode = 'diagram' | 'list';
 
 export type UseAuthFilesOauthResult = {
   excluded: Record<string, string[]>;
-  excludedError: UnsupportedError;
+  excludedError: OAuthConfigLoadState;
   modelAlias: Record<string, OAuthModelAliasEntry[]>;
-  modelAliasError: UnsupportedError;
+  modelAliasError: OAuthConfigLoadState;
   allProviderModels: Record<string, AuthFileModelItem[]>;
   providerList: string[];
   loadExcluded: () => Promise<void>;
@@ -43,15 +41,29 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
   const { showNotification, showConfirmation } = useNotificationStore();
 
   const [excluded, setExcluded] = useState<Record<string, string[]>>({});
-  const [excludedError, setExcludedError] = useState<UnsupportedError>(null);
+  const [excludedError, setExcludedError] = useState<OAuthConfigLoadState>('loading');
   const [modelAlias, setModelAlias] = useState<Record<string, OAuthModelAliasEntry[]>>({});
-  const [modelAliasError, setModelAliasError] = useState<UnsupportedError>(null);
+  const [modelAliasError, setModelAliasError] = useState<OAuthConfigLoadState>('loading');
   const [allProviderModels, setAllProviderModels] = useState<Record<string, AuthFileModelItem[]>>(
     {}
   );
 
   const excludedUnsupportedRef = useRef(false);
   const mappingsUnsupportedRef = useRef(false);
+  const excludedReadyRef = useRef(false);
+  const modelAliasReadyRef = useRef(false);
+  const excludedLoadRequestRef = useRef(0);
+  const modelAliasLoadRequestRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      excludedReadyRef.current = false;
+      modelAliasReadyRef.current = false;
+      excludedLoadRequestRef.current += 1;
+      modelAliasLoadRequestRef.current += 1;
+    },
+    []
+  );
 
   const providerList = useMemo(() => {
     const providers = new Set<string>();
@@ -116,12 +128,18 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
   }, [providerList, viewMode]);
 
   const loadExcluded = useCallback(async () => {
+    const requestId = ++excludedLoadRequestRef.current;
+    excludedReadyRef.current = false;
+    setExcludedError('loading');
     try {
       const res = await authFilesApi.getOauthExcludedModels();
+      if (requestId !== excludedLoadRequestRef.current) return;
       excludedUnsupportedRef.current = false;
+      excludedReadyRef.current = true;
       setExcluded(res || {});
-      setExcludedError(null);
+      setExcludedError('ready');
     } catch (err: unknown) {
+      if (requestId !== excludedLoadRequestRef.current) return;
       const status =
         typeof err === 'object' && err !== null && 'status' in err
           ? (err as { status?: unknown }).status
@@ -136,17 +154,23 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
         }
         return;
       }
-      // 静默失败
+      setExcludedError('error');
     }
   }, [showNotification, t]);
 
   const loadModelAlias = useCallback(async () => {
+    const requestId = ++modelAliasLoadRequestRef.current;
+    modelAliasReadyRef.current = false;
+    setModelAliasError('loading');
     try {
       const res = await authFilesApi.getOauthModelAlias();
+      if (requestId !== modelAliasLoadRequestRef.current) return;
       mappingsUnsupportedRef.current = false;
+      modelAliasReadyRef.current = true;
       setModelAlias(res || {});
-      setModelAliasError(null);
+      setModelAliasError('ready');
     } catch (err: unknown) {
+      if (requestId !== modelAliasLoadRequestRef.current) return;
       const status =
         typeof err === 'object' && err !== null && 'status' in err
           ? (err as { status?: unknown }).status
@@ -161,8 +185,12 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
         }
         return;
       }
-      // 静默失败
+      setModelAliasError('error');
     }
+  }, [showNotification, t]);
+
+  const showLoadRequired = useCallback(() => {
+    showNotification(t('notification.refresh_failed'), 'error');
   }, [showNotification, t]);
 
   const deleteExcluded = useCallback(
@@ -174,6 +202,10 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
         variant: 'danger',
         confirmText: t('common.confirm'),
         onConfirm: async () => {
+          if (!excludedReadyRef.current) {
+            showLoadRequired();
+            return;
+          }
           const providerKey = normalizeProviderKey(provider);
           if (!providerKey) {
             showNotification(t('oauth_excluded.provider_required'), 'error');
@@ -204,10 +236,10 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
               showNotification(`${t('oauth_excluded.delete_failed')}: ${errorMessage}`, 'error');
             }
           }
-        }
+        },
       });
     },
-    [loadExcluded, showConfirmation, showNotification, t]
+    [loadExcluded, showConfirmation, showLoadRequired, showNotification, t]
   );
 
   const deleteModelAlias = useCallback(
@@ -218,6 +250,10 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
         variant: 'danger',
         confirmText: t('common.confirm'),
         onConfirm: async () => {
+          if (!modelAliasReadyRef.current) {
+            showLoadRequired();
+            return;
+          }
           try {
             await authFilesApi.deleteOauthModelAlias(provider);
             await loadModelAlias();
@@ -226,14 +262,18 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
             const errorMessage = err instanceof Error ? err.message : '';
             showNotification(`${t('oauth_model_alias.delete_failed')}: ${errorMessage}`, 'error');
           }
-        }
+        },
       });
     },
-    [loadModelAlias, showConfirmation, showNotification, t]
+    [loadModelAlias, showConfirmation, showLoadRequired, showNotification, t]
   );
 
   const handleMappingUpdate = useCallback(
     async (provider: string, sourceModel: string, newAlias: string) => {
+      if (!modelAliasReadyRef.current) {
+        showLoadRequired();
+        return;
+      }
       if (!provider || !sourceModel || !newAlias) return;
       const normalizedProvider = normalizeProviderKey(provider);
       if (!normalizedProvider) return;
@@ -260,7 +300,7 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
 
       const nextMappings: OAuthModelAliasEntry[] = [
         ...currentMappings,
-        { name: nameTrim, alias: aliasTrim, fork: true }
+        { name: nameTrim, alias: aliasTrim, fork: true },
       ];
 
       try {
@@ -272,7 +312,7 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
         showNotification(`${t('oauth_model_alias.save_failed')}: ${errorMessage}`, 'error');
       }
     },
-    [loadModelAlias, modelAlias, showNotification, t]
+    [loadModelAlias, modelAlias, showLoadRequired, showNotification, t]
   );
 
   const handleDeleteLink = useCallback(
@@ -293,6 +333,10 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
         variant: 'danger',
         confirmText: t('common.confirm'),
         onConfirm: async () => {
+          if (!modelAliasReadyRef.current) {
+            showLoadRequired();
+            return;
+          }
           const normalizedProvider = normalizeProviderKey(provider);
           const providerKey = Object.keys(modelAlias).find(
             (key) => normalizeProviderKey(key) === normalizedProvider
@@ -319,14 +363,18 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
             const errorMessage = err instanceof Error ? err.message : '';
             showNotification(`${t('oauth_model_alias.save_failed')}: ${errorMessage}`, 'error');
           }
-        }
+        },
       });
     },
-    [loadModelAlias, modelAlias, showConfirmation, showNotification, t]
+    [loadModelAlias, modelAlias, showConfirmation, showLoadRequired, showNotification, t]
   );
 
   const handleToggleFork = useCallback(
     async (provider: string, sourceModel: string, alias: string, fork: boolean) => {
+      if (!modelAliasReadyRef.current) {
+        showLoadRequired();
+        return;
+      }
       const normalizedProvider = normalizeProviderKey(provider);
       if (!normalizedProvider) return;
 
@@ -343,7 +391,10 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
         const mAlias = (m.alias ?? '').trim().toLowerCase();
         if (mName === nameKey && mAlias === aliasKey) {
           changed = true;
-          return fork ? { ...m, fork: true } : { name: m.name, alias: m.alias };
+          if (fork) return { ...m, fork: true };
+          const next = { ...m };
+          delete next.fork;
+          return next;
         }
         return m;
       });
@@ -359,11 +410,15 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
         showNotification(`${t('oauth_model_alias.save_failed')}: ${errorMessage}`, 'error');
       }
     },
-    [loadModelAlias, modelAlias, showNotification, t]
+    [loadModelAlias, modelAlias, showLoadRequired, showNotification, t]
   );
 
   const handleRenameAlias = useCallback(
     async (oldAlias: string, newAlias: string) => {
+      if (!modelAliasReadyRef.current) {
+        showLoadRequired();
+        return;
+      }
       const oldTrim = oldAlias.trim();
       const newTrim = newAlias.trim();
       if (!oldTrim || !newTrim || oldTrim === newTrim) return;
@@ -412,7 +467,7 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
         showNotification(t('oauth_model_alias.save_success'), 'success');
       }
     },
-    [loadModelAlias, modelAlias, showNotification, t]
+    [loadModelAlias, modelAlias, showLoadRequired, showNotification, t]
   );
 
   const handleDeleteAlias = useCallback(
@@ -438,6 +493,10 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
         variant: 'danger',
         confirmText: t('common.confirm'),
         onConfirm: async () => {
+          if (!modelAliasReadyRef.current) {
+            showLoadRequired();
+            return;
+          }
           let hadFailure = false;
           let failureMessage = '';
 
@@ -477,10 +536,10 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
           } else {
             showNotification(t('oauth_model_alias.delete_success'), 'success');
           }
-        }
+        },
       });
     },
-    [loadModelAlias, modelAlias, showConfirmation, showNotification, t]
+    [loadModelAlias, modelAlias, showConfirmation, showLoadRequired, showNotification, t]
   );
 
   return {
@@ -498,7 +557,6 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
     handleDeleteLink,
     handleToggleFork,
     handleRenameAlias,
-    handleDeleteAlias
+    handleDeleteAlias,
   };
 }
-

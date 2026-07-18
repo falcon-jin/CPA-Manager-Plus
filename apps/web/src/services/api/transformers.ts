@@ -76,6 +76,24 @@ const normalizeModelAliases = (models: unknown): ModelAlias[] => {
       if (image !== undefined) {
         entry.image = image;
       }
+      const forceMapping = normalizeBoolean(
+        item['force-mapping'] ?? item.forceMapping ?? item.force_mapping
+      );
+      if (forceMapping !== undefined) {
+        entry.forceMapping = forceMapping;
+      }
+      const inputModalities = normalizeExcludedModels(
+        item['input-modalities'] ?? item.inputModalities ?? item.input_modalities
+      );
+      if (inputModalities.length) {
+        entry.inputModalities = inputModalities;
+      }
+      const outputModalities = normalizeExcludedModels(
+        item['output-modalities'] ?? item.outputModalities ?? item.output_modalities
+      );
+      if (outputModalities.length) {
+        entry.outputModalities = outputModalities;
+      }
       const thinking = item.thinking ?? item['thinking'];
       if (isRecord(thinking)) {
         entry.thinking = thinking;
@@ -189,6 +207,14 @@ const normalizeProviderKeyConfig = (item: unknown): ProviderKeyConfig | null => 
       record?.experimental_cch_signing
   );
   if (experimentalCchSigning !== undefined) config.experimentalCchSigning = experimentalCchSigning;
+  const rebuildMidSystemMessage = normalizeBoolean(
+    record?.['rebuild-mid-system-message'] ??
+      record?.rebuildMidSystemMessage ??
+      record?.rebuild_mid_system_message
+  );
+  if (rebuildMidSystemMessage !== undefined) {
+    config.rebuildMidSystemMessage = rebuildMidSystemMessage;
+  }
   if (proxyUrl) config.proxyUrl = String(proxyUrl);
   const headers = normalizeHeaders(record?.headers);
   if (headers) config.headers = headers;
@@ -449,9 +475,24 @@ export const normalizeConfigResponse = (raw: unknown): Config => {
       .filter(Boolean) as GeminiKeyConfig[];
   }
 
+  const interactionsList =
+    raw['interactions-api-key'] ?? raw.interactionsApiKey ?? raw.interactionsApiKeys;
+  if (Array.isArray(interactionsList)) {
+    config.interactionsApiKeys = interactionsList
+      .map((item) => normalizeGeminiKeyConfig(item))
+      .filter(Boolean) as GeminiKeyConfig[];
+  }
+
   const codexList = raw['codex-api-key'] ?? raw.codexApiKey ?? raw.codexApiKeys;
   if (Array.isArray(codexList)) {
     config.codexApiKeys = codexList
+      .map((item) => normalizeProviderKeyConfig(item))
+      .filter(Boolean) as ProviderKeyConfig[];
+  }
+
+  const xaiList = raw['xai-api-key'] ?? raw.xaiApiKey ?? raw.xaiApiKeys;
+  if (Array.isArray(xaiList)) {
+    config.xaiApiKeys = xaiList
       .map((item) => normalizeProviderKeyConfig(item))
       .filter(Boolean) as ProviderKeyConfig[];
   }

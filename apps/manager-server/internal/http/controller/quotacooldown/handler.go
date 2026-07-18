@@ -22,6 +22,8 @@ type cooldownItem struct {
 	AuthIndex    string `json:"authIndex"`
 	Provider     string `json:"provider"`
 	Owner        string `json:"owner"`
+	ReasonCode   string `json:"reasonCode,omitempty"`
+	WindowKind   string `json:"windowKind,omitempty"`
 	RecoverAtMs  int64  `json:"recoverAtMs"`
 	DisabledAtMs int64  `json:"disabledAtMs"`
 	CreatedAtMs  int64  `json:"createdAtMs"`
@@ -72,6 +74,8 @@ func mapCooldown(c model.QuotaCooldown) cooldownItem {
 		AuthIndex:    c.AuthIndex,
 		Provider:     c.Provider,
 		Owner:        c.Owner,
+		ReasonCode:   c.ReasonCode,
+		WindowKind:   c.WindowKind,
 		RecoverAtMs:  c.RecoverAtMS,
 		DisabledAtMs: c.DisabledAtMS,
 		CreatedAtMs:  c.CreatedAtMS,

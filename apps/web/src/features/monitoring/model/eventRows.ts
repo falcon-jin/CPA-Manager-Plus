@@ -2,7 +2,6 @@ import type { CredentialInfo } from '@/types/sourceInfo';
 import { buildSourceInfoMap, resolveSourceDisplay } from '@/utils/sourceResolver';
 import {
   calculateCost,
-  extractTotalTokens,
   normalizeAuthIndex,
   type ModelPrice,
   type UsageDetailWithEndpoint,
@@ -98,10 +97,11 @@ export const buildEventRows = (
         Math.max(Number(detail.tokens?.cached_tokens) || 0, 0),
         Math.max(Number(detail.tokens?.cache_tokens) || 0, 0)
       );
-      const totalTokens = Math.max(
-        Number(detail.tokens?.total_tokens) || 0,
-        extractTotalTokens(detail)
-      );
+      const explicitTotalTokens = Math.max(Number(detail.tokens?.total_tokens) || 0, 0);
+      const totalTokens =
+        explicitTotalTokens > 0
+          ? explicitTotalTokens
+          : inputTokens + outputTokens + reasoningTokens;
       const latencyMs = toDurationMs(detail.latency_ms);
       const ttftMs = toDurationMs(detail.ttft_ms);
       const tokensPerSecond = calculateOutputTokensPerSecond(outputTokens, latencyMs);

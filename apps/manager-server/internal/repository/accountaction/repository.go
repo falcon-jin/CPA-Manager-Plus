@@ -19,6 +19,7 @@ type Repository interface {
 	UpdateStatus(ctx context.Context, id int64, status string) (model.AccountActionCandidate, error)
 	UpdatePendingStatus(ctx context.Context, id int64, status string) (model.AccountActionCandidate, error)
 	RecordFailure(ctx context.Context, id int64, reason string) error
+	MarkAutoDisabled(ctx context.Context, id int64, disabledAtMS int64) error
 }
 
 type repository struct {
@@ -40,6 +41,7 @@ func (r *repository) Upsert(ctx context.Context, input model.AccountActionCandid
 	input.AccountSnapshot = strings.TrimSpace(input.AccountSnapshot)
 	input.AccountIDSnapshot = strings.TrimSpace(input.AccountIDSnapshot)
 	input.AuthLabel = strings.TrimSpace(input.AuthLabel)
+	input.ReasonCode = strings.TrimSpace(input.ReasonCode)
 	input.Reason = strings.TrimSpace(input.Reason)
 	input.EvidenceJSON = strings.TrimSpace(input.EvidenceJSON)
 
@@ -59,15 +61,16 @@ func (r *repository) Upsert(ctx context.Context, input model.AccountActionCandid
 	err = tx.QueryRowContext(ctx, `select id from account_action_candidates
 		where status = ? and auth_file_name = ? and action_type = ?
 		and coalesce(auth_index, '') = ? and coalesce(account_id_snapshot, '') = ?
-		limit 1`, model.AccountActionStatusPending, input.AuthFileName, input.ActionType, input.AuthIndex, input.AccountIDSnapshot).Scan(&id)
+		and coalesce(reason_code, '') = ?
+		limit 1`, model.AccountActionStatusPending, input.AuthFileName, input.ActionType, input.AuthIndex, input.AccountIDSnapshot, input.ReasonCode).Scan(&id)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return model.AccountActionCandidate{}, err
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		res, execErr := tx.ExecContext(ctx, `insert into account_action_candidates (
 			action_type, status, provider, auth_file_name, auth_index, account_snapshot, account_id_snapshot, auth_label,
-			reason, evidence_json, first_seen_at_ms, last_seen_at_ms, hit_count, created_at_ms, updated_at_ms
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+			reason_code, reason, auto_disable_eligible, evidence_json, first_seen_at_ms, last_seen_at_ms, hit_count, created_at_ms, updated_at_ms
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
 			input.ActionType,
 			model.AccountActionStatusPending,
 			nullString(input.Provider),
@@ -76,7 +79,9 @@ func (r *repository) Upsert(ctx context.Context, input model.AccountActionCandid
 			nullString(input.AccountSnapshot),
 			nullString(input.AccountIDSnapshot),
 			nullString(input.AuthLabel),
+			nullString(input.ReasonCode),
 			nullString(input.Reason),
+			boolInt(input.AutoDisableEligible),
 			nullString(input.EvidenceJSON),
 			seenAt,
 			seenAt,
@@ -95,13 +100,15 @@ func (r *repository) Upsert(ctx context.Context, input model.AccountActionCandid
 			provider = coalesce(nullif(?, ''), provider),
 			account_snapshot = coalesce(nullif(?, ''), account_snapshot),
 			auth_label = coalesce(nullif(?, ''), auth_label),
+			reason_code = coalesce(nullif(?, ''), reason_code),
 			reason = coalesce(nullif(?, ''), reason),
+			auto_disable_eligible = max(auto_disable_eligible, ?),
 			evidence_json = coalesce(nullif(?, ''), evidence_json),
 			last_error = null,
 			last_seen_at_ms = ?,
 			hit_count = hit_count + 1,
 			updated_at_ms = ?
-			where id = ?`, input.Provider, input.AccountSnapshot, input.AuthLabel, input.Reason, input.EvidenceJSON, seenAt, now, id)
+			where id = ?`, input.Provider, input.AccountSnapshot, input.AuthLabel, input.ReasonCode, input.Reason, boolInt(input.AutoDisableEligible), input.EvidenceJSON, seenAt, now, id)
 		if err != nil {
 			return model.AccountActionCandidate{}, err
 		}
@@ -213,6 +220,27 @@ func (r *repository) RecordFailure(ctx context.Context, id int64, reason string)
 	return err
 }
 
+func (r *repository) MarkAutoDisabled(ctx context.Context, id int64, disabledAtMS int64) error {
+	if id <= 0 {
+		return errors.New("candidate id is required")
+	}
+	if disabledAtMS <= 0 {
+		disabledAtMS = time.Now().UnixMilli()
+	}
+	res, err := r.db.ExecContext(ctx, `update account_action_candidates set auto_disabled_at_ms = ?, last_error = null, updated_at_ms = ? where id = ?`, disabledAtMS, disabledAtMS, id)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (r *repository) mustGet(ctx context.Context, id int64) (model.AccountActionCandidate, error) {
 	item, ok, err := r.Get(ctx, id)
 	if err != nil {
@@ -229,7 +257,7 @@ type queryer interface {
 }
 
 const selectCandidates = `select id, action_type, status, provider, auth_file_name, auth_index, account_snapshot, account_id_snapshot, auth_label,
-	reason, evidence_json, last_error, first_seen_at_ms, last_seen_at_ms, hit_count, created_at_ms, updated_at_ms
+	reason_code, reason, auto_disable_eligible, auto_disabled_at_ms, evidence_json, last_error, first_seen_at_ms, last_seen_at_ms, hit_count, created_at_ms, updated_at_ms
 	from account_action_candidates`
 
 func getByID(ctx context.Context, q queryer, id int64) (model.AccountActionCandidate, error) {
@@ -242,7 +270,9 @@ type rowScanner interface {
 
 func scanCandidate(row rowScanner) (model.AccountActionCandidate, error) {
 	var item model.AccountActionCandidate
-	var provider, authIndex, accountSnapshot, accountIDSnapshot, authLabel, reason, evidenceJSON, lastError sql.NullString
+	var provider, authIndex, accountSnapshot, accountIDSnapshot, authLabel, reasonCode, reason, evidenceJSON, lastError sql.NullString
+	var autoDisableEligible int
+	var autoDisabledAtMS sql.NullInt64
 	if err := row.Scan(
 		&item.ID,
 		&item.ActionType,
@@ -253,7 +283,10 @@ func scanCandidate(row rowScanner) (model.AccountActionCandidate, error) {
 		&accountSnapshot,
 		&accountIDSnapshot,
 		&authLabel,
+		&reasonCode,
 		&reason,
+		&autoDisableEligible,
+		&autoDisabledAtMS,
 		&evidenceJSON,
 		&lastError,
 		&item.FirstSeenAtMS,
@@ -269,7 +302,12 @@ func scanCandidate(row rowScanner) (model.AccountActionCandidate, error) {
 	item.AccountSnapshot = accountSnapshot.String
 	item.AccountIDSnapshot = accountIDSnapshot.String
 	item.AuthLabel = authLabel.String
+	item.ReasonCode = reasonCode.String
 	item.Reason = reason.String
+	item.AutoDisableEligible = autoDisableEligible != 0
+	if autoDisabledAtMS.Valid {
+		item.AutoDisabledAtMS = autoDisabledAtMS.Int64
+	}
 	item.EvidenceJSON = evidenceJSON.String
 	item.LastError = lastError.String
 	if item.EvidenceJSON != "" {
@@ -310,4 +348,11 @@ func nullString(value string) any {
 		return nil
 	}
 	return strings.TrimSpace(value)
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }

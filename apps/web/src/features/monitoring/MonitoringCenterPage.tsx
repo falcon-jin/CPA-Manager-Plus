@@ -187,6 +187,9 @@ export function MonitoringCenterPage() {
   const [autoRefreshMs, setAutoRefreshMs] = useState(
     () => initialMonitoringCenterUiState.current.autoRefreshMs
   );
+  const [documentVisible, setDocumentVisible] = useState(
+    () => typeof document === 'undefined' || document.visibilityState !== 'hidden'
+  );
   const [headerSnapshots, setHeaderSnapshots] = useState<UsageHeaderSnapshot[]>([]);
   const [selectedAccount, setSelectedAccount] = useState(
     () => initialMonitoringCenterUiState.current.selectedAccount
@@ -371,6 +374,7 @@ export function MonitoringCenterPage() {
     filteredRows,
     eventsHasMore,
     eventsLoadingMore,
+    eventsRetentionLimited,
     eventsTotalCount,
     eventsLoadedCount,
     lastRefreshedAt: monitoringLastRefreshedAt,
@@ -425,11 +429,20 @@ export function MonitoringCenterPage() {
   }, [setCurrentAccountPage]);
 
   useHeaderRefresh(refreshAll, isCurrentLayer);
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const updateVisibility = () => setDocumentVisible(document.visibilityState !== 'hidden');
+    document.addEventListener('visibilitychange', updateVisibility);
+    return () => document.removeEventListener('visibilitychange', updateVisibility);
+  }, []);
   useInterval(
     () => {
       void refreshAll().catch(() => {});
     },
-    isCurrentLayer && connectionStatus === 'connected' && Number(autoRefreshMs) > 0
+    isCurrentLayer &&
+      documentVisible &&
+      connectionStatus === 'connected' &&
+      Number(autoRefreshMs) > 0
       ? Number(autoRefreshMs)
       : null
   );
@@ -560,6 +573,7 @@ export function MonitoringCenterPage() {
           geminiApiKeys: config?.geminiApiKeys || [],
           claudeApiKeys: config?.claudeApiKeys || [],
           codexApiKeys: config?.codexApiKeys || [],
+          xaiApiKeys: config?.xaiApiKeys || [],
           vertexApiKeys: config?.vertexApiKeys || [],
           openaiCompatibility: config?.openaiCompatibility || [],
         })
@@ -708,8 +722,7 @@ export function MonitoringCenterPage() {
             )
           )
           .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
-        const nextState =
-          mergeObservedAccountQuotaState(state, targets, observedEntries) ?? state;
+        const nextState = mergeObservedAccountQuotaState(state, targets, observedEntries) ?? state;
         changed = changed || nextState !== state;
         return [account, nextState] as const;
       })
@@ -1478,6 +1491,7 @@ export function MonitoringCenterPage() {
               failedOnlyActive={failedOnlyActive}
               eventsHasMore={eventsHasMore}
               eventsLoadingMore={eventsLoadingMore}
+              eventsRetentionLimited={eventsRetentionLimited}
               eventsTotalCount={eventsTotalCount}
               eventsLoadedCount={eventsLoadedCount}
               overallLoading={overallLoading}

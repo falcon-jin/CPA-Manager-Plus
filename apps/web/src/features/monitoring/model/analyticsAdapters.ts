@@ -399,6 +399,7 @@ export const buildSummaryFromAnalytics = (
   cachedTokens: summary.cached_tokens,
   cacheReadTokens: summary.cache_read_tokens ?? 0,
   cacheCreationTokens: summary.cache_creation_tokens ?? 0,
+  cacheHitRate: summary.cache_hit_rate,
   totalTokens: summary.total_tokens,
   totalCost: summary.total_cost,
   averageLatencyMs: summary.average_latency_ms,
@@ -702,6 +703,7 @@ export const buildApiKeyRowsFromAnalytics = (
         apiKeyHash,
         apiKeyLabel: isUnknown ? '' : apiKeyLabel,
         apiKeyMasked: isUnknown ? '' : apiKeyMasked,
+        apiKeyCopyValue: isUnknown ? undefined : apiKeyDisplay?.copyValue,
         isUnknown,
         authLabels: uniqueReadableValues([
           ...authMetas.map((meta) => meta.label),

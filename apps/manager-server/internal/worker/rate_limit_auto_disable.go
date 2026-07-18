@@ -24,12 +24,18 @@ const (
 	quotaAutoDisableDefaultTick   = 15 * time.Second
 	quotaAutoDisableActionTimeout = 30 * time.Second
 	quotaCooldownDueLimit         = 100
+	xaiFreeUsageCooldown          = 24 * time.Hour
+	quotaReasonCodexUsageLimit    = "codex_usage_limit_reached"
+	quotaReasonXAIFreeUsage       = "xai_free_usage_exhausted"
+	quotaWindowRolling24H         = "rolling_24h"
+	quotaWindowUnknown            = "unknown"
 )
 
 // RateLimitAutoDisableWorker reacts to request-monitoring events in near real time.
-// It only handles Codex 429 usage_limit_reached responses that include an explicit
-// reset time. Disables are persisted with CPAMP ownership, so recovery never relies
-// solely on in-memory timers and never re-enables pre-existing/manual disables.
+// It handles strict provider quota signals with a known recovery time: Codex 429
+// usage_limit_reached responses and xAI free-usage-exhausted responses. Disables
+// are persisted with CPAMP ownership, so recovery never relies solely on in-memory
+// timers and never re-enables pre-existing/manual disables.
 type RateLimitAutoDisableWorker struct {
 	store  *store.Store
 	client *http.Client
@@ -49,9 +55,12 @@ type quotaAutoDisableCandidate struct {
 	AuthIndex      string
 	DisplayAccount string
 	Provider       string
+	ReasonCode     string
+	WindowKind     string
 	ResetAt        time.Time
 	EventHash      string
 	Reason         string
+	Owner          string
 }
 
 type authFile = cpaauthfiles.File
@@ -193,19 +202,22 @@ func (w *RateLimitAutoDisableWorker) handleCandidate(ctx context.Context, candid
 	}
 
 	resolvedAuthIndex := firstNonEmpty(candidate.AuthIndex, current.AuthIndex)
-	log.Printf("[quota-auto-disable] Codex usage limit reached for auth file %q account=%q provider=%q resetAt=%s, disabling", candidate.FileName, candidate.DisplayAccount, candidate.Provider, candidate.ResetAt.Format(time.RFC3339))
+	log.Printf("[quota-auto-disable] quota limit reached for auth file %q account=%q provider=%q resetAt=%s, disabling", candidate.FileName, candidate.DisplayAccount, candidate.Provider, candidate.ResetAt.Format(time.RFC3339))
 	if err := w.patchAuthFile(ctx, candidate.BaseURL, candidate.ManagementKey, candidate.FileName, resolvedAuthIndex, true); err != nil {
 		log.Printf("[quota-auto-disable] failed to disable auth file %q: %v", candidate.FileName, err)
 		return
 	}
 
+	owner := firstNonEmpty(candidate.Owner, model.QuotaCooldownOwnerUsage429)
 	_, err = w.store.UpsertQuotaCooldown(ctx, store.QuotaCooldownUpsert{
 		AuthFileName:     candidate.FileName,
 		AuthIndex:        resolvedAuthIndex,
 		AccountSnapshot:  candidate.DisplayAccount,
 		Provider:         strings.ToLower(strings.TrimSpace(candidate.Provider)),
+		ReasonCode:       candidate.ReasonCode,
+		WindowKind:       candidate.WindowKind,
 		RecoverAtMS:      candidate.ResetAt.UnixMilli(),
-		Owner:            model.QuotaCooldownOwnerUsage429,
+		Owner:            owner,
 		EventHash:        candidate.EventHash,
 		PreDisabledState: preDisabled,
 		DisabledAtMS:     now.UnixMilli(),
@@ -226,9 +238,10 @@ func (w *RateLimitAutoDisableWorker) extendExistingCooldown(ctx context.Context,
 		log.Printf("[quota-auto-disable] failed to check active cooldowns for auth file %q: %v", candidate.FileName, err)
 		return false
 	}
+	owner := firstNonEmpty(candidate.Owner, model.QuotaCooldownOwnerUsage429)
 	var existing store.QuotaCooldown
 	for _, item := range active {
-		if item.AuthFileName == candidate.FileName && item.Owner == model.QuotaCooldownOwnerUsage429 {
+		if item.AuthFileName == candidate.FileName && item.Owner == owner {
 			existing = item
 			break
 		}
@@ -246,8 +259,10 @@ func (w *RateLimitAutoDisableWorker) extendExistingCooldown(ctx context.Context,
 		AuthIndex:        firstNonEmpty(candidate.AuthIndex, existing.AuthIndex, current.AuthIndex),
 		AccountSnapshot:  firstNonEmpty(candidate.DisplayAccount, existing.AccountSnapshot),
 		Provider:         strings.ToLower(strings.TrimSpace(firstNonEmpty(candidate.Provider, existing.Provider))),
+		ReasonCode:       firstNonEmpty(candidate.ReasonCode, existing.ReasonCode),
+		WindowKind:       firstNonEmpty(candidate.WindowKind, existing.WindowKind),
 		RecoverAtMS:      candidate.ResetAt.UnixMilli(),
-		Owner:            model.QuotaCooldownOwnerUsage429,
+		Owner:            owner,
 		EventHash:        candidate.EventHash,
 		PreDisabledState: false,
 		DisabledAtMS:     existing.DisabledAtMS,
@@ -279,7 +294,7 @@ func (w *RateLimitAutoDisableWorker) enableDue(ctx context.Context, now time.Tim
 }
 
 func (w *RateLimitAutoDisableWorker) recoverCooldown(ctx context.Context, baseURL string, managementKey string, item store.QuotaCooldown, now time.Time) {
-	if item.Owner != model.QuotaCooldownOwnerUsage429 {
+	if item.Owner != model.QuotaCooldownOwnerUsage429 && item.Owner != model.QuotaCooldownOwnerXAIFreeUsage {
 		reason := "unknown owner"
 		_ = w.store.MarkQuotaCooldownSkipped(ctx, item.ID, reason)
 		log.Printf("[quota-auto-disable] skip cooldown recovery id=%d authFile=%q reason=%s owner=%q", item.ID, item.AuthFileName, reason, item.Owner)
@@ -318,10 +333,31 @@ func (w *RateLimitAutoDisableWorker) recoverCooldown(ctx context.Context, baseUR
 		log.Printf("[quota-auto-disable] enabled auth file %q but failed to mark cooldown recovered: %v", item.AuthFileName, err)
 		return
 	}
-	log.Printf("[quota-auto-disable] enabled auth file %q after Codex usage-limit reset", item.AuthFileName)
+	log.Printf("[quota-auto-disable] enabled auth file %q after quota cooldown", item.AuthFileName)
 }
 
 func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, managementKey string, now time.Time) (quotaAutoDisableCandidate, bool) {
+	if resetAt, ok := xaiFreeUsageResetTimeFromEvent(event, now); ok {
+		fileName := strings.TrimSpace(event.AuthFileSnapshot)
+		if fileName == "" {
+			log.Printf("[quota-auto-disable] xAI free-usage event %q has no auth file snapshot, skip auto disable", event.EventHash)
+			return quotaAutoDisableCandidate{}, false
+		}
+		return quotaAutoDisableCandidate{
+			BaseURL:        baseURL,
+			ManagementKey:  managementKey,
+			FileName:       fileName,
+			AuthIndex:      strings.TrimSpace(event.AuthIndex),
+			DisplayAccount: firstNonEmpty(event.AccountSnapshot, event.AuthLabelSnapshot, event.Source, fileName),
+			Provider:       "xai",
+			ReasonCode:     quotaReasonXAIFreeUsage,
+			WindowKind:     quotaWindowRolling24H,
+			ResetAt:        resetAt,
+			EventHash:      event.EventHash,
+			Reason:         event.FailSummary,
+			Owner:          model.QuotaCooldownOwnerXAIFreeUsage,
+		}, true
+	}
 	resetAt, ok := codexUsageLimitResetTimeFromEvent(event, now)
 	if !ok {
 		return quotaAutoDisableCandidate{}, false
@@ -338,10 +374,155 @@ func quotaAutoDisableCandidateFromEvent(event usage.Event, baseURL string, manag
 		AuthIndex:      strings.TrimSpace(event.AuthIndex),
 		DisplayAccount: firstNonEmpty(event.AccountSnapshot, event.AuthLabelSnapshot, event.Source, fileName),
 		Provider:       "codex",
+		ReasonCode:     quotaReasonCodexUsageLimit,
+		WindowKind:     codexQuotaWindowKindFromEvent(event),
 		ResetAt:        resetAt,
 		EventHash:      event.EventHash,
 		Reason:         event.FailSummary,
+		Owner:          model.QuotaCooldownOwnerUsage429,
 	}, true
+}
+
+func xaiFreeUsageResetTimeFromEvent(event usage.Event, now time.Time) (time.Time, bool) {
+	if !event.Failed || (event.FailStatusCode != http.StatusPaymentRequired && event.FailStatusCode != http.StatusTooManyRequests) {
+		return time.Time{}, false
+	}
+	provider := normalizeQuotaProvider(firstNonEmpty(event.Provider, event.AuthProviderSnapshot))
+	if provider != "xai" {
+		return time.Time{}, false
+	}
+	texts := []string{event.FailBody, event.RawJSON, event.FailSummary}
+	matched := false
+	for _, text := range texts {
+		forEachJSONValue(text, func(decoded any) bool {
+			if xaiFreeUsageCode(decoded) {
+				matched = true
+				return true
+			}
+			return false
+		})
+		if matched {
+			break
+		}
+	}
+	if matched {
+		if resetAt, ok := xaiFreeUsageResetTimeFromHeaders(event, now); ok {
+			return resetAt, true
+		}
+		for _, text := range texts {
+			if resetAt, ok := xaiFreeUsageResetTimeFromJSONText(text, now); ok {
+				return resetAt, true
+			}
+		}
+		return now.Add(xaiFreeUsageCooldown), true
+	}
+	return time.Time{}, false
+}
+
+func xaiFreeUsageResetTimeFromHeaders(event usage.Event, now time.Time) (time.Time, bool) {
+	metadata := event.ResponseMetadata
+	if metadata == nil && event.ResponseMetadataJSON != "" {
+		metadata = usage.ResponseHeaderMetadataFromJSON(event.ResponseMetadataJSON)
+	}
+	if metadata == nil || metadata.Errors == nil || metadata.Errors.RetryAfterRecoverAtMS <= 0 {
+		return time.Time{}, false
+	}
+	resetAt := time.UnixMilli(metadata.Errors.RetryAfterRecoverAtMS)
+	return resetAt, resetAt.After(now)
+}
+
+func xaiFreeUsageResetTimeFromJSONText(text string, now time.Time) (time.Time, bool) {
+	var resetAt time.Time
+	found := false
+	forEachJSONValue(text, func(decoded any) bool {
+		if at, ok := xaiExplicitResetTime(decoded, now); ok {
+			resetAt = at
+			found = true
+			return true
+		}
+		return false
+	})
+	return resetAt, found && resetAt.After(now)
+}
+
+func xaiExplicitResetTime(value any, now time.Time) (time.Time, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, key := range []string{
+			"reset_at",
+			"resetAt",
+			"resets_at",
+			"resetsAt",
+			"period_end",
+			"periodEnd",
+			"billing_period_end",
+			"billingPeriodEnd",
+		} {
+			if raw, ok := typed[key]; ok {
+				if resetAt, ok := parseResetValue(raw, now, false); ok {
+					return resetAt, true
+				}
+			}
+		}
+		for _, key := range []string{
+			"retry_after",
+			"retryAfter",
+			"retry_after_seconds",
+			"retryAfterSeconds",
+			"reset_after_seconds",
+			"resetAfterSeconds",
+		} {
+			if raw, ok := typed[key]; ok {
+				if resetAt, ok := parseResetValue(raw, now, true); ok {
+					return resetAt, true
+				}
+			}
+		}
+		for _, child := range typed {
+			if resetAt, ok := xaiExplicitResetTime(child, now); ok {
+				return resetAt, true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if resetAt, ok := xaiExplicitResetTime(child, now); ok {
+				return resetAt, true
+			}
+		}
+	}
+	return time.Time{}, false
+}
+
+func xaiFreeUsageCode(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(typed["code"])), "subscription:free-usage-exhausted") {
+			return true
+		}
+		for _, child := range typed {
+			if xaiFreeUsageCode(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if xaiFreeUsageCode(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func normalizeQuotaProvider(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	switch normalized {
+	case "x-ai", "grok":
+		return "xai"
+	default:
+		return normalized
+	}
 }
 
 func codexUsageLimitResetTimeFromEvent(event usage.Event, now time.Time) (time.Time, bool) {
@@ -442,8 +623,48 @@ func codexQuotaReachedResetAtMS(quota *usage.HeaderQuotaMetadata) int64 {
 		return quotaWindowResetAtMS(quota.Primary)
 	case "secondary":
 		return quotaWindowResetAtMS(quota.Secondary)
+	}
+	if strings.TrimSpace(quota.ReachedWindowKind) != "" && quota.RecoverAtMS > 0 {
+		return quota.RecoverAtMS
+	}
+	return codexQuotaFullWindowResetAtMS(quota)
+}
+
+func codexQuotaWindowKindFromEvent(event usage.Event) string {
+	metadata := event.ResponseMetadata
+	if metadata == nil && event.ResponseMetadataJSON != "" {
+		metadata = usage.ResponseHeaderMetadataFromJSON(event.ResponseMetadataJSON)
+	}
+	if metadata == nil || metadata.Quota == nil {
+		return quotaWindowUnknown
+	}
+	quota := metadata.Quota
+	if kind := strings.TrimSpace(quota.ReachedWindowKind); kind != "" {
+		return kind
+	}
+	switch strings.ToLower(strings.TrimSpace(quota.RateLimitReachedType)) {
+	case "primary":
+		return quotaWindowKind(quota.Primary)
+	case "secondary":
+		return quotaWindowKind(quota.Secondary)
+	}
+	return quotaWindowUnknown
+}
+
+func quotaWindowKind(window *usage.HeaderQuotaWindow) string {
+	if window == nil || window.WindowMinutes == nil {
+		return quotaWindowUnknown
+	}
+	minutes := *window.WindowMinutes
+	switch {
+	case minutes >= 299 && minutes <= 301:
+		return "five_hour"
+	case minutes >= 10_079 && minutes <= 10_081:
+		return "weekly"
+	case minutes >= 40_319 && minutes <= 44_641:
+		return "monthly"
 	default:
-		return codexQuotaFullWindowResetAtMS(quota)
+		return quotaWindowUnknown
 	}
 }
 

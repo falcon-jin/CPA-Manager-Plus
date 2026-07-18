@@ -1,8 +1,15 @@
-# Dashboard
+---
+title: CPA Management And Observability Dashboard
+description: Use the CPA Manager Plus dashboard to inspect CPA/Manager Server connectivity, requests, success rate, cost, tokens, collector state, providers, and health alerts.
+---
+
+# CPA Management And Observability Dashboard
 
 The dashboard is the first page to check after opening CPAMP. It does not replace request details. It answers the first operational questions: is the runtime connected, are requests arriving, did failures increase, did cost jump, and are there account or runtime warnings.
 
 If you already know which account or request is involved, go directly to [Monitoring](./monitoring.md), [Auth Files](./auth-files.md), or [Codex Inspection](./codex-inspection.md).
+
+Open the [Dashboard Demo](https://seakee.github.io/CPA-Manager-Plus/#/demo) to inspect fictional request, cost, failure, and provider state generated for the current date.
 
 ## What To Check First
 

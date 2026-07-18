@@ -10,6 +10,7 @@ import {
   type CodexInspectionStoredLogEntry,
 } from '@/features/monitoring/codexInspection';
 import type { CodexInspectionResult } from '@/services/api/usageService';
+import { formatXaiProbeIssue } from '@/utils/quota/xaiPresentation';
 
 export type RunStatus = 'idle' | 'running' | 'paused' | 'success' | 'error';
 
@@ -32,8 +33,11 @@ export type ServerCodexInspectionActionStatus =
   | 'skipped'
   | 'needs_review';
 
-export const CODEX_INSPECTION_PROBLEM_ACTION_MODES: readonly CodexInspectionProblemActionMode[] =
-  ['none', 'disable', 'delete'];
+export const CODEX_INSPECTION_PROBLEM_ACTION_MODES: readonly CodexInspectionProblemActionMode[] = [
+  'none',
+  'disable',
+  'delete',
+];
 
 export type CodexInspectionSummaryIcon =
   | 'probe'
@@ -43,13 +47,7 @@ export type CodexInspectionSummaryIcon =
   | 'enable'
   | 'reauth';
 
-export type CodexInspectionSummaryAccent =
-  | 'blue'
-  | 'cyan'
-  | 'red'
-  | 'amber'
-  | 'green'
-  | 'violet';
+export type CodexInspectionSummaryAccent = 'blue' | 'cyan' | 'red' | 'amber' | 'green' | 'violet';
 
 export type SummaryCard = {
   key: string;
@@ -80,11 +78,12 @@ export type InspectionSettingsDraft = {
   usedPercentThreshold: string;
   sampleSize: string;
   autoActionMode: CodexInspectionAutoActionMode;
+  autoRecoverEnabled: boolean;
 };
 
 export type InspectionSettingsDraftField = Exclude<
   keyof InspectionSettingsDraft,
-  'autoActionMode'
+  'autoActionMode' | 'autoRecoverEnabled'
 >;
 
 export const ACTION_FILTERS: ActionFilter[] = [
@@ -121,6 +120,7 @@ export const toSettingsDraft = (
   usedPercentThreshold: String(settings.usedPercentThreshold),
   sampleSize: String(settings.sampleSize),
   autoActionMode: settings.autoActionMode,
+  autoRecoverEnabled: settings.autoRecoverEnabled,
 });
 
 export const formatActionLabel = (action: CodexInspectionAction, t: TFunction) => {
@@ -137,6 +137,25 @@ export const formatActionLabel = (action: CodexInspectionAction, t: TFunction) =
     default:
       return t('monitoring.codex_inspection_action_keep');
   }
+};
+
+const isCodexInspectionActionValue = (value: unknown): value is CodexInspectionAction =>
+  value === 'delete' ||
+  value === 'disable' ||
+  value === 'enable' ||
+  value === 'reauth' ||
+  value === 'keep';
+
+export const formatServerCodexInspectionLogDetail = (detail: unknown, t: TFunction): string => {
+  if (typeof detail === 'string') return detail;
+  if (detail === null || detail === undefined) return '';
+  if (typeof detail === 'object' && !Array.isArray(detail)) {
+    const record = detail as Record<string, unknown>;
+    if (isCodexInspectionActionValue(record.action)) {
+      return JSON.stringify({ ...record, action: formatActionLabel(record.action, t) });
+    }
+  }
+  return JSON.stringify(detail) ?? String(detail);
 };
 
 export const isServerCodexInspectionAction = (
@@ -169,6 +188,14 @@ export const isActionableServerCodexInspectionResult = (
     isServerCodexInspectionAction(item.action) &&
     (status === 'pending' || status === 'failed')
   );
+};
+
+export const isPendingServerReauthResult = (
+  item: Pick<CodexInspectionResult, 'action' | 'actionStatus' | 'executedAction'>
+) => {
+  if (item.action !== 'reauth' || item.executedAction === 'delete') return false;
+  const status = normalizeServerCodexInspectionActionStatus(item);
+  return status === 'none' || status === 'pending' || status === 'failed';
 };
 
 export const getCanonicalServerCodexInspectionActionIds = (
@@ -207,7 +234,10 @@ export const getMixedServerCodexInspectionActionIds = (
   results: Array<Pick<CodexInspectionResult, 'id' | 'fileName' | 'action'>>
 ) => {
   const mixedIds = new Set<number>();
-  const groups = new Map<string, Array<Pick<CodexInspectionResult, 'id' | 'fileName' | 'action'>>>();
+  const groups = new Map<
+    string,
+    Array<Pick<CodexInspectionResult, 'id' | 'fileName' | 'action'>>
+  >();
   for (const item of results) {
     const fileName = item.fileName.trim();
     if (!isServerCodexInspectionAction(item.action) || !fileName) {
@@ -269,8 +299,9 @@ export const normalizeActionFilter = (value: unknown): ActionFilter => {
   return 'all';
 };
 
-export const isNeedsHandling = (item: Pick<CodexInspectionResultItem, 'action' | 'statusCode'>) =>
-  item.action !== 'keep' || item.statusCode === 401;
+export const isNeedsHandling = (
+  item: Pick<CodexInspectionResultItem, 'action' | 'statusCode' | 'actionHandled'>
+) => !item.actionHandled && (item.action !== 'keep' || item.statusCode === 401);
 
 export const countHandlingStates = (items: CodexInspectionResultItem[]) => {
   const pending = items.filter(isNeedsHandling).length;
@@ -293,10 +324,7 @@ export const getActionFilterCounts = (items: CodexInspectionResultItem[]) => {
   } satisfies Record<ActionFilter, number>;
 };
 
-export const filterByHandling = (
-  items: CodexInspectionResultItem[],
-  filter: HandlingFilter
-) => {
+export const filterByHandling = (items: CodexInspectionResultItem[], filter: HandlingFilter) => {
   if (filter === 'pending') return items.filter(isNeedsHandling);
   if (filter === 'no_action') return items.filter((item) => !isNeedsHandling(item));
   return items;
@@ -361,14 +389,39 @@ export const filterInspectionResults = (
 ) => filterByAction(filterByHandling(items, handlingFilter), actionFilter);
 
 export const summarizeInspectionError = (
-  item: Pick<CodexInspectionResultItem, 'action' | 'statusCode' | 'errorKind' | 'error' | 'errorDetail'>,
+  item: Pick<
+    CodexInspectionResultItem,
+    'provider' | 'action' | 'statusCode' | 'errorKind' | 'error' | 'errorDetail'
+  >,
   t: TFunction
 ) => {
   if (item.action === 'reauth' || item.statusCode === 401) {
     return t('monitoring.codex_inspection_error_summary_reauth');
   }
+  if (
+    item.errorKind === 'billing_healthy' ||
+    item.errorKind === 'inference_healthy' ||
+    item.errorKind === 'official_api_healthy'
+  ) {
+    return '';
+  }
   if (item.errorKind) {
-    return t('monitoring.codex_inspection_error_summary_kind', { kind: item.errorKind });
+    const xaiIssue = item.provider === 'xai' ? formatXaiProbeIssue(item.errorKind, t) : null;
+    if (xaiIssue) return xaiIssue;
+    switch (item.errorKind) {
+      case 'http_status':
+        return t('monitoring.codex_inspection_error_summary_http_status');
+      case 'missing_status':
+        return t('monitoring.codex_inspection_error_summary_missing_status');
+      case 'request_error':
+        return t('monitoring.codex_inspection_error_summary_request_error');
+      case 'missing_auth_index':
+        return t('xai_quota.diagnostic_missing_auth_index');
+      case 'quota':
+        return t('monitoring.codex_inspection_error_summary_quota');
+      default:
+        return t('monitoring.codex_inspection_error_summary_response');
+    }
   }
   const raw = item.error || item.errorDetail;
   if (!raw) return '';
@@ -402,8 +455,9 @@ export const buildCodexInspectionPaginationState = <T>(
 };
 
 export const isCodexInspectionAutoExecutionEnabled = (
-  mode: CodexInspectionAutoActionMode
-) => mode !== 'none';
+  mode: CodexInspectionAutoActionMode,
+  autoRecoverEnabled = false
+) => mode === 'disable' || mode === 'delete' || autoRecoverEnabled;
 
 export const getCodexInspectionProblemActionMode = (
   mode: CodexInspectionAutoActionMode
@@ -423,10 +477,7 @@ export const composeCodexInspectionAutoActionMode = (
   return 'enable';
 };
 
-export const formatAutoActionModeLabel = (
-  mode: CodexInspectionAutoActionMode,
-  t: TFunction
-) => {
+export const formatAutoActionModeLabel = (mode: CodexInspectionAutoActionMode, t: TFunction) => {
   switch (mode) {
     case 'delete':
       return t('monitoring.codex_inspection_settings_auto_action_mode_delete');
@@ -456,11 +507,10 @@ export type SharedInspectionConfigDraft = {
   [K in SharedInspectionConfigField]: string;
 } & {
   autoActionMode: CodexInspectionAutoActionMode | string;
+  autoRecoverEnabled: boolean;
 };
 
-export type InspectionConfigFieldErrors = Partial<
-  Record<SharedInspectionConfigField, string>
->;
+export type InspectionConfigFieldErrors = Partial<Record<SharedInspectionConfigField, string>>;
 
 export type ValidatedInspectionConfigValues = {
   targetType: string;
@@ -472,6 +522,7 @@ export type ValidatedInspectionConfigValues = {
   usedPercentThreshold: number;
   sampleSize: number;
   autoActionMode: CodexInspectionAutoActionMode;
+  autoRecoverEnabled: boolean;
 };
 
 type InspectionConfigDraftValidation =
@@ -500,7 +551,7 @@ export const validateInspectionConfigFields = (
 ): InspectionConfigFieldErrors => {
   const errors: InspectionConfigFieldErrors = {};
 
-  if (!draft.targetType.trim()) {
+  if (!['codex', 'xai'].includes(draft.targetType.trim().toLowerCase())) {
     errors.targetType = t('monitoring.codex_inspection_settings_target_type_required');
   }
 
@@ -555,6 +606,7 @@ export const validateInspectionConfigDraft = (
       usedPercentThreshold: Number(draft.usedPercentThreshold.trim()),
       sampleSize: Number(draft.sampleSize.trim()),
       autoActionMode: normalizeInspectionAutoActionMode(draft.autoActionMode),
+      autoRecoverEnabled: draft.autoRecoverEnabled === true,
     },
   };
 };
@@ -589,6 +641,7 @@ type ConfigOverviewSettings = Pick<
   'targetType' | 'workers' | 'timeout' | 'usedPercentThreshold' | 'sampleSize'
 > & {
   autoActionMode: CodexInspectionAutoActionMode | string;
+  autoRecoverEnabled: boolean;
 };
 
 type BuildConfigOverviewItemsOptions =
@@ -651,6 +704,13 @@ export const buildConfigOverviewItems = (
         tone: getAutoActionTone(autoActionMode),
         field: 'autoActionMode',
       },
+      {
+        key: 'recover',
+        label: t('monitoring.codex_inspection_settings_auto_recover_label'),
+        value: settings.autoRecoverEnabled ? t('common.enabled') : t('common.disabled'),
+        tone: settings.autoRecoverEnabled ? 'good' : 'idle',
+        field: 'autoActionMode',
+      },
     ];
   }
 
@@ -672,6 +732,13 @@ export const buildConfigOverviewItems = (
       label: t('monitoring.codex_inspection_settings_auto_action_mode_label'),
       value: autoActionLabel,
       tone: getAutoActionTone(autoActionMode),
+      field: 'autoActionMode',
+    },
+    {
+      key: 'recover',
+      label: t('monitoring.codex_inspection_settings_auto_recover_label'),
+      value: settings.autoRecoverEnabled ? t('common.enabled') : t('common.disabled'),
+      tone: settings.autoRecoverEnabled ? 'good' : 'idle',
       field: 'autoActionMode',
     },
     {

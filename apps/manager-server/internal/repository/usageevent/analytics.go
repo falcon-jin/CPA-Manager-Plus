@@ -5,15 +5,30 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
 
-const (
-	compatCachedExpr  = "max(max(cached_tokens, cache_tokens) - max(cache_read_tokens, 0) - max(cache_creation_tokens, 0), 0)"
-	compatCachedFExpr = "max(max(f.cached_tokens, f.cache_tokens) - max(f.cache_read_tokens, 0) - max(f.cache_creation_tokens, 0), 0)"
+var (
+	longContextThresholdSQL = strconv.FormatInt(usage.LongContextInputTokenThreshold, 10)
+	compatCachedExpr        = "max(max(cached_tokens, cache_tokens) - max(cache_read_tokens, 0) - max(cache_creation_tokens, 0), 0)"
+	compatCachedFExpr       = "max(max(f.cached_tokens, f.cache_tokens) - max(f.cache_read_tokens, 0) - max(f.cache_creation_tokens, 0), 0)"
+	normalizedInputExpr     = "coalesce(normalized_total_input_tokens, input_tokens)"
+	normalizedInputFExpr    = "coalesce(f.normalized_total_input_tokens, f.input_tokens)"
+	longInputExpr           = "case when " + normalizedInputExpr + " > " + longContextThresholdSQL + " then " + normalizedInputExpr + " else 0 end"
+	longOutputExpr          = "case when " + normalizedInputExpr + " > " + longContextThresholdSQL + " then output_tokens else 0 end"
+	longCachedExpr          = "case when " + normalizedInputExpr + " > " + longContextThresholdSQL + " then " + compatCachedExpr + " else 0 end"
+	longCacheReadExpr       = "case when " + normalizedInputExpr + " > " + longContextThresholdSQL + " then cache_read_tokens else 0 end"
+	longCacheCreationExpr   = "case when " + normalizedInputExpr + " > " + longContextThresholdSQL + " then cache_creation_tokens else 0 end"
+	longInputFExpr          = "case when " + normalizedInputFExpr + " > " + longContextThresholdSQL + " then " + normalizedInputFExpr + " else 0 end"
+	longOutputFExpr         = "case when " + normalizedInputFExpr + " > " + longContextThresholdSQL + " then f.output_tokens else 0 end"
+	longCachedFExpr         = "case when " + normalizedInputFExpr + " > " + longContextThresholdSQL + " then " + compatCachedFExpr + " else 0 end"
+	longCacheReadFExpr      = "case when " + normalizedInputFExpr + " > " + longContextThresholdSQL + " then f.cache_read_tokens else 0 end"
+	longCacheCreationFExpr  = "case when " + normalizedInputFExpr + " > " + longContextThresholdSQL + " then f.cache_creation_tokens else 0 end"
+	credentialIDExpr        = "coalesce(nullif(auth_file_snapshot, ''), nullif(auth_index, ''), nullif(source_hash, ''), nullif(source, ''), '-')"
 )
 
 type AnalyticsFilter struct {
@@ -24,6 +39,7 @@ type AnalyticsFilter struct {
 	Models           []string
 	Providers        []string
 	Accounts         []string
+	CredentialIDs    []string
 	AuthFiles        []string
 	AuthIndices      []string
 	APIKeyHashes     []string
@@ -89,7 +105,15 @@ type FilterOptionValues struct {
 	HeaderTraceIDs   []string
 }
 
+type FilterSelectorValues struct {
+	Models       []string
+	APIKeyHashes []string
+	Providers    []string
+	AuthFiles    []string
+}
+
 type TimelinePoint struct {
+	usage.LongContextTokens
 	BucketMS            int64
 	Model               string
 	BillingModel        string
@@ -115,6 +139,7 @@ type HourlyPoint struct {
 }
 
 type HeatmapPoint struct {
+	usage.LongContextTokens
 	Weekday             int
 	Hour                int
 	Model               string
@@ -134,6 +159,7 @@ type HeatmapPoint struct {
 }
 
 type ChannelModelStat struct {
+	usage.LongContextTokens
 	AuthIndex            string
 	Source               string
 	AccountSnapshot      string
@@ -169,6 +195,7 @@ type FailureSourceStat struct {
 }
 
 type AccountModelStat struct {
+	usage.LongContextTokens
 	AccountSnapshot      string
 	AuthLabelSnapshot    string
 	AuthProviderSnapshot string
@@ -193,6 +220,7 @@ type AccountModelStat struct {
 }
 
 type CredentialModelStat struct {
+	usage.LongContextTokens
 	ID                    string
 	AuthFileSnapshot      string
 	AuthIndex             string
@@ -220,6 +248,7 @@ type CredentialModelStat struct {
 }
 
 type CredentialTimelinePoint struct {
+	usage.LongContextTokens
 	ID                    string
 	AuthFileSnapshot      string
 	AuthIndex             string
@@ -248,6 +277,7 @@ type CredentialTimelinePoint struct {
 }
 
 type APIKeyModelStat struct {
+	usage.LongContextTokens
 	APIKeyHash           string
 	AccountSnapshot      string
 	AuthLabelSnapshot    string
@@ -372,7 +402,7 @@ func (r *repository) AggregateWithFilter(ctx context.Context, filter AnalyticsFi
 	count(*) as calls,
 	sum(case when failed = 0 then 1 else 0 end),
 	sum(case when failed = 1 then 1 else 0 end),
-	coalesce(sum(input_tokens), 0),
+	coalesce(sum(`+normalizedInputExpr+`), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(reasoning_tokens), 0),
 	coalesce(sum(`+compatCachedExpr+`), 0),
@@ -414,12 +444,17 @@ func (r *repository) ModelStatsWithFilter(ctx context.Context, filter AnalyticsF
 	coalesce(service_tier, '') as service_tier,
 	count(*) as calls,
 	sum(case when failed = 0 then 1 else 0 end) as success,
-	coalesce(sum(input_tokens), 0),
+	coalesce(sum(` + normalizedInputExpr + `), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(reasoning_tokens), 0),
 	coalesce(sum(` + compatCachedExpr + `), 0),
 	coalesce(sum(cache_read_tokens), 0),
 	coalesce(sum(cache_creation_tokens), 0),
+	coalesce(sum(` + longInputExpr + `), 0),
+	coalesce(sum(` + longOutputExpr + `), 0),
+	coalesce(sum(` + longCachedExpr + `), 0),
+	coalesce(sum(` + longCacheReadExpr + `), 0),
+	coalesce(sum(` + longCacheCreationExpr + `), 0),
 	coalesce(sum(total_tokens), 0)
 from usage_events ` + where + `
 group by model, billing_model, coalesce(service_tier, '')
@@ -447,6 +482,11 @@ select
 	coalesce(sum(` + compatCachedFExpr + `), 0),
 	coalesce(sum(f.cache_read_tokens), 0),
 	coalesce(sum(f.cache_creation_tokens), 0),
+	coalesce(sum(` + longInputFExpr + `), 0),
+	coalesce(sum(` + longOutputFExpr + `), 0),
+	coalesce(sum(` + longCachedFExpr + `), 0),
+	coalesce(sum(` + longCacheReadFExpr + `), 0),
+	coalesce(sum(` + longCacheCreationFExpr + `), 0),
 	coalesce(sum(f.total_tokens), 0)
 from filtered f
 join top_models t on t.model = f.model
@@ -475,6 +515,11 @@ order by max(t.model_calls) desc, f.model, calls desc`
 			&stat.CachedTokens,
 			&stat.CacheReadTokens,
 			&stat.CacheCreationTokens,
+			&stat.LongInputTokens,
+			&stat.LongOutputTokens,
+			&stat.LongCachedTokens,
+			&stat.LongCacheReadTokens,
+			&stat.LongCacheCreationTokens,
 			&stat.TotalTokens,
 		); err != nil {
 			return nil, err
@@ -484,26 +529,15 @@ order by max(t.model_calls) desc, f.model, calls desc`
 	return stats, rows.Err()
 }
 
-func resolveBucketMS(timestampMS int64, granularity string, location *time.Location) int64 {
-	if location == nil {
-		location = time.UTC
-	}
-	tm := time.UnixMilli(timestampMS).In(location)
-	if granularity == "day" {
-		return time.Date(tm.Year(), tm.Month(), tm.Day(), 0, 0, 0, 0, location).UnixMilli()
-	}
-	return time.Date(tm.Year(), tm.Month(), tm.Day(), tm.Hour(), 0, 0, 0, location).UnixMilli()
-}
-
 func (r *repository) TimelineWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]TimelinePoint, error) {
 	where, args := analyticsWhere(filter)
 	query := fmt.Sprintf(`select
 	timestamp_ms,
 	model,
 	coalesce(nullif(resolved_model, ''), model) as billing_model,
-	coalesce(service_tier, '') as service_tier,
-	failed,
-	input_tokens,
+		coalesce(service_tier, '') as service_tier,
+		failed,
+		`+normalizedInputExpr+`,
 	output_tokens,
 	reasoning_tokens,
 	`+compatCachedExpr+`,
@@ -559,7 +593,7 @@ order by timestamp_ms, model`, where)
 			return nil, err
 		}
 		mapKey := key{
-			bucketMS:     resolveBucketMS(timestampMS, granularity, location),
+			bucketMS:     usage.AnalyticsBucketMS(timestampMS, granularity, location),
 			model:        model,
 			billingModel: billingModel,
 			serviceTier:  serviceTier,
@@ -588,6 +622,7 @@ order by timestamp_ms, model`, where)
 		point.CachedTokens += cachedTokens
 		point.CacheReadTokens += cacheReadTokens
 		point.CacheCreationTokens += cacheCreationTokens
+		point.AddIfLongContext(inputTokens, outputTokens, cachedTokens, cacheReadTokens, cacheCreationTokens)
 		if latency.Valid && latency.Float64 > 0 {
 			point.AvgLatencyMS.Float64 += latency.Float64
 			point.LatencySamples += 1
@@ -612,8 +647,8 @@ func (r *repository) LatencyPercentilesWithFilter(ctx context.Context, filter An
 	where, args := analyticsWhere(filter)
 	query := fmt.Sprintf(`select
 	timestamp_ms,
-	latency_ms,
-	ttft_ms
+	coalesce(latency_ms, 0),
+	coalesce(ttft_ms, 0)
 from usage_events %s
 and (latency_ms > 0 or ttft_ms > 0)
 order by timestamp_ms`, where)
@@ -623,87 +658,95 @@ order by timestamp_ms`, where)
 	}
 	defer rows.Close()
 
-	type samples struct {
-		latencies []float64
-		ttfts     []float64
+	result := make([]LatencyPercentiles, 0)
+	var currentBucketMS int64
+	hasCurrentBucket := false
+	latencies := make([]float64, 0)
+	ttfts := make([]float64, 0)
+	flushBucket := func() {
+		if !hasCurrentBucket {
+			return
+		}
+		point := LatencyPercentiles{BucketMS: currentBucketMS}
+		if value, ok := percentile95(latencies); ok {
+			point.P95LatencyMS = sql.NullFloat64{Float64: value, Valid: true}
+		}
+		if value, ok := percentile95(ttfts); ok {
+			point.P95TTFTMS = sql.NullFloat64{Float64: value, Valid: true}
+		}
+		result = append(result, point)
+		latencies = latencies[:0]
+		ttfts = ttfts[:0]
 	}
-	grouped := map[int64]*samples{}
-	order := make([]int64, 0)
 	for rows.Next() {
 		var timestampMS int64
-		var latency sql.NullFloat64
-		var ttft sql.NullFloat64
-		if err := rows.Scan(&timestampMS, &latency, &ttft); err != nil {
+		var latencyMS int64
+		var ttftMS int64
+		if err := rows.Scan(&timestampMS, &latencyMS, &ttftMS); err != nil {
 			return nil, err
 		}
-		bucketMS := resolveBucketMS(timestampMS, granularity, location)
-		entry := grouped[bucketMS]
-		if entry == nil {
-			entry = &samples{}
-			grouped[bucketMS] = entry
-			order = append(order, bucketMS)
+		bucketMS := usage.AnalyticsBucketMS(timestampMS, granularity, location)
+		if !hasCurrentBucket || bucketMS != currentBucketMS {
+			flushBucket()
+			currentBucketMS = bucketMS
+			hasCurrentBucket = true
 		}
-		if latency.Valid && latency.Float64 > 0 {
-			entry.latencies = append(entry.latencies, latency.Float64)
+		if latencyMS > 0 {
+			latencies = append(latencies, float64(latencyMS))
 		}
-		if ttft.Valid && ttft.Float64 > 0 {
-			entry.ttfts = append(entry.ttfts, ttft.Float64)
+		if ttftMS > 0 {
+			ttfts = append(ttfts, float64(ttftMS))
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-
-	result := make([]LatencyPercentiles, 0, len(order))
-	for _, bucketMS := range order {
-		entry := grouped[bucketMS]
-		point := LatencyPercentiles{BucketMS: bucketMS}
-		if value, ok := percentile95(entry.latencies); ok {
-			point.P95LatencyMS = sql.NullFloat64{Float64: value, Valid: true}
-		}
-		if value, ok := percentile95(entry.ttfts); ok {
-			point.P95TTFTMS = sql.NullFloat64{Float64: value, Valid: true}
-		}
-		result = append(result, point)
-	}
+	flushBucket()
 	return result, nil
 }
 
 func (r *repository) LatencySummaryWithFilter(ctx context.Context, filter AnalyticsFilter) (LatencySummary, error) {
 	where, args := analyticsWhere(filter)
-	rows, err := r.db.QueryContext(ctx, `select latency_ms, ttft_ms
-from usage_events `+where+`
-and (latency_ms > 0 or ttft_ms > 0)`, args...)
+	query := fmt.Sprintf(`with samples(kind, value) as (
+	select 'latency', latency_ms from usage_events %s and latency_ms > 0
+	union all
+	select 'ttft', ttft_ms from usage_events %s and ttft_ms > 0
+), ranked as (
+	select
+		kind,
+		value,
+		row_number() over (partition by kind order by value) as sample_number,
+		count(*) over (partition by kind) as sample_count
+	from samples
+)
+select kind, value
+from ranked
+where sample_number = ((sample_count * 95) + 99) / 100`, where, where)
+	queryArgs := make([]any, 0, len(args)*2)
+	queryArgs = append(queryArgs, args...)
+	queryArgs = append(queryArgs, args...)
+	rows, err := r.db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return LatencySummary{}, err
 	}
 	defer rows.Close()
 
-	latencies := make([]float64, 0)
-	ttfts := make([]float64, 0)
+	var summary LatencySummary
 	for rows.Next() {
-		var latency sql.NullFloat64
-		var ttft sql.NullFloat64
-		if err := rows.Scan(&latency, &ttft); err != nil {
+		var kind string
+		var value float64
+		if err := rows.Scan(&kind, &value); err != nil {
 			return LatencySummary{}, err
 		}
-		if latency.Valid && latency.Float64 > 0 {
-			latencies = append(latencies, latency.Float64)
-		}
-		if ttft.Valid && ttft.Float64 > 0 {
-			ttfts = append(ttfts, ttft.Float64)
+		switch kind {
+		case "latency":
+			summary.P95LatencyMS = sql.NullFloat64{Float64: value, Valid: true}
+		case "ttft":
+			summary.P95TTFTMS = sql.NullFloat64{Float64: value, Valid: true}
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return LatencySummary{}, err
-	}
-
-	var summary LatencySummary
-	if value, ok := percentile95(latencies); ok {
-		summary.P95LatencyMS = sql.NullFloat64{Float64: value, Valid: true}
-	}
-	if value, ok := percentile95(ttfts); ok {
-		summary.P95TTFTMS = sql.NullFloat64{Float64: value, Valid: true}
 	}
 	return summary, nil
 }
@@ -814,6 +857,31 @@ func (r *repository) FilterOptionValuesWithFilter(ctx context.Context, filter An
 	}, nil
 }
 
+func (r *repository) FilterSelectorValuesWithFilter(ctx context.Context, filter AnalyticsFilter) (FilterSelectorValues, error) {
+	models, err := r.distinctFilterValues(ctx, filter, "coalesce(nullif(model, ''), '')")
+	if err != nil {
+		return FilterSelectorValues{}, err
+	}
+	apiKeyHashes, err := r.distinctFilterValues(ctx, filter, "coalesce(api_key_hash, '')")
+	if err != nil {
+		return FilterSelectorValues{}, err
+	}
+	providers, err := r.distinctFilterValues(ctx, filter, "coalesce(nullif(auth_provider_snapshot, ''), nullif(provider, ''), '')")
+	if err != nil {
+		return FilterSelectorValues{}, err
+	}
+	authFiles, err := r.distinctFilterValues(ctx, filter, "coalesce(auth_file_snapshot, '')")
+	if err != nil {
+		return FilterSelectorValues{}, err
+	}
+	return FilterSelectorValues{
+		Models:       models,
+		APIKeyHashes: apiKeyHashes,
+		Providers:    providers,
+		AuthFiles:    authFiles,
+	}, nil
+}
+
 func (r *repository) distinctFilterValues(ctx context.Context, filter AnalyticsFilter, expression string) ([]string, error) {
 	where, args := analyticsWhere(filter)
 	rows, err := r.db.QueryContext(ctx, `select distinct `+expression+` as value
@@ -844,9 +912,9 @@ func (r *repository) HeatmapWithFilter(ctx context.Context, filter AnalyticsFilt
 	coalesce(nullif(resolved_model, ''), model) as billing_model,
 	coalesce(service_tier, '') as service_tier,
 	coalesce(api_key_hash, ''),
-	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
-	failed,
-	input_tokens,
+		coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
+		failed,
+		`+normalizedInputExpr+`,
 	output_tokens,
 	`+compatCachedExpr+`,
 	cache_read_tokens,
@@ -939,6 +1007,7 @@ order by timestamp_ms, model`, args...)
 		point.CachedTokens += cachedTokens
 		point.CacheReadTokens += cacheReadTokens
 		point.CacheCreationTokens += cacheCreationTokens
+		point.AddIfLongContext(inputTokens, outputTokens, cachedTokens, cacheReadTokens, cacheCreationTokens)
 		point.TotalTokens += totalTokens
 	}
 	if err := rows.Err(); err != nil {
@@ -965,11 +1034,16 @@ func (r *repository) ChannelModelStatsWithFilter(ctx context.Context, filter Ana
 	count(*),
 	sum(case when failed = 0 then 1 else 0 end),
 	sum(case when failed = 1 then 1 else 0 end),
-	coalesce(sum(input_tokens), 0),
+		coalesce(sum(`+normalizedInputExpr+`), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(`+compatCachedExpr+`), 0),
 	coalesce(sum(cache_read_tokens), 0),
 	coalesce(sum(cache_creation_tokens), 0),
+	coalesce(sum(`+longInputExpr+`), 0),
+	coalesce(sum(`+longOutputExpr+`), 0),
+	coalesce(sum(`+longCachedExpr+`), 0),
+	coalesce(sum(`+longCacheReadExpr+`), 0),
+	coalesce(sum(`+longCacheCreationExpr+`), 0),
 	coalesce(sum(total_tokens), 0),
 	avg(nullif(latency_ms, 0)),
 	count(nullif(latency_ms, 0))
@@ -1001,6 +1075,11 @@ order by count(*) desc`, args...)
 			&stat.CachedTokens,
 			&stat.CacheReadTokens,
 			&stat.CacheCreationTokens,
+			&stat.LongInputTokens,
+			&stat.LongOutputTokens,
+			&stat.LongCachedTokens,
+			&stat.LongCacheReadTokens,
+			&stat.LongCacheCreationTokens,
 			&stat.TotalTokens,
 			&stat.AvgLatencyMS,
 			&stat.LatencySamples,
@@ -1071,11 +1150,16 @@ func (r *repository) AccountModelStatsWithFilter(ctx context.Context, filter Ana
 	count(*),
 	sum(case when failed = 0 then 1 else 0 end),
 	sum(case when failed = 1 then 1 else 0 end),
-	coalesce(sum(input_tokens), 0),
+		coalesce(sum(`+normalizedInputExpr+`), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(`+compatCachedExpr+`), 0),
 	coalesce(sum(cache_read_tokens), 0),
 	coalesce(sum(cache_creation_tokens), 0),
+	coalesce(sum(`+longInputExpr+`), 0),
+	coalesce(sum(`+longOutputExpr+`), 0),
+	coalesce(sum(`+longCachedExpr+`), 0),
+	coalesce(sum(`+longCacheReadExpr+`), 0),
+	coalesce(sum(`+longCacheCreationExpr+`), 0),
 	coalesce(sum(total_tokens), 0),
 	max(timestamp_ms),
 	avg(nullif(latency_ms, 0)),
@@ -1109,6 +1193,11 @@ order by max(timestamp_ms) desc, count(*) desc`, args...)
 			&stat.CachedTokens,
 			&stat.CacheReadTokens,
 			&stat.CacheCreationTokens,
+			&stat.LongInputTokens,
+			&stat.LongOutputTokens,
+			&stat.LongCachedTokens,
+			&stat.LongCacheReadTokens,
+			&stat.LongCacheCreationTokens,
 			&stat.TotalTokens,
 			&stat.LastSeenMS,
 			&stat.AvgLatencyMS,
@@ -1124,7 +1213,7 @@ order by max(timestamp_ms) desc, count(*) desc`, args...)
 func (r *repository) CredentialModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]CredentialModelStat, error) {
 	where, args := analyticsWhere(filter)
 	rows, err := r.db.QueryContext(ctx, `select
-	coalesce(nullif(auth_file_snapshot, ''), nullif(auth_index, ''), nullif(source_hash, ''), nullif(source, ''), '-') as credential_id,
+	`+credentialIDExpr+` as credential_id,
 	coalesce(auth_file_snapshot, ''),
 	coalesce(auth_index, ''),
 	coalesce(max(source), ''),
@@ -1139,11 +1228,16 @@ func (r *repository) CredentialModelStatsWithFilter(ctx context.Context, filter 
 	count(*),
 	sum(case when failed = 0 then 1 else 0 end),
 	sum(case when failed = 1 then 1 else 0 end),
-	coalesce(sum(input_tokens), 0),
+		coalesce(sum(`+normalizedInputExpr+`), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(`+compatCachedExpr+`), 0),
 	coalesce(sum(cache_read_tokens), 0),
 	coalesce(sum(cache_creation_tokens), 0),
+	coalesce(sum(`+longInputExpr+`), 0),
+	coalesce(sum(`+longOutputExpr+`), 0),
+	coalesce(sum(`+longCachedExpr+`), 0),
+	coalesce(sum(`+longCacheReadExpr+`), 0),
+	coalesce(sum(`+longCacheCreationExpr+`), 0),
 	coalesce(sum(total_tokens), 0),
 	max(timestamp_ms),
 	avg(nullif(latency_ms, 0)),
@@ -1180,6 +1274,11 @@ order by max(timestamp_ms) desc, count(*) desc`, args...)
 			&stat.CachedTokens,
 			&stat.CacheReadTokens,
 			&stat.CacheCreationTokens,
+			&stat.LongInputTokens,
+			&stat.LongOutputTokens,
+			&stat.LongCachedTokens,
+			&stat.LongCacheReadTokens,
+			&stat.LongCacheCreationTokens,
 			&stat.TotalTokens,
 			&stat.LastSeenMS,
 			&stat.AvgLatencyMS,
@@ -1193,10 +1292,46 @@ order by max(timestamp_ms) desc, count(*) desc`, args...)
 }
 
 func (r *repository) CredentialTimelineWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]CredentialTimelinePoint, error) {
+	coreFromMS, coreToMS := usage.AnalyticsFullUTCHourRange(filter.FromMS, filter.ToMS)
+	if coreFromMS >= coreToMS || !usage.CanMapUTCWholeHours(coreFromMS, coreToMS, granularity, location) {
+		return r.credentialTimelineRawWithFilter(ctx, filter, granularity, location)
+	}
+
+	parts := make([][]CredentialTimelinePoint, 0, 3)
+	if filter.FromMS < coreFromMS {
+		edgeFilter := filter
+		edgeFilter.ToMS = coreFromMS
+		points, err := r.credentialTimelineRawWithFilter(ctx, edgeFilter, granularity, location)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, points)
+	}
+	coreFilter := filter
+	coreFilter.FromMS = coreFromMS
+	coreFilter.ToMS = coreToMS
+	core, err := r.credentialTimelineHourlyWithFilter(ctx, coreFilter, granularity, location)
+	if err != nil {
+		return nil, err
+	}
+	parts = append(parts, core)
+	if coreToMS < filter.ToMS {
+		edgeFilter := filter
+		edgeFilter.FromMS = coreToMS
+		points, err := r.credentialTimelineRawWithFilter(ctx, edgeFilter, granularity, location)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, points)
+	}
+	return mergeCredentialTimelineParts(parts), nil
+}
+
+func (r *repository) credentialTimelineRawWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]CredentialTimelinePoint, error) {
 	where, args := analyticsWhere(filter)
 	query := fmt.Sprintf(`select
 	timestamp_ms,
-	coalesce(nullif(auth_file_snapshot, ''), nullif(auth_index, ''), nullif(source_hash, ''), nullif(source, ''), '-') as credential_id,
+	`+credentialIDExpr+` as credential_id,
 	coalesce(auth_file_snapshot, ''),
 	coalesce(auth_index, ''),
 	coalesce(source, ''),
@@ -1207,9 +1342,9 @@ func (r *repository) CredentialTimelineWithFilter(ctx context.Context, filter An
 	coalesce(auth_project_id_snapshot, ''),
 	model,
 	coalesce(nullif(resolved_model, ''), model) as billing_model,
-	coalesce(service_tier, '') as service_tier,
-	failed,
-	input_tokens,
+		coalesce(service_tier, '') as service_tier,
+		failed,
+		`+normalizedInputExpr+`,
 	output_tokens,
 	reasoning_tokens,
 	`+compatCachedExpr+`,
@@ -1269,7 +1404,7 @@ order by timestamp_ms, credential_id, model`, where)
 		); err != nil {
 			return nil, err
 		}
-		bucketMS := resolveBucketMS(timestampMS, granularity, location)
+		bucketMS := usage.AnalyticsBucketMS(timestampMS, granularity, location)
 		mapKey := key{
 			id:               point.ID,
 			authFileSnapshot: point.AuthFileSnapshot,
@@ -1313,6 +1448,7 @@ order by timestamp_ms, credential_id, model`, where)
 		entry.CachedTokens += point.CachedTokens
 		entry.CacheReadTokens += point.CacheReadTokens
 		entry.CacheCreationTokens += point.CacheCreationTokens
+		entry.AddIfLongContext(point.InputTokens, point.OutputTokens, point.CachedTokens, point.CacheReadTokens, point.CacheCreationTokens)
 		if latency.Valid && latency.Float64 > 0 {
 			entry.AvgLatencyMS.Float64 += latency.Float64
 			entry.LatencySamples += 1
@@ -1333,6 +1469,221 @@ order by timestamp_ms, credential_id, model`, where)
 	return points, nil
 }
 
+func (r *repository) credentialTimelineHourlyWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]CredentialTimelinePoint, error) {
+	where, args := analyticsWhere(filter)
+	const hourBucketExpr = "(timestamp_ms / 3600000) * 3600000"
+	queryPrefix := ""
+	queryFrom := "from usage_events\n"
+	bucketExpr := "bucket_map.bucket_ms"
+	queryArgs := args
+	if offsetMS, ok := analyticsConstantOffsetMS(filter.FromMS, filter.ToMS, location); ok {
+		bucketSizeMS := int64(time.Hour / time.Millisecond)
+		if granularity == "day" {
+			bucketSizeMS = int64(24 * time.Hour / time.Millisecond)
+		}
+		bucketExpr = fmt.Sprintf("((timestamp_ms + %d) / %d) * %d - %d", offsetMS, bucketSizeMS, bucketSizeMS, offsetMS)
+	} else {
+		mapSQL, mapArgs, ok := credentialBucketMapSQL(filter.FromMS, filter.ToMS, granularity, location)
+		if !ok {
+			return r.credentialTimelineRawWithFilter(ctx, filter, granularity, location)
+		}
+		queryPrefix = "with bucket_map(hour_bucket, bucket_ms) as (values " + mapSQL + ")\n"
+		queryFrom += "join bucket_map on " + hourBucketExpr + " = bucket_map.hour_bucket\n"
+		queryArgs = append(mapArgs, args...)
+	}
+	query := queryPrefix + `select
+	` + bucketExpr + `,
+	` + credentialIDExpr + ` as credential_id,
+	coalesce(auth_file_snapshot, ''),
+	coalesce(auth_index, ''),
+	coalesce(source, ''),
+	coalesce(source_hash, ''),
+	coalesce(account_snapshot, ''),
+	coalesce(auth_label_snapshot, ''),
+	coalesce(nullif(auth_provider_snapshot, ''), provider, ''),
+	coalesce(auth_project_id_snapshot, ''),
+	model,
+	coalesce(nullif(resolved_model, ''), model) as billing_model,
+	coalesce(service_tier, '') as service_tier,
+	count(*),
+	coalesce(sum(total_tokens), 0),
+	sum(case when failed = 0 then 1 else 0 end),
+	sum(case when failed = 1 then 1 else 0 end),
+	coalesce(sum(` + normalizedInputExpr + `), 0),
+	coalesce(sum(output_tokens), 0),
+	coalesce(sum(reasoning_tokens), 0),
+	coalesce(sum(` + compatCachedExpr + `), 0),
+	coalesce(sum(cache_read_tokens), 0),
+	coalesce(sum(cache_creation_tokens), 0),
+	coalesce(sum(` + longInputExpr + `), 0),
+	coalesce(sum(` + longOutputExpr + `), 0),
+	coalesce(sum(` + longCachedExpr + `), 0),
+	coalesce(sum(` + longCacheReadExpr + `), 0),
+	coalesce(sum(` + longCacheCreationExpr + `), 0),
+	avg(case when latency_ms > 0 then latency_ms end),
+	count(case when latency_ms > 0 then 1 end)
+` + queryFrom + where + `
+group by ` + bucketExpr + `, credential_id,
+	coalesce(auth_file_snapshot, ''), coalesce(auth_index, ''), coalesce(source, ''), coalesce(source_hash, ''),
+	coalesce(account_snapshot, ''), coalesce(auth_label_snapshot, ''),
+	coalesce(nullif(auth_provider_snapshot, ''), provider, ''), coalesce(auth_project_id_snapshot, ''),
+	model, billing_model, service_tier
+order by min(timestamp_ms), credential_id, model`
+	rows, err := r.db.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	points := make([]CredentialTimelinePoint, 0)
+	for rows.Next() {
+		var point CredentialTimelinePoint
+		if err := rows.Scan(
+			&point.BucketMS,
+			&point.ID,
+			&point.AuthFileSnapshot,
+			&point.AuthIndex,
+			&point.Source,
+			&point.SourceHash,
+			&point.AccountSnapshot,
+			&point.AuthLabelSnapshot,
+			&point.AuthProviderSnapshot,
+			&point.AuthProjectIDSnapshot,
+			&point.Model,
+			&point.BillingModel,
+			&point.ServiceTier,
+			&point.Calls,
+			&point.Tokens,
+			&point.Success,
+			&point.Failure,
+			&point.InputTokens,
+			&point.OutputTokens,
+			&point.ReasoningTokens,
+			&point.CachedTokens,
+			&point.CacheReadTokens,
+			&point.CacheCreationTokens,
+			&point.LongInputTokens,
+			&point.LongOutputTokens,
+			&point.LongCachedTokens,
+			&point.LongCacheReadTokens,
+			&point.LongCacheCreationTokens,
+			&point.AvgLatencyMS,
+			&point.LatencySamples,
+		); err != nil {
+			return nil, err
+		}
+		points = append(points, point)
+	}
+	return points, rows.Err()
+}
+
+const maxAnalyticsBucketMapHours = 4_000
+
+func analyticsConstantOffsetMS(fromMS, toMS int64, location *time.Location) (int64, bool) {
+	const hourMS = int64(time.Hour / time.Millisecond)
+	if fromMS >= toMS {
+		return 0, false
+	}
+	if location == nil {
+		location = time.UTC
+	}
+	_, firstOffsetSeconds := time.UnixMilli(fromMS).In(location).Zone()
+	for timestampMS := fromMS; timestampMS < toMS; timestampMS += hourMS {
+		_, offsetSeconds := time.UnixMilli(timestampMS).In(location).Zone()
+		if offsetSeconds != firstOffsetSeconds {
+			return 0, false
+		}
+	}
+	_, lastOffsetSeconds := time.UnixMilli(toMS - 1).In(location).Zone()
+	if lastOffsetSeconds != firstOffsetSeconds {
+		return 0, false
+	}
+	return int64(firstOffsetSeconds) * 1000, true
+}
+
+func credentialBucketMapSQL(fromMS, toMS int64, granularity string, location *time.Location) (string, []any, bool) {
+	const hourMS = int64(time.Hour / time.Millisecond)
+	hours := (toMS - fromMS) / hourMS
+	if hours <= 0 || hours > maxAnalyticsBucketMapHours {
+		return "", nil, false
+	}
+	placeholders := make([]string, 0, hours)
+	args := make([]any, 0, hours*2)
+	for hourBucketMS := fromMS; hourBucketMS < toMS; hourBucketMS += hourMS {
+		placeholders = append(placeholders, "(?, ?)")
+		args = append(args, hourBucketMS, usage.AnalyticsBucketMS(hourBucketMS, granularity, location))
+	}
+	return strings.Join(placeholders, ", "), args, true
+}
+
+func mergeCredentialTimelineParts(parts [][]CredentialTimelinePoint) []CredentialTimelinePoint {
+	type key struct {
+		id               string
+		authFileSnapshot string
+		authIndex        string
+		sourceHash       string
+		bucketMS         int64
+		model            string
+		billingModel     string
+		serviceTier      string
+	}
+	grouped := make(map[key]*CredentialTimelinePoint)
+	order := make([]key, 0)
+	for _, points := range parts {
+		for _, point := range points {
+			mapKey := key{point.ID, point.AuthFileSnapshot, point.AuthIndex, point.SourceHash, point.BucketMS, point.Model, point.BillingModel, point.ServiceTier}
+			entry := grouped[mapKey]
+			if entry == nil {
+				next := point
+				grouped[mapKey] = &next
+				order = append(order, mapKey)
+				continue
+			}
+			if entry.Source == "" {
+				entry.Source = point.Source
+			}
+			if entry.AccountSnapshot == "" {
+				entry.AccountSnapshot = point.AccountSnapshot
+			}
+			if entry.AuthLabelSnapshot == "" {
+				entry.AuthLabelSnapshot = point.AuthLabelSnapshot
+			}
+			if entry.AuthProviderSnapshot == "" {
+				entry.AuthProviderSnapshot = point.AuthProviderSnapshot
+			}
+			if entry.AuthProjectIDSnapshot == "" {
+				entry.AuthProjectIDSnapshot = point.AuthProjectIDSnapshot
+			}
+			latencySum := entry.AvgLatencyMS.Float64*float64(entry.LatencySamples) + point.AvgLatencyMS.Float64*float64(point.LatencySamples)
+			entry.Calls += point.Calls
+			entry.Tokens += point.Tokens
+			entry.Success += point.Success
+			entry.Failure += point.Failure
+			entry.InputTokens += point.InputTokens
+			entry.OutputTokens += point.OutputTokens
+			entry.ReasoningTokens += point.ReasoningTokens
+			entry.CachedTokens += point.CachedTokens
+			entry.CacheReadTokens += point.CacheReadTokens
+			entry.CacheCreationTokens += point.CacheCreationTokens
+			entry.LongInputTokens += point.LongInputTokens
+			entry.LongOutputTokens += point.LongOutputTokens
+			entry.LongCachedTokens += point.LongCachedTokens
+			entry.LongCacheReadTokens += point.LongCacheReadTokens
+			entry.LongCacheCreationTokens += point.LongCacheCreationTokens
+			entry.LatencySamples += point.LatencySamples
+			entry.AvgLatencyMS.Valid = entry.LatencySamples > 0
+			if entry.AvgLatencyMS.Valid {
+				entry.AvgLatencyMS.Float64 = latencySum / float64(entry.LatencySamples)
+			}
+		}
+	}
+	result := make([]CredentialTimelinePoint, 0, len(order))
+	for _, mapKey := range order {
+		result = append(result, *grouped[mapKey])
+	}
+	return result
+}
+
 func (r *repository) APIKeyModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]APIKeyModelStat, error) {
 	where, args := analyticsWhere(filter)
 	rows, err := r.db.QueryContext(ctx, `select
@@ -1349,11 +1700,16 @@ func (r *repository) APIKeyModelStatsWithFilter(ctx context.Context, filter Anal
 	count(*),
 	sum(case when failed = 0 then 1 else 0 end),
 	sum(case when failed = 1 then 1 else 0 end),
-	coalesce(sum(input_tokens), 0),
+		coalesce(sum(`+normalizedInputExpr+`), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(`+compatCachedExpr+`), 0),
 	coalesce(sum(cache_read_tokens), 0),
 	coalesce(sum(cache_creation_tokens), 0),
+	coalesce(sum(`+longInputExpr+`), 0),
+	coalesce(sum(`+longOutputExpr+`), 0),
+	coalesce(sum(`+longCachedExpr+`), 0),
+	coalesce(sum(`+longCacheReadExpr+`), 0),
+	coalesce(sum(`+longCacheCreationExpr+`), 0),
 	coalesce(sum(total_tokens), 0),
 	max(timestamp_ms),
 	avg(nullif(latency_ms, 0)),
@@ -1388,6 +1744,11 @@ order by max(timestamp_ms) desc, count(*) desc`, args...)
 			&stat.CachedTokens,
 			&stat.CacheReadTokens,
 			&stat.CacheCreationTokens,
+			&stat.LongInputTokens,
+			&stat.LongOutputTokens,
+			&stat.LongCachedTokens,
+			&stat.LongCacheReadTokens,
+			&stat.LongCacheCreationTokens,
 			&stat.TotalTokens,
 			&stat.LastSeenMS,
 			&stat.AvgLatencyMS,
@@ -1414,7 +1775,7 @@ func (r *repository) TaskBucketsWithFilter(ctx context.Context, filter Analytics
 	coalesce(auth_index, ''),
 	coalesce(group_concat(distinct model), ''),
 	coalesce(group_concat(distinct endpoint), ''),
-	coalesce(sum(input_tokens), 0),
+		coalesce(sum(`+normalizedInputExpr+`), 0),
 	coalesce(sum(output_tokens), 0),
 	coalesce(sum(`+compatCachedExpr+`), 0),
 	coalesce(sum(cache_read_tokens), 0),
@@ -1590,7 +1951,7 @@ func (r *repository) EventsPageWithFilter(ctx context.Context, filter AnalyticsF
 	coalesce(reasoning_effort, ''),
 	coalesce(service_tier, ''),
 	coalesce(executor_type, ''),
-	input_tokens,
+	`+normalizedInputExpr+`,
 	output_tokens,
 	`+compatCachedExpr+`,
 	cache_read_tokens,
@@ -1889,6 +2250,7 @@ func analyticsWhere(filter AnalyticsFilter) (string, []any) {
 	addInCondition("model", filter.Models)
 	addProviderCondition(filter.Providers, &conditions, &args)
 	addAccountCondition(filter.Accounts, &conditions, &args)
+	addInCondition(credentialIDExpr, filter.CredentialIDs)
 	addInCondition("auth_file_snapshot", filter.AuthFiles)
 	addInCondition("auth_index", filter.AuthIndices)
 	addInCondition("api_key_hash", filter.APIKeyHashes)

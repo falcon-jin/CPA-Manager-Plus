@@ -408,6 +408,8 @@ export function AiProvidersClaudeEditPage() {
                 removeButtonClassName={styles.modelRowRemoveButton}
                 removeButtonTitle={t('common.delete')}
                 removeButtonAriaLabel={t('common.delete')}
+                showForceMapping
+                forceMappingLabel={t('ai_providers.force_mapping_label')}
               />
 
               <div className={styles.modelTestPanel}>
@@ -497,6 +499,20 @@ export function AiProvidersClaudeEditPage() {
                 ariaLabel={t('ai_providers.disable_cooling_label')}
               />
               <div className="hint">{t('ai_providers.disable_cooling_hint')}</div>
+            </div>
+            <div className="form-group">
+              <label>{t('ai_providers.rebuild_mid_system_message_label')}</label>
+              <ToggleSwitch
+                checked={Boolean(form.rebuildMidSystemMessage)}
+                onChange={(value) =>
+                  setForm((prev) => ({ ...prev, rebuildMidSystemMessage: value }))
+                }
+                disabled={saving || disableControls || isTesting}
+                ariaLabel={t('ai_providers.rebuild_mid_system_message_label')}
+              />
+              <div className="hint">
+                {t('ai_providers.rebuild_mid_system_message_hint')}
+              </div>
             </div>
 
             <div className={styles.modelConfigSection}>

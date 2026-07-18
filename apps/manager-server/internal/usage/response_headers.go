@@ -49,6 +49,7 @@ type HeaderErrorMetadata struct {
 	AuthorizationError    string   `json:"authorization_error,omitempty"`
 	IDEErrorCode          string   `json:"ide_error_code,omitempty"`
 	IDERootErrorCode      string   `json:"ide_root_error_code,omitempty"`
+	ShouldRetry           *bool    `json:"should_retry,omitempty"`
 	RetryAfterSeconds     *float64 `json:"retry_after_seconds,omitempty"`
 	RetryAfterRecoverAtMS int64    `json:"retry_after_recover_at_ms,omitempty"`
 	RateLimitBypass       string   `json:"rate_limit_bypass,omitempty"`
@@ -394,6 +395,7 @@ func isResponseHeaderAllowed(key string) bool {
 		"x-codex-primary-window-minutes",
 		"x-codex-secondary-window-minutes",
 		"retry-after",
+		"x-should-retry",
 		"x-openai-authorization-error",
 		"x-openai-ide-error-code",
 		"x-openai-ide-root-error-code",
@@ -557,6 +559,9 @@ func parseErrorHeaders(headers map[string][]string, base time.Time) *HeaderError
 		IDEErrorCode:       normalizeHeaderValue(headerFirst(headers, "x-openai-ide-error-code")),
 		IDERootErrorCode:   normalizeHeaderValue(headerFirst(headers, "x-openai-ide-root-error-code")),
 		RateLimitBypass:    normalizeHeaderValue(headerFirst(headers, "x-ratelimit-bypass")),
+	}
+	if value, ok := parseBoolHeader(headerFirst(headers, "x-should-retry")); ok {
+		errors.ShouldRetry = &value
 	}
 	retryAfter := headerFirst(headers, "retry-after")
 	if retryAfter != "" {
@@ -1004,6 +1009,7 @@ func (e *HeaderErrorMetadata) isEmpty() bool {
 			e.AuthorizationError == "" &&
 			e.IDEErrorCode == "" &&
 			e.IDERootErrorCode == "" &&
+			e.ShouldRetry == nil &&
 			e.RetryAfterSeconds == nil &&
 			e.RetryAfterRecoverAtMS == 0 &&
 			e.RateLimitBypass == "")

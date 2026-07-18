@@ -208,6 +208,7 @@ export type MonitoringSummary = {
   cachedTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+  cacheHitRate?: number;
   totalTokens: number;
   totalCost: number;
   averageLatencyMs: number | null;
@@ -272,6 +273,7 @@ export type MonitoringApiKeyRow = {
   apiKeyHash: string;
   apiKeyLabel: string;
   apiKeyMasked: string;
+  apiKeyCopyValue?: string;
   isUnknown: boolean;
   authLabels: string[];
   sourceLabels: string[];
@@ -390,6 +392,7 @@ export interface UseMonitoringDataReturn {
   filteredRows: MonitoringEventRow[];
   eventsHasMore: boolean;
   eventsLoadingMore: boolean;
+  eventsRetentionLimited: boolean;
   eventsTotalCount: number;
   eventsLoadedCount: number;
   lastRefreshedAt: Date | null;

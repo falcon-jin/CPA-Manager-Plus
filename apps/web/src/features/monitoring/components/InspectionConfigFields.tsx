@@ -1,5 +1,6 @@
 import type { TFunction } from 'i18next';
 import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
 import type { CodexInspectionAutoActionMode } from '@/features/monitoring/codexInspection';
 import { CodexInspectionAutoActionEditor } from '@/features/monitoring/components/CodexInspectionAutoActionEditor';
 import type {
@@ -15,6 +16,7 @@ type InspectionConfigFieldsProps = {
   t: TFunction;
   onFieldChange: (field: SharedInspectionConfigField, value: string) => void;
   onAutoActionModeChange: (mode: CodexInspectionAutoActionMode) => void;
+  onAutoRecoverEnabledChange: (enabled: boolean) => void;
 };
 
 // 本地与服务端共享的 9 个配置字段。分组:基础规则 → 自动处置 → 高级(默认折叠)。
@@ -25,6 +27,7 @@ export function InspectionConfigFields({
   t,
   onFieldChange,
   onAutoActionModeChange,
+  onAutoRecoverEnabledChange,
 }: InspectionConfigFieldsProps) {
   return (
     <>
@@ -70,8 +73,10 @@ export function InspectionConfigFields({
         <div className={styles.autoActionField} id="autoActionMode">
           <CodexInspectionAutoActionEditor
             value={draft.autoActionMode}
+            autoRecoverEnabled={draft.autoRecoverEnabled}
             t={t}
             onChange={onAutoActionModeChange}
+            onAutoRecoverChange={onAutoRecoverEnabledChange}
           />
         </div>
       </section>
@@ -85,13 +90,29 @@ export function InspectionConfigFields({
         </summary>
         <div className={styles.advancedBody}>
           <div className={styles.serverField}>
-            <Input
-              id="targetType"
-              label={t('monitoring.codex_inspection_settings_target_type_label')}
-              error={errors.targetType}
-              value={draft.targetType}
-              onChange={(event) => onFieldChange('targetType', event.target.value)}
-            />
+            <div className="form-group">
+              <label className={styles.serverFieldLabel} htmlFor="targetType">
+                {t('monitoring.codex_inspection_settings_target_type_label')}
+              </label>
+              <Select
+                id="targetType"
+                value={draft.targetType}
+                options={[
+                  {
+                    value: 'codex',
+                    label: t('monitoring.codex_inspection_target_codex'),
+                  },
+                  {
+                    value: 'xai',
+                    label: t('monitoring.codex_inspection_target_xai'),
+                  },
+                ]}
+                onChange={(value) => onFieldChange('targetType', value)}
+                ariaLabel={t('monitoring.codex_inspection_settings_target_type_label')}
+              />
+              <div className="hint">{t('monitoring.codex_inspection_settings_target_type_hint')}</div>
+              {errors.targetType ? <div className="error-box">{errors.targetType}</div> : null}
+            </div>
           </div>
           <div className={styles.serverField}>
             <Input

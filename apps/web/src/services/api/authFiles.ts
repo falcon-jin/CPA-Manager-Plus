@@ -16,6 +16,7 @@ export type AuthFileFieldsPatch = {
   prefix?: string;
   proxy_url?: string;
   websockets?: boolean;
+  using_api?: boolean;
   headers?: Record<string, string>;
   priority?: number;
   note?: string;
@@ -663,12 +664,21 @@ const normalizeOauthModelAlias = (payload: unknown): Record<string, OAuthModelAl
         const alias = String(entry.alias ?? '').trim();
         if (!name || !alias) return null;
         const fork = entry.fork === true;
-        return fork ? { name, alias, fork } : { name, alias };
+        const forceMapping =
+          entry['force-mapping'] === true ||
+          entry.forceMapping === true ||
+          entry.force_mapping === true;
+        return {
+          name,
+          alias,
+          ...(fork ? { fork: true } : {}),
+          ...(forceMapping ? { forceMapping: true } : {}),
+        };
       })
       .filter(Boolean)
       .filter((entry) => {
         const aliasEntry = entry as OAuthModelAliasEntry;
-        const dedupeKey = `${aliasEntry.name.toLowerCase()}::${aliasEntry.alias.toLowerCase()}::${aliasEntry.fork ? '1' : '0'}`;
+        const dedupeKey = `${aliasEntry.name.toLowerCase()}::${aliasEntry.alias.toLowerCase()}::${aliasEntry.fork ? '1' : '0'}::${aliasEntry.forceMapping ? '1' : '0'}`;
         if (seen.has(dedupeKey)) return false;
         seen.add(dedupeKey);
         return true;
@@ -843,7 +853,10 @@ export const authFilesApi = {
       normalizeOauthModelAlias({ [normalizedChannel]: aliases })[normalizedChannel] ?? [];
     await apiClient.patch(OAUTH_MODEL_ALIAS_ENDPOINT, {
       channel: normalizedChannel,
-      aliases: normalizedAliases,
+      aliases: normalizedAliases.map(({ forceMapping, ...entry }) => ({
+        ...entry,
+        ...(forceMapping ? { 'force-mapping': true } : {}),
+      })),
     });
   },
 

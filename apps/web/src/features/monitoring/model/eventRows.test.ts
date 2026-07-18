@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { buildRealtimeSourceDisplay } from '@/features/monitoring/realtimeSourceDisplay';
-import type { UsageDetailWithEndpoint } from '@/utils/usage';
+import type { ModelPrice, UsageDetailWithEndpoint } from '@/utils/usage';
 import { buildSourceInfoMap } from '@/utils/sourceResolver';
 import { buildEventRows } from './eventRows';
 
-const buildRows = (overrides: Partial<UsageDetailWithEndpoint> = {}) =>
+const buildRows = (
+  overrides: Partial<UsageDetailWithEndpoint> = {},
+  modelPrices: Record<string, ModelPrice> = {}
+) =>
   buildEventRows(
     [
       {
@@ -31,7 +34,7 @@ const buildRows = (overrides: Partial<UsageDetailWithEndpoint> = {}) =>
     new Map(),
     { byAuthIndex: new Map(), bySource: new Map(), byIdentityKey: new Map() },
     new Map(),
-    {},
+    modelPrices,
     new Map()
   );
 
@@ -62,6 +65,24 @@ describe('buildEventRows', () => {
     expect(noOutput.tokensPerSecond).toBeNull();
     expect(noLatency.tokensPerSecond).toBeNull();
     expect(zeroLatency.tokensPerSecond).toBeNull();
+  });
+
+  it('derives missing total from normalized input without adding cache twice', () => {
+    const [row] = buildRows(
+      {
+        tokens: {
+          input_tokens: 100,
+          output_tokens: 20,
+          cache_read_tokens: 40,
+        },
+      },
+      {
+        'gpt-5.4': { prompt: 1, completion: 2, cache: 0.1, cacheRead: 0.1 },
+      }
+    );
+
+    expect(row.totalTokens).toBe(120);
+    expect(row.totalCost).toBeCloseTo(0.000104);
   });
 
   it('keeps CPA executor and service tier metadata searchable', () => {

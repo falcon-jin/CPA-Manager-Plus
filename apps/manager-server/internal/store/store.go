@@ -1,20 +1,24 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"io"
 	"time"
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/accountaction"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/apikeyalias"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/codexinspection"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/datamigration"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/deadletter"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/modelprice"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/quotacooldown"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/setting"
 	sqliterepo "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/sqlite"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usageevent"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/repository/usagerollup"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/security"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
@@ -31,15 +35,20 @@ type ManagerExternalUsageServiceConfig = model.ManagerExternalUsageServiceConfig
 type CodexInspectionRun = model.CodexInspectionRun
 type CodexInspectionResult = model.CodexInspectionResult
 type CodexInspectionLog = model.CodexInspectionLog
+type CodexInspectionDisableOwnership = model.CodexInspectionDisableOwnership
 type InsertResult = model.InsertResult
 type ModelPrice = model.ModelPrice
 type ModelPriceSyncResult = model.ModelPriceSyncResult
+type ModelUsageStat = model.ModelUsageStat
+type ModelUsageSummary = model.ModelUsageSummary
 type APIKeyAlias = model.APIKeyAlias
 type QuotaCooldown = model.QuotaCooldown
 type QuotaCooldownUpsert = model.QuotaCooldownUpsert
 type AccountActionCandidate = model.AccountActionCandidate
 type AccountActionCandidateUpsert = model.AccountActionCandidateUpsert
 type AutomationSettings = model.AutomationSettings
+type DataMigrationState = datamigration.State
+type DataMigrationBatchResult = datamigration.BatchResult
 
 var DefaultCodexInspectionConfig = model.DefaultCodexInspectionConfig
 var NormalizeCodexInspectionConfig = model.NormalizeCodexInspectionConfig
@@ -54,6 +63,7 @@ type LatencyPercentiles = usageevent.LatencyPercentiles
 type LatencySummary = usageevent.LatencySummary
 type HourlyPoint = usageevent.HourlyPoint
 type FilterOptionValues = usageevent.FilterOptionValues
+type FilterSelectorValues = usageevent.FilterSelectorValues
 type HeatmapPoint = usageevent.HeatmapPoint
 type ChannelModelStat = usageevent.ChannelModelStat
 type FailureSourceStat = usageevent.FailureSourceStat
@@ -65,6 +75,10 @@ type TaskBucket = usageevent.TaskBucket
 type EventPageItem = usageevent.EventPageItem
 type EventsPage = usageevent.EventsPage
 type HeaderSnapshot = usageevent.HeaderSnapshot
+type UsageRollupCheckpoint = usagerollup.Checkpoint
+type UsageRollupCatchUpResult = usagerollup.CatchUpResult
+type AccountHistoryRollupRow = usagerollup.AccountHistoryRow
+type DashboardHourlyRollupRow = usagerollup.DashboardHourlyRow
 
 type Store struct {
 	db *sql.DB
@@ -76,7 +90,9 @@ type Store struct {
 	APIKeyAliases    apikeyalias.Repository
 	AccountActions   accountaction.Repository
 	CodexInspections codexinspection.Repository
+	DataMigrations   datamigration.Repository
 	QuotaCooldowns   quotacooldown.Repository
+	UsageRollups     usagerollup.Repository
 }
 
 func Open(path string, protector ...*security.Protector) (*Store, error) {
@@ -97,7 +113,9 @@ func New(db *sql.DB, protector ...*security.Protector) *Store {
 		APIKeyAliases:    apikeyalias.New(db),
 		AccountActions:   accountaction.New(db),
 		CodexInspections: codexinspection.New(db),
+		DataMigrations:   datamigration.New(db),
 		QuotaCooldowns:   quotacooldown.New(db),
+		UsageRollups:     usagerollup.New(db),
 	}
 }
 
@@ -164,6 +182,10 @@ func (s *Store) UpsertSyncedModelPrices(ctx context.Context, prices map[string]M
 	return s.ModelPrices.UpsertSynced(ctx, prices)
 }
 
+func (s *Store) ModelUsageSummary(ctx context.Context, limit int) (ModelUsageSummary, error) {
+	return s.UsageEvents.ModelUsageSummary(ctx, limit)
+}
+
 func (s *Store) LoadAPIKeyAliases(ctx context.Context) ([]APIKeyAlias, error) {
 	return s.APIKeyAliases.LoadAll(ctx)
 }
@@ -208,6 +230,10 @@ func (s *Store) RecordAccountActionCandidateFailure(ctx context.Context, id int6
 	return s.AccountActions.RecordFailure(ctx, id, reason)
 }
 
+func (s *Store) MarkAccountActionCandidateAutoDisabled(ctx context.Context, id int64, disabledAtMS int64) error {
+	return s.AccountActions.MarkAutoDisabled(ctx, id, disabledAtMS)
+}
+
 func (s *Store) CreateCodexInspectionRun(ctx context.Context, run CodexInspectionRun) (CodexInspectionRun, error) {
 	return s.CodexInspections.CreateRun(ctx, run)
 }
@@ -244,8 +270,116 @@ func (s *Store) ListCodexInspectionLogs(ctx context.Context, runID int64) ([]Cod
 	return s.CodexInspections.ListLogs(ctx, runID)
 }
 
+func (s *Store) ListCodexInspectionDisableOwnership(ctx context.Context) ([]CodexInspectionDisableOwnership, error) {
+	return s.CodexInspections.ListDisableOwnership(ctx)
+}
+
+func (s *Store) UpsertCodexInspectionDisableOwnership(ctx context.Context, item CodexInspectionDisableOwnership) error {
+	return s.CodexInspections.UpsertDisableOwnership(ctx, item)
+}
+
+func (s *Store) DeleteCodexInspectionDisableOwnership(ctx context.Context, fileName string) error {
+	return s.CodexInspections.DeleteDisableOwnership(ctx, fileName)
+}
+
+func (s *Store) RevokeCodexInspectionDisableOwnership(ctx context.Context, fileNames []string, clearAll bool) ([]CodexInspectionDisableOwnership, error) {
+	return s.CodexInspections.RevokeDisableOwnership(ctx, fileNames, clearAll)
+}
+
+func (s *Store) RestoreCodexInspectionDisableOwnership(ctx context.Context, items []CodexInspectionDisableOwnership) error {
+	return s.CodexInspections.RestoreDisableOwnership(ctx, items)
+}
+
 func (s *Store) InsertEvents(ctx context.Context, events []usage.Event) (InsertResult, error) {
 	return s.UsageEvents.InsertBatch(ctx, events)
+}
+
+func (s *Store) UsageCacheAccountingMigrationState(ctx context.Context) (DataMigrationState, error) {
+	state, found, err := s.DataMigrations.UsageCacheAccountingState(ctx)
+	if err != nil {
+		return DataMigrationState{}, err
+	}
+	if found {
+		return state, nil
+	}
+	return DataMigrationState{
+		Name:   datamigration.UsageCacheAccountingMigrationName,
+		Status: datamigration.StatusDiscovering,
+	}, nil
+}
+
+func (s *Store) DiscoverUsageCacheAccounting(ctx context.Context) (DataMigrationState, error) {
+	return s.DataMigrations.DiscoverUsageCacheAccounting(ctx)
+}
+
+func (s *Store) RunUsageCacheAccountingBatch(ctx context.Context, batchSize int) (DataMigrationBatchResult, error) {
+	return s.DataMigrations.RunUsageCacheAccountingBatch(ctx, batchSize)
+}
+
+func (s *Store) RecordUsageCacheAccountingFailure(ctx context.Context, migrationErr error) error {
+	return s.DataMigrations.RecordUsageCacheAccountingFailure(ctx, migrationErr)
+}
+
+func (s *Store) UsageCacheAccountingMigrationReady(ctx context.Context) (bool, error) {
+	state, err := s.UsageCacheAccountingMigrationState(ctx)
+	if err != nil {
+		return false, err
+	}
+	return state.Status == datamigration.StatusCompleted, nil
+}
+
+func (s *Store) CatchUpAccountHistoryRollups(ctx context.Context, limit int, nowMS int64) (UsageRollupCatchUpResult, error) {
+	ready, err := s.UsageCacheAccountingMigrationReady(ctx)
+	if err != nil {
+		return UsageRollupCatchUpResult{}, err
+	}
+	if !ready {
+		return UsageRollupCatchUpResult{Pending: true}, nil
+	}
+	return s.UsageRollups.CatchUpAccountHistory(ctx, limit, nowMS)
+}
+
+func (s *Store) CatchUpDashboardHourlyRollups(ctx context.Context, limit int, nowMS int64) (UsageRollupCatchUpResult, error) {
+	ready, err := s.UsageCacheAccountingMigrationReady(ctx)
+	if err != nil {
+		return UsageRollupCatchUpResult{}, err
+	}
+	if !ready {
+		return UsageRollupCatchUpResult{Pending: true}, nil
+	}
+	return s.UsageRollups.CatchUpDashboardHourly(ctx, limit, nowMS)
+}
+
+func (s *Store) AccountHistoryRollupCheckpoint(ctx context.Context) (UsageRollupCheckpoint, error) {
+	return s.UsageRollups.Checkpoint(ctx, usagerollup.AccountHistoryCheckpointName)
+}
+
+func (s *Store) DashboardHourlyRollupCheckpoint(ctx context.Context) (UsageRollupCheckpoint, error) {
+	return s.UsageRollups.Checkpoint(ctx, usagerollup.DashboardHourlyCheckpointName)
+}
+
+func (s *Store) LatestUsageEventID(ctx context.Context) (int64, error) {
+	return s.UsageRollups.LatestEventID(ctx)
+}
+
+func (s *Store) AccountHistoryRollupRows(ctx context.Context, accountKeys []string) ([]AccountHistoryRollupRow, error) {
+	return s.UsageRollups.AccountHistoryRows(ctx, accountKeys)
+}
+
+func (s *Store) DashboardHourlyRollupRows(ctx context.Context, fromMS, toMS int64) ([]DashboardHourlyRollupRow, error) {
+	return s.UsageRollups.DashboardHourlyRows(ctx, fromMS, toMS)
+}
+
+func (s *Store) DashboardHourlyRollupModelRows(ctx context.Context, fromMS, toMS int64) ([]DashboardHourlyRollupRow, error) {
+	return s.UsageRollups.DashboardHourlyModelRows(ctx, fromMS, toMS)
+}
+
+func (s *Store) DashboardDailyRollupRows(ctx context.Context, fromMS, toMS int64) ([]DashboardHourlyRollupRow, error) {
+	return s.UsageRollups.DashboardDailyRows(ctx, fromMS, toMS)
+}
+
+func AccountHistoryKey(accountSnapshot, authLabelSnapshot, source, authIndex string) string {
+	return usagerollup.AccountKey(accountSnapshot, authLabelSnapshot, source, authIndex)
 }
 
 func (s *Store) UpsertQuotaCooldown(ctx context.Context, cooldown QuotaCooldownUpsert) (QuotaCooldown, error) {
@@ -293,7 +427,19 @@ func (s *Store) Counts(ctx context.Context) (events int64, deadLetters int64, er
 }
 
 func (s *Store) ExportJSONL(ctx context.Context) ([]byte, error) {
-	return s.UsageEvents.ExportJSONL(ctx)
+	var output bytes.Buffer
+	if err := s.WriteExportJSONL(ctx, &output, 0); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
+}
+
+func (s *Store) WriteCompatibleUsage(ctx context.Context, writer io.Writer, limit int) error {
+	return s.UsageEvents.WriteCompatibleUsage(ctx, writer, limit)
+}
+
+func (s *Store) WriteExportJSONL(ctx context.Context, writer io.Writer, limit int) error {
+	return s.UsageEvents.WriteExportJSONL(ctx, writer, limit)
 }
 
 // AggregateBetween computes summary metrics over [fromMs, toMs).
@@ -350,6 +496,10 @@ func (s *Store) HourlyDistributionWithFilter(ctx context.Context, filter Analyti
 
 func (s *Store) FilterOptionValuesWithFilter(ctx context.Context, filter AnalyticsFilter) (FilterOptionValues, error) {
 	return s.UsageEvents.FilterOptionValuesWithFilter(ctx, filter)
+}
+
+func (s *Store) FilterSelectorValuesWithFilter(ctx context.Context, filter AnalyticsFilter) (FilterSelectorValues, error) {
+	return s.UsageEvents.FilterSelectorValuesWithFilter(ctx, filter)
 }
 
 func (s *Store) HeatmapWithFilter(ctx context.Context, filter AnalyticsFilter, location *time.Location) ([]HeatmapPoint, error) {

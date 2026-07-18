@@ -6,7 +6,6 @@ const { mocks } = vi.hoisted(() => ({
     getRaw: vi.fn(),
     postForm: vi.fn(),
     patch: vi.fn(),
-    delete: vi.fn(),
   },
 }));
 
@@ -16,71 +15,127 @@ vi.mock('./client', () => ({
     getRaw: mocks.getRaw,
     postForm: mocks.postForm,
     patch: mocks.patch,
-    delete: mocks.delete,
   },
 }));
 
 import { authFilesApi } from './authFiles';
 
 beforeEach(() => {
-  vi.useRealTimers();
   mocks.get.mockReset();
   mocks.getRaw.mockReset();
   mocks.postForm.mockReset();
   mocks.patch.mockReset();
-  mocks.delete.mockReset();
 });
 
 describe('authFilesApi list cache', () => {
   it('coalesces parallel list calls and reuses the short-lived result', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    mocks.get.mockResolvedValue({
-      files: [{ name: 'codex-a.json', type: 'codex' }],
-    });
+    try {
+      vi.setSystemTime(1_000);
+      mocks.get.mockResolvedValue({
+        files: [{ name: 'codex-a.json', type: 'codex' }],
+      });
 
-    await expect(Promise.all([authFilesApi.list(), authFilesApi.list()])).resolves.toEqual([
-      { files: [{ name: 'codex-a.json', type: 'codex' }], total: 1 },
-      { files: [{ name: 'codex-a.json', type: 'codex' }], total: 1 },
-    ]);
-    expect(mocks.get).toHaveBeenCalledTimes(1);
+      await expect(Promise.all([authFilesApi.list(), authFilesApi.list()])).resolves.toEqual([
+        { files: [{ name: 'codex-a.json', type: 'codex' }], total: 1 },
+        { files: [{ name: 'codex-a.json', type: 'codex' }], total: 1 },
+      ]);
+      expect(mocks.get).toHaveBeenCalledTimes(1);
 
-    vi.setSystemTime(2_000);
-    await expect(authFilesApi.list()).resolves.toMatchObject({
-      files: [{ name: 'codex-a.json' }],
-      total: 1,
-    });
-    expect(mocks.get).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(2_000);
+      await expect(authFilesApi.list()).resolves.toMatchObject({
+        files: [{ name: 'codex-a.json' }],
+        total: 1,
+      });
+      expect(mocks.get).toHaveBeenCalledTimes(1);
 
-    vi.setSystemTime(20_000);
-    mocks.get.mockResolvedValueOnce({
-      files: [{ name: 'codex-b.json', type: 'codex' }],
-    });
-    await expect(authFilesApi.list()).resolves.toMatchObject({
-      files: [{ name: 'codex-b.json' }],
-      total: 1,
-    });
-    expect(mocks.get).toHaveBeenCalledTimes(2);
+      vi.setSystemTime(20_000);
+      mocks.get.mockResolvedValueOnce({
+        files: [{ name: 'codex-b.json', type: 'codex' }],
+      });
+      await expect(authFilesApi.list()).resolves.toMatchObject({
+        files: [{ name: 'codex-b.json' }],
+        total: 1,
+      });
+      expect(mocks.get).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('invalidates the cached list after auth file mutations', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    mocks.get.mockResolvedValueOnce({
-      files: [{ name: 'codex-a.json', type: 'codex', priority: 1 }],
-    });
-    mocks.patch.mockResolvedValue({ status: 'ok', disabled: false });
+    try {
+      vi.setSystemTime(60_000);
+      mocks.get.mockResolvedValueOnce({
+        files: [{ name: 'codex-a.json', type: 'codex', priority: 1 }],
+      });
+      mocks.patch.mockResolvedValue({ status: 'ok', disabled: false });
 
-    await authFilesApi.list();
-    await authFilesApi.patchFields('codex-a.json', { priority: 5 });
+      await authFilesApi.list();
+      await authFilesApi.patchFields('codex-a.json', { priority: 5 });
 
-    mocks.get.mockResolvedValueOnce({
-      files: [{ name: 'codex-a.json', type: 'codex', priority: 5 }],
+      mocks.get.mockResolvedValueOnce({
+        files: [{ name: 'codex-a.json', type: 'codex', priority: 5 }],
+      });
+      await expect(authFilesApi.list()).resolves.toMatchObject({
+        files: [{ name: 'codex-a.json', priority: 5 }],
+      });
+      expect(mocks.get).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('authFilesApi OAuth model alias normalization', () => {
+  it('preserves force-mapping returned by CPA', async () => {
+    mocks.get.mockResolvedValue({
+      'oauth-model-alias': {
+        codex: [
+          {
+            name: 'gpt-5-codex',
+            alias: 'team-codex',
+            fork: true,
+            'force-mapping': true,
+          },
+        ],
+      },
     });
-    await expect(authFilesApi.list()).resolves.toMatchObject({
-      files: [{ name: 'codex-a.json', priority: 5 }],
+
+    await expect(authFilesApi.getOauthModelAlias()).resolves.toEqual({
+      codex: [
+        {
+          name: 'gpt-5-codex',
+          alias: 'team-codex',
+          fork: true,
+          forceMapping: true,
+        },
+      ],
     });
-    expect(mocks.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('serializes forceMapping using the CPA force-mapping field', async () => {
+    mocks.patch.mockResolvedValue({ status: 'ok' });
+
+    await authFilesApi.saveOauthModelAlias('codex', [
+      {
+        name: 'gpt-5-codex',
+        alias: 'team-codex',
+        forceMapping: true,
+      },
+    ]);
+
+    expect(mocks.patch).toHaveBeenCalledWith('/oauth-model-alias', {
+      channel: 'codex',
+      aliases: [
+        {
+          name: 'gpt-5-codex',
+          alias: 'team-codex',
+          'force-mapping': true,
+        },
+      ],
+    });
   });
 });
 
